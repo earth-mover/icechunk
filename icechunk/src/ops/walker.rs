@@ -30,9 +30,11 @@ use tokio::{
 use tracing::{info, instrument};
 
 use crate::{
-    asset_manager::{AssetManager, decode_manifest, frame_content_size},
+    asset_manager::{AssetManager, decode_manifest},
     format::{
-        ManifestId, SnapshotId, format_constants,
+        ManifestId, SnapshotId,
+        envelope::frame_content_size,
+        format_constants,
         manifest::Manifest,
         snapshot::{ManifestFileInfo, Snapshot},
     },
@@ -656,7 +658,7 @@ mod tests {
         format::{MANIFESTS_FILE_PATH, format_constants::SpecVersionBin},
         ops::pointed_snapshots,
         repository::RepositoryError,
-        storage::new_in_memory_storage,
+        storage::{WriteHint, new_in_memory_storage},
         test_utils::{logging_asset_manager, repo_with_converging_refs},
     };
 
@@ -1078,7 +1080,7 @@ mod tests {
                     legacy.into(),
                     None,
                     Vec::new(),
-                    None,
+                    WriteHint::Atomic,
                 )
                 .await?;
         }

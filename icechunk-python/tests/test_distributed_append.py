@@ -10,6 +10,7 @@ import icechunk as ic
 import xarray as xr
 import zarr
 from icechunk.xarray import to_icechunk
+from tests.conftest import fs_storage
 
 p = zarr.core.buffer.default_buffer_prototype()
 
@@ -18,13 +19,15 @@ SPLIT_EVERY = 128
 DIMS = ("x", "y")
 
 
-def mk_ic_storage() -> ic.Storage:
-    return ic.local_filesystem_storage(
+def mk_ic_storage(backend: str, spec_version: int | None) -> ic.Storage:
+    return fs_storage(
+        backend,
         f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now(datetime.UTC)).split(' ')[-1]}",
+        spec_version,
     )
 
 
-def do_test(scheduler: str, spec_version: int | None = None) -> None:
+def do_test(scheduler: str, backend: str, spec_version: int | None = None) -> None:
     # Writing the initial dataset
     if scheduler in ["processes", "sync"]:
         CHUNKX = 3
@@ -72,7 +75,9 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
         }
     ).chunk(x=CHUNKX, y=CHUNKY)
 
-    repo = ic.Repository.open_or_create(mk_ic_storage(), create_version=spec_version)
+    repo = ic.Repository.open_or_create(
+        mk_ic_storage(backend, spec_version), create_version=spec_version
+    )
     session = repo.writable_session("main")
     print("starting initial write")
     print("-=====================")
@@ -126,10 +131,12 @@ def do_test(scheduler: str, spec_version: int | None = None) -> None:
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_distributed_appends(scheduler: str, any_spec_version: int | None) -> None:
-    do_test(scheduler, spec_version=any_spec_version)
+def test_dask_distributed_appends(
+    scheduler: str, any_spec_version: int | None, fs_backend: str
+) -> None:
+    do_test(scheduler, fs_backend, spec_version=any_spec_version)
 
 
 if __name__ == "__main__":
-    do_test("threads")
-    do_test("processes")
+    do_test("threads", "local_filesystem")
+    do_test("processes", "local_filesystem")

@@ -24,7 +24,9 @@ use crate::{
         CONFIG_FILE_PATH, IcechunkFormatErrorKind, REPO_INFO_FILE_PATH, SnapshotId,
         V1_REFS_FILE_PATH,
         format_constants::SpecVersionBin,
-        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateInfo, UpdateType},
+        repo_info::{
+            RepoAvailability, RepoHeader, RepoInfo, RepoStatus, UpdateInfo, UpdateType,
+        },
         snapshot::SnapshotInfo,
     },
     refs::{Ref, RefData, RefErrorKind, RefResult, list_deleted_tags, list_refs},
@@ -84,6 +86,12 @@ async fn validate_start(repo: &Repository) -> MigrationResult<()> {
         error!("Storage instance must be writable");
         return Err(MigrationError::capture(MigrationErrorKind::ReadonlyRepo));
     }
+    // The migrated repo info couldn't list the features such a storage requires.
+    if !repo.storage().writer_features().await.inject()?.required().is_empty() {
+        return Err(MigrationError::capture(MigrationErrorKind::RepositoryError(
+            RepositoryErrorKind::StorageRefusesIc1,
+        )));
+    }
     Ok(())
 }
 
@@ -95,7 +103,7 @@ async fn fetch_deleted_tag_snapshot_id(
 ) -> Option<SnapshotId> {
     let ref_path = format!("{V1_REFS_FILE_PATH}/tag.{tag_name}/ref.json");
     match repo.storage().get_object(&repo.storage_context(), &ref_path, None).await {
-        Ok((mut reader, ..)) => {
+        Ok(mut reader) => {
             let mut data = Vec::with_capacity(40);
             if reader.read_to_end(&mut data).await.is_err() {
                 return None;
@@ -502,11 +510,14 @@ pub async fn migrate_1_to_2(
             config_bytes.as_deref(),
             None::<std::iter::Empty<u16>>,
             None::<std::iter::Empty<u16>>,
-            &RepoStatus {
-                availability: RepoAvailability::Online,
-                set_at: root_time,
-                limited_availability_reason: None,
-            },
+            &RepoHeader::new(
+                &[],
+                &RepoStatus {
+                    availability: RepoAvailability::Online,
+                    set_at: root_time,
+                    limited_availability_reason: None,
+                },
+            ),
         )
         .inject()?,
     );

@@ -51,6 +51,15 @@ async fn test_repo_chunks_storage_in_minio(
     do_test_repo_chunks_storage(storage, spec_version).await
 }
 
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn test_repo_chunks_storage_in_filesystem() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = tempfile::tempdir()?;
+    let storage = icechunk::storage::new_filesystem_storage(dir.path()).await?;
+    do_test_repo_chunks_storage(storage, SpecVersionBin::V2).await
+}
+
 #[tokio_test]
 #[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]

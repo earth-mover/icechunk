@@ -7,10 +7,12 @@ use futures::{
     future::ready,
     stream::{self, BoxStream, FuturesOrdered},
 };
+use icechunk_format::writer_features::{FeatureName, MinVersion, WriterFeature};
 use itertools::Itertools as _;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::{max, min},
+    collections::BTreeSet,
     ffi::OsString,
     fmt::Display,
     iter,
@@ -55,9 +57,35 @@ pub enum StorageErrorKind {
     /// The store asked us to slow down (S3 `SlowDown` / HTTP 503 / 429). Retry with backoff.
     #[error("storage throttled the request: {code}: {message}")]
     Throttled { code: String, message: String },
+    /// The current version doesn't list `filesystem-layout-v1`.
+    #[error(
+        "a conversion to the standard layout was interrupted, rerun convert_to_standard_layout(): {0}"
+    )]
+    LayoutConversionInProgress(String),
+    /// The fork check found a fork; nothing was published or deleted.
+    #[error("repository forked: {0}. {FORK_EXPLANATION}")]
+    RepositoryForked(String),
+    /// The update landed and is durable; its publication found a fork.
+    #[error(
+        "the update is durable (version {new_version}) but its publication found a fork: {detail}. {FORK_EXPLANATION}"
+    )]
+    RepositoryForkedAfterUpdate { new_version: Box<VersionInfo>, detail: String },
+    /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
+    #[error(
+        "the repo file couldn't be read or decoded, so a fork can't be ruled out: {0}"
+    )]
+    MirrorUnreadable(String),
+    /// The repository lists writer features this storage doesn't implement.
+    #[error(
+        "the repository lists writer features this storage doesn't implement ({}), first implemented in {min_version}",
+        .missing.iter().join(", ")
+    )]
+    MissingWriterFeatures { missing: BTreeSet<FeatureName>, min_version: MinVersion },
     #[error("storage error: {0}")]
     Other(String),
 }
+
+pub const FORK_EXPLANATION: &str = "The repo file holds a repo info without the filesystem-layout-v1 writer feature whose bytes are no version file of repo.d: a fork; or the standard repo info of an interrupted conversion from the standard layout, which rerunning convert_to_filesystem_layout() completes; or a copy of a version that a stale listing didn't show, in which case running the operation again once listings refresh succeeds";
 
 impl StorageErrorKind {
     pub fn is_throttled(&self) -> bool {
@@ -443,6 +471,29 @@ impl<'a> StorageContext<'a> {
     }
 }
 
+/// The condition for [`Storage::put_object_conditional`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutCondition<'a> {
+    /// Write only if the object doesn't exist.
+    Create,
+    /// Write only if the object's current version is this one.
+    IfVersion(&'a VersionInfo),
+}
+
+/// What the caller guarantees about an unconditional write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WriteHint {
+    /// No guarantee: the name may exist and be read concurrently, so the
+    /// write must be all-or-nothing.
+    #[default]
+    Atomic,
+    /// The caller's promise: the name is new and written by nobody else, and
+    /// nothing reads the object before `put_object` returns. Backends may then
+    /// write in place, without staging. Backends whose PUTs are all-or-nothing
+    /// ignore it.
+    NewObject,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionedUpdateResult {
     Updated { new_version: VersionInfo },
@@ -523,6 +574,43 @@ pub enum RepositoryCreation {
     RefusedEmptyPrefix,
 }
 
+/// The writer features a storage implements, and those a repository it
+/// creates must list. Every required feature is implemented.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StorageWriterFeatures {
+    implemented: BTreeSet<WriterFeature>,
+    required: BTreeSet<WriterFeature>,
+}
+
+impl StorageWriterFeatures {
+    /// Implements `required` and `also_implemented`, and requires `required`.
+    pub fn new(
+        required: impl IntoIterator<Item = WriterFeature>,
+        also_implemented: impl IntoIterator<Item = WriterFeature>,
+    ) -> Self {
+        let required: BTreeSet<_> = required.into_iter().collect();
+        let implemented = required.iter().copied().chain(also_implemented).collect();
+        Self { implemented, required }
+    }
+
+    pub fn implemented(&self) -> &BTreeSet<WriterFeature> {
+        &self.implemented
+    }
+
+    pub fn required(&self) -> &BTreeSet<WriterFeature> {
+        &self.required
+    }
+}
+
+/// When garbage collection calls [`Storage::gc_hook`]. On a repository that
+/// lists `filesystem-layout-v1`, GC always makes a change and `changed` is the
+/// version it wrote; on other repositories `changed` is `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GcPhase<'a> {
+    BeforeDeletes { changed: Option<&'a VersionInfo> },
+    AfterDeletes { changed: Option<&'a VersionInfo> },
+}
+
 /// Keeps the listed objects whose id starts with one of `id_prefixes`.
 pub fn filter_ids_by_id_prefix<'a>(
     listing: BoxStream<'a, StorageResult<ListInfo<String>>>,
@@ -549,6 +637,21 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
 
     async fn can_write(&self) -> StorageResult<bool>;
 
+    /// The writer features this storage implements and requires. The default
+    /// is none, so a wrapper that doesn't forward this refuses every
+    /// repository that lists a writer feature.
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        Ok(StorageWriterFeatures::default())
+    }
+
+    /// Called by garbage collection before its deletes and after them, never
+    /// by a dry run.
+    async fn gc_hook(
+        &self,
+        ctx: &StorageContext<'_>,
+        phase: GcPhase<'_>,
+    ) -> StorageResult<()>;
+
     /// Whether a repository may be created at this storage location.
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
         Ok(RepositoryCreation::Allowed)
@@ -570,7 +673,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         if let Some(range) = range {
             self.get_object_concurrently(ctx, path, range).await
         } else {
@@ -583,10 +686,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
-        let (stream, version) = self.get_object_range(ctx, path, range).await?;
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
+        let stream = self.get_object_range(ctx, path, range).await?;
         let reader = StreamReader::new(stream.map_err(std::io::Error::other));
-        Ok((Box::pin(reader), version))
+        Ok(Box::pin(reader))
     }
 
     async fn get_object_range(
@@ -594,11 +697,12 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )>;
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>;
 
+    /// Write `path` unconditionally, replacing any existing object.
+    ///
+    /// Never reports a version conflict and returns no version. `hint` is
+    /// advisory; see [`WriteHint`].
     async fn put_object(
         &self,
         ctx: &StorageContext<'_>,
@@ -606,9 +710,41 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()>;
+
+    /// Write `path` only if `condition` holds.
+    ///
+    /// Returns [`VersionedUpdateResult::Updated`] with the new version on
+    /// success, or [`VersionedUpdateResult::NotOnLatestVersion`] without
+    /// writing when the condition fails: for [`PutCondition::Create`] the
+    /// object exists, for [`PutCondition::IfVersion`] its current version is a
+    /// different one or the object doesn't exist (on every backend; a missing
+    /// object is never an error). For `Create`, a backend may return
+    /// `Updated` when the object already holds exactly these bytes: a retried
+    /// create whose first reply was lost is indistinguishable from that.
+    /// The version in [`PutCondition::IfVersion`]
+    /// must come from [`Storage::get_object_conditional`] or an earlier
+    /// `put_object_conditional`. Backends honouring
+    /// [`Settings::unsafe_use_conditional_create()`] and
+    /// [`Settings::unsafe_use_conditional_update()`] skip the condition, and
+    /// write unconditionally, when the corresponding setting disables it.
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult>;
 
+    /// Copy `from` to `to` only if `from`'s current version is `version`,
+    /// which must come from [`Storage::get_object_conditional`] or
+    /// [`Storage::put_object_conditional`]. On success it returns `version`
+    /// unchanged, not a version of `to`. Backends honouring
+    /// [`Settings::unsafe_use_conditional_update()`] skip the check, and copy
+    /// unconditionally, when that setting disables it.
     async fn copy_object(
         &self,
         ctx: &StorageContext<'_>,
@@ -622,6 +758,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     ///
     /// Returns a stream of [`ListInfo`] entries, each containing the object's key and size in bytes.
     /// Pass an empty prefix to list all objects in the repository's storage root.
+    /// The order is unspecified; no backend guarantees one.
     async fn list_objects<'a>(
         &'a self,
         ctx: &StorageContext<'_>,
@@ -645,6 +782,11 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         false
     }
 
+    /// Whether this backend can hold IC1 (spec version 1) repositories.
+    fn supports_ic1_repos(&self) -> bool {
+        true
+    }
+
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -652,12 +794,38 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult>;
 
+    /// Deletes files the backend's own write protocols leave behind after a
+    /// crash or an abandoned write. Only files last modified
+    /// before `older_than` are candidates; a backend may use an earlier cutoff
+    /// to protect writes still in progress. With `dry_run`, deletes nothing and
+    /// reports what it would delete.
+    async fn sweep_leftovers(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _older_than: DateTime<Utc>,
+        _dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        Ok(DeleteObjectsResult::default())
+    }
+
     async fn get_object_last_modified(
         &self,
         ctx: &StorageContext<'_>,
         path: &str,
     ) -> StorageResult<DateTime<Utc>>;
 
+    /// Read the object at `path`, skipping the download if the caller already
+    /// has its current version.
+    ///
+    /// Returns [`GetModifiedResult::OnLatestVersion`], without data, if the
+    /// object is still at `previous_version`. Otherwise returns
+    /// [`GetModifiedResult::Modified`] with the data and the new version.
+    /// With `previous_version = None` it always returns `Modified`.
+    ///
+    /// Object stores compare the object's `ETag` with `previous_version.etag`.
+    /// Other backends may define versions differently; a backend whose
+    /// listings can lag may also return `OnLatestVersion` when the version it
+    /// sees is older than `previous_version`.
     async fn get_object_conditional(
         &self,
         ctx: &StorageContext<'_>,
@@ -719,32 +887,23 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         key: &str,
         parts: Vec<Range<u64>>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         let ctx = *ctx;
-        let results = parts
+        let all_bytes = parts
             .into_iter()
             .map(move |range| async move {
-                let (stream, version) =
-                    self.get_object_range(&ctx, key, Some(&range)).await?;
+                let stream = self.get_object_range(&ctx, key, Some(&range)).await?;
                 let all_bytes: Vec<_> = stream.try_collect().await?;
-                Ok::<_, StorageError>((all_bytes, version))
+                Ok::<_, StorageError>(all_bytes)
             })
-            .collect::<FuturesOrdered<_>>();
-
-        let results = results.peekable();
-        tokio::pin!(results);
-        let version = match results.as_mut().peek().await {
-            Some(Ok((_, version))) => version.clone(),
-            _ => VersionInfo::for_creation(),
-        };
-        let all_bytes = results
-            .map_ok(|(all_bytes, _)| stream::iter(all_bytes).map(Ok::<_, StorageError>))
+            .collect::<FuturesOrdered<_>>()
+            .map_ok(|all_bytes| stream::iter(all_bytes).map(Ok::<_, StorageError>))
             .try_flatten()
             .try_collect::<Vec<_>>()
             .await?;
 
         let res = StreamReader::new(stream::iter(all_bytes).map(Ok::<_, std::io::Error>));
-        Ok((Box::pin(res), version))
+        Ok(Box::pin(res))
     }
 
     async fn get_object_concurrently(
@@ -752,7 +911,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         ctx: &StorageContext<'_>,
         key: &str,
         range: &Range<u64>,
-    ) -> StorageResult<(Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo)> {
+    ) -> StorageResult<Pin<Box<dyn AsyncBufRead + Send>>> {
         let parts = split_in_multiple_requests(
             range,
             ctx.settings.concurrency().ideal_concurrent_request_size().get(),
@@ -760,8 +919,8 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         )
         .collect::<Vec<_>>();
 
-        let res: (Pin<Box<dyn AsyncBufRead + Send>>, VersionInfo) = match parts.len() {
-            0 => (Box::pin(tokio::io::empty()), VersionInfo::for_creation()),
+        let res: Pin<Box<dyn AsyncBufRead + Send>> = match parts.len() {
+            0 => Box::pin(tokio::io::empty()),
             1 => self.get_object_range_read(ctx, key, Some(range)).await?,
             _ => self.get_object_concurrently_multiple(ctx, key, parts).await?,
         };
@@ -868,6 +1027,34 @@ mod tests {
         block_on(filter_ids_by_id_prefix(listing(ids), &id_prefixes).try_collect())
             .map(|infos: Vec<ListInfo<String>>| infos.into_iter().map(|i| i.id).collect())
             .expect("listing cannot fail")
+    }
+
+    #[test]
+    fn required_writer_features_are_implemented() {
+        let layout = BTreeSet::from([WriterFeature::FilesystemLayoutV1]);
+        let required =
+            StorageWriterFeatures::new([WriterFeature::FilesystemLayoutV1], []);
+        assert_eq!(required.implemented(), &layout);
+        assert_eq!(required.required(), &layout);
+        let implemented =
+            StorageWriterFeatures::new([], [WriterFeature::FilesystemLayoutV1]);
+        assert_eq!(implemented.implemented(), &layout);
+        assert!(implemented.required().is_empty());
+    }
+
+    #[test]
+    fn missing_writer_features_name_the_features_and_the_version() {
+        let kind = StorageErrorKind::MissingWriterFeatures {
+            missing: BTreeSet::from([
+                FeatureName::new("test-feature-v1"),
+                FeatureName::new("other-v2"),
+            ]),
+            min_version: MinVersion::Newer,
+        };
+        assert_eq!(
+            kind.to_string(),
+            "the repository lists writer features this storage doesn't implement (other-v2, test-feature-v1), first implemented in a newer Icechunk"
+        );
     }
 
     /// Only a throttle is back-pressure; every other error is a real failure.

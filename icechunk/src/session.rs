@@ -60,7 +60,7 @@ use crate::{
     },
     refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, RequestAttribution, StorageContext, StorageErrorKind},
+    storage::{self, RequestAttribution, StorageContext, StorageErrorKind, WriteHint},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
@@ -169,6 +169,15 @@ pub enum SessionErrorKind {
     ConcurrencyError(#[from] JoinError),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
+    /// The commit or flush landed, but the storage found the repository forked.
+    #[error(
+        "snapshot {snapshot} is durable (repo info version {new_version}) and must not be retried, but the repository is forked; see the recovery steps for a forked repository in the filesystem storage documentation: {detail}"
+    )]
+    CommitDurableButRepositoryForked {
+        snapshot: SnapshotId,
+        new_version: Box<storage::VersionInfo>,
+        detail: String,
+    },
     #[error("cannot rebase snapshot {snapshot} on top of the branch")]
     RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
     #[error(
@@ -1660,12 +1669,29 @@ impl Session {
             ))
         };
 
-        let _ = self
+        match self
             .asset_manager
             .update_repo_info(self.config.repo_update_retries(), do_update)
             .await
-            .inject()?;
-        Ok(())
+        {
+            Ok(_) => Ok(()),
+            Err(RepositoryError {
+                kind:
+                    RepositoryErrorKind::UpdateDurableButRepositoryForked {
+                        new_version,
+                        detail,
+                    },
+                context,
+            }) => Err(ICError {
+                kind: SessionErrorKind::CommitDurableButRepositoryForked {
+                    snapshot: new_snap.id().clone(),
+                    new_version,
+                    detail,
+                },
+                context,
+            }),
+            Err(err) => Err(err.inject()),
+        }
     }
 
     async fn flush_v1(&mut self, _: Arc<Snapshot>) -> SessionResult<()> {
@@ -1734,28 +1760,30 @@ impl Session {
         )
         .await?;
 
-        match (self.spec_version(), register) {
+        let res = match (self.spec_version(), register) {
             (SpecVersionBin::V1, _) => self.flush_v1(Arc::clone(&new_snap)).await,
             (SpecVersionBin::V2, true) => self.flush_v2(Arc::clone(&new_snap)).await,
             // unregistered snapshots don't touch the repo info, but the feature flag
             // guard `flush_v2` applies to rearrange sessions still has to run
             (SpecVersionBin::V2, false) => self.raise_if_rearrange_disabled().await,
-        }?;
+        };
+        if let Err(err) = res {
+            if let SessionErrorKind::CommitDurableButRepositoryForked {
+                snapshot, ..
+            } = err.kind()
+            {
+                // The flush landed: a second one would duplicate it.
+                self.mark_committed(snapshot.clone());
+            }
+            return Err(err);
+        }
 
         info!(
             parent_id=%self.snapshot_id(),
             new_snapshot_id=%new_snap.id(),
             "Flush done"
         );
-        // if the commit was successful, we update the session to be
-        // a read only session pointed at the new snapshot
-        self.change_set = ChangeSet::for_edits();
-        self.snapshot_id = new_snap.id().clone();
-        // Once committed, the session is now read only, which we control
-        // by setting the branch_name to None (you can only write to a branch session)
-        self.read_only = true;
-        self.branch_name = None;
-
+        self.mark_committed(new_snap.id().clone());
         Ok(new_snap.id().clone())
     }
 
@@ -1837,7 +1865,7 @@ impl Session {
         let change_set = &mut self.change_set;
         let is_rearrange = matches!(change_set, ChangeSet::Rearrange(_));
 
-        let id = do_commit(
+        let res = do_commit(
             Arc::clone(&self.asset_manager),
             branch_name.as_str(),
             &self.snapshot_id,
@@ -1853,18 +1881,34 @@ impl Session {
             self.config.repo_update_retries(),
             num_updates,
         )
-        .await?;
+        .await;
+        let id = match res {
+            Ok(id) => id,
+            Err(err) => {
+                if let SessionErrorKind::CommitDurableButRepositoryForked {
+                    snapshot,
+                    ..
+                } = err.kind()
+                {
+                    // The commit landed: a second one would duplicate it.
+                    self.mark_committed(snapshot.clone());
+                }
+                return Err(err);
+            }
+        };
+        self.mark_committed(id.clone());
+        Ok(id)
+    }
 
-        // if the commit was successful, we update the session to be
-        // a read only session pointed at the new snapshot
+    /// After a commit or a flush, the session is read only, pointed at the new
+    /// snapshot.
+    fn mark_committed(&mut self, snapshot: SnapshotId) {
         self.change_set = ChangeSet::for_edits();
-        self.snapshot_id = id.clone();
-        // Once committed, the session is now read only, which we control
-        // by setting the branch_name to None (you can only write to a branch session)
+        self.snapshot_id = snapshot;
+        // Read only is controlled by setting the branch_name to None (you can
+        // only write to a branch session)
         self.read_only = true;
         self.branch_name = None;
-
-        Ok(id)
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -3263,7 +3307,9 @@ async fn do_flush(
     let asset_manager = Arc::clone(&flush_data.asset_manager);
     let snapshot_timestamp = tokio::spawn(
         async move {
-            asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
+            asset_manager
+                .write_snapshot(Arc::clone(&new_snapshot_c), WriteHint::NewObject)
+                .await?;
             asset_manager.get_snapshot_last_modified(&new_snapshot_c.id()).await
         }
         .in_current_span(),
@@ -3298,7 +3344,11 @@ async fn do_flush(
 
     flush_data
         .asset_manager
-        .write_transaction_log(new_snapshot_id.clone(), Arc::new(new_tx_log))
+        .write_transaction_log(
+            new_snapshot_id.clone(),
+            Arc::new(new_tx_log),
+            WriteHint::NewObject,
+        )
         .await
         .inject()?;
 
@@ -3415,6 +3465,18 @@ async fn do_commit(
             kind: RepositoryErrorKind::NoAmendForInitialCommit,
             context,
         }) => Err(ICError { kind: SessionErrorKind::NoAmendForInitialCommit, context }),
+        Err(RepositoryError {
+            kind:
+                RepositoryErrorKind::UpdateDurableButRepositoryForked { new_version, detail },
+            context,
+        }) => Err(ICError {
+            kind: SessionErrorKind::CommitDurableButRepositoryForked {
+                snapshot: new_snapshot_id,
+                new_version,
+                detail,
+            },
+            context,
+        }),
         Err(err) => Err(err.inject()),
     }
 }
@@ -4250,7 +4312,7 @@ mod tests {
             None,
             nodes.iter().cloned().map(Ok::<NodeSnapshot, IcechunkFormatError>),
         )?);
-        asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
+        asset_manager.write_snapshot(Arc::clone(&snapshot), WriteHint::NewObject).await?;
         // FIXME:
         // update_branch(
         //     storage.as_ref(),
@@ -4273,6 +4335,7 @@ mod tests {
             100,
             None::<&()>,
             None,
+            &[],
         )
         .add_snapshot(
             SpecVersionBin::current(),

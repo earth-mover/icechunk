@@ -9,7 +9,7 @@ use std::{
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use itertools::Itertools as _;
-use tracing::{debug, info, instrument, trace};
+use tracing::{debug, info, instrument, trace, warn};
 
 use crate::{
     asset_manager::AssetManager,
@@ -21,6 +21,7 @@ use crate::{
         manifest::{ChunkPayload, Manifest},
         repo_info::{RepoInfo, UpdateInfo, UpdateType},
         snapshot::{Snapshot, SnapshotInfo},
+        writer_features::{FeatureName, WriterFeature},
     },
     ops::{
         deleter::{
@@ -35,7 +36,7 @@ use crate::{
         warn_on_low_fd_limit,
     },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, ListInfo},
+    storage::{self, DeleteObjectsResult, GcPhase, ListInfo, VersionInfo},
 };
 use icechunk_types::error::ICResultCtxExt as _;
 
@@ -70,6 +71,7 @@ pub struct GCConfig {
     dangling_attributes: Action,
     dangling_transaction_logs: Action,
     dangling_snapshots: Action,
+    storage_leftovers: Action,
 
     max_snapshots_in_memory: NonZeroU16,
     max_compressed_manifest_mem_bytes: NonZeroUsize,
@@ -92,6 +94,7 @@ impl GCConfig {
         dangling_attributes: Action,
         dangling_transaction_logs: Action,
         dangling_snapshots: Action,
+        storage_leftovers: Action,
         max_snapshots_in_memory: NonZeroU16,
         max_compressed_manifest_mem_bytes: NonZeroUsize,
         max_decoded_manifest_mem_bytes: NonZeroUsize,
@@ -108,6 +111,7 @@ impl GCConfig {
             dangling_attributes,
             dangling_transaction_logs,
             dangling_snapshots,
+            storage_leftovers,
             max_snapshots_in_memory,
             max_compressed_manifest_mem_bytes,
             max_decoded_manifest_mem_bytes,
@@ -143,6 +147,7 @@ impl GCConfig {
         Self::new(
             extra_roots.unwrap_or_default(),
             D(chunks_age),
+            D(metadata_age),
             D(metadata_age),
             D(metadata_age),
             D(metadata_age),
@@ -189,6 +194,10 @@ impl GCConfig {
     }
 
     pub fn action_needed(&self) -> bool {
+        self.deletes_objects() || self.deletes_storage_leftovers()
+    }
+
+    fn deletes_objects(&self) -> bool {
         [
             &self.dangling_chunks,
             &self.dangling_manifests,
@@ -218,6 +227,10 @@ impl GCConfig {
 
     pub fn deletes_snapshots(&self) -> bool {
         self.dangling_snapshots != Action::Keep
+    }
+
+    pub fn deletes_storage_leftovers(&self) -> bool {
+        self.storage_leftovers != Action::Keep
     }
 
     fn must_delete_chunk(&self, chunk: &ListInfo<ChunkId>) -> bool {
@@ -270,6 +283,9 @@ pub struct GCSummary {
     /// transaction logs, manifests and chunks, each kind only after the kind
     /// that references it. Values: `transaction_logs`, `manifests`, `chunks`.
     pub skipped_phases: Vec<String>,
+    /// Leftovers of crashed or abandoned writes the storage backend swept
+    /// (see `Storage::sweep_leftovers`); their bytes are in `bytes_deleted`.
+    pub storage_leftovers_deleted: u64,
 }
 
 impl GCSummary {
@@ -366,6 +382,13 @@ pub async fn find_retained(
     Ok((retained, result.manifests, result.snapshots))
 }
 
+/// Collects the garbage `config` selects.
+///
+/// Order: the checks before a modification, roots and retention, GC's change
+/// (on a repository that lists `filesystem-layout-v1` even when it drops
+/// nothing), the storage's hook before the deletes, the sweep of the
+/// storage's leftovers, the deletes, the hook after them. A dry run makes no
+/// change and calls no hook.
 pub async fn garbage_collect(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
@@ -373,8 +396,12 @@ pub async fn garbage_collect(
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
     ensure_repo_writable(asset_manager.as_ref(), "garbage collect").await?;
+    if !config.action_needed() {
+        info!("No action requested");
+        return Ok(GCSummary::default());
+    }
     warn_on_low_fd_limit(config.peak_concurrent_requests(), "Garbage collection");
-    retry_on_repo_info_update(repo_update_retries, "GC", async || {
+    let plan = retry_on_repo_info_update(repo_update_retries, "GC", async || {
         garbage_collect_one_attempt(
             Arc::clone(&asset_manager),
             config,
@@ -382,20 +409,136 @@ pub async fn garbage_collect(
         )
         .await
     })
-    .await
+    .await?;
+    if config.dry_run {
+        return sweep_and_delete(asset_manager.as_ref(), config, plan).await;
+    }
+
+    let changed = plan.changed.clone();
+    let storage = asset_manager.storage();
+    let ctx = asset_manager.storage_context();
+    storage.gc_hook(&ctx, GcPhase::BeforeDeletes { changed: changed.as_ref() }).await?;
+    let deleted = sweep_and_delete(asset_manager.as_ref(), config, plan).await;
+    // after a failed delete too: some deletes may have happened
+    let after =
+        storage.gc_hook(&ctx, GcPhase::AfterDeletes { changed: changed.as_ref() }).await;
+    match (deleted, after) {
+        (Ok(summary), Ok(())) => Ok(summary),
+        (Ok(_), Err(err)) => Err(err.into()),
+        (Err(err), Ok(())) => Err(err),
+        (Err(err), Err(hook_err)) => {
+            warn!(error = %hook_err, "Storage hook after GC's deletes failed");
+            Err(err)
+        }
+    }
 }
 
+async fn sweep_and_delete(
+    asset_manager: &AssetManager,
+    config: &GCConfig,
+    plan: GcPlan,
+) -> GCResult<GCSummary> {
+    let swept = sweep_storage_leftovers(asset_manager, config).await?;
+    let mut summary = delete_garbage(asset_manager, config, plan).await?;
+    summary.storage_leftovers_deleted = swept.deleted_objects;
+    summary.bytes_deleted += swept.deleted_bytes;
+    Ok(summary)
+}
+
+async fn sweep_storage_leftovers(
+    asset_manager: &AssetManager,
+    config: &GCConfig,
+) -> GCResult<DeleteObjectsResult> {
+    match config.storage_leftovers {
+        Action::Keep => Ok(DeleteObjectsResult::default()),
+        Action::DeleteIfCreatedBefore(older_than) => {
+            let swept = asset_manager
+                .storage()
+                .sweep_leftovers(
+                    &asset_manager.storage_context(),
+                    older_than,
+                    config.dry_run,
+                )
+                .await?;
+            // Logged now: a later GC failure loses the summary.
+            info!(
+                objects = swept.deleted_objects,
+                bytes = swept.deleted_bytes,
+                dry_run = config.dry_run,
+                "Storage leftovers swept"
+            );
+            Ok(swept)
+        }
+    }
+}
+
+/// What GC keeps, decided before its change, and the change's outcome.
+#[derive(Default)]
+struct GcPlan {
+    keep_chunks: ChunkIdSet,
+    keep_manifests: HashSet<ManifestId>,
+    keep_snapshots: HashSet<SnapshotId>,
+    /// The snapshot objects in storage, listed once and reused by the delete
+    /// pass. Values are each object's `(created_at, size_bytes)`: the first
+    /// decides retention and the physical delete, the second only feeds the
+    /// summary's byte count. `None` when we never listed them: V1 repos,
+    /// which don't need the retention check, and runs that keep snapshots,
+    /// which don't delete any.
+    listed_snaps: Option<HashMap<SnapshotId, (DateTime<Utc>, u64)>>,
+    /// The repo info GC's change wrote, or else the one it read; `None` on V1.
+    repo_info: Option<Arc<RepoInfo>>,
+    /// The version GC's change wrote, on a repository that lists
+    /// `filesystem-layout-v1`.
+    changed: Option<VersionInfo>,
+}
+
+/// Finds what to keep and makes GC's change: the only step that conflicts
+/// with concurrent repo-info updates, so the only one retried.
 #[instrument(skip_all)]
 async fn garbage_collect_one_attempt(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     num_updates_per_repo_info_file: u16,
-) -> GCResult<GCSummary> {
-    if !config.action_needed() {
-        info!("No action requested");
-        return Ok(GCSummary::default());
-    }
+) -> GCResult<GcPlan> {
+    let (mut plan, drop_snapshots) = if config.deletes_objects() {
+        find_garbage(Arc::clone(&asset_manager), config).await?
+    } else {
+        let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1 {
+            Some(asset_manager.fetch_repo_info().await?.0)
+        } else {
+            None
+        };
+        (GcPlan { repo_info, ..Default::default() }, HashSet::new())
+    };
 
+    let layout = FeatureName::from(WriterFeature::FilesystemLayoutV1);
+    let lists_layout = match &plan.repo_info {
+        Some(info) => info.writer_features()?.contains(&layout),
+        None => false,
+    };
+    if !config.dry_run
+        && plan.repo_info.is_some()
+        && (config.deletes_snapshots() || lists_layout)
+    {
+        let (written, version) = delete_snapshots_from_repo_info(
+            asset_manager.as_ref(),
+            &mut plan.keep_snapshots,
+            &drop_snapshots,
+            num_updates_per_repo_info_file,
+        )
+        .await?;
+        plan.repo_info = Some(written);
+        plan.changed = lists_layout.then_some(version);
+    }
+    Ok(plan)
+}
+
+/// Roots, reachability and retention: what GC keeps, and the snapshots it
+/// drops from the repo info.
+async fn find_garbage(
+    asset_manager: Arc<AssetManager>,
+    config: &GCConfig,
+) -> GCResult<(GcPlan, HashSet<SnapshotId>)> {
     info!("Finding GC roots");
     let snap_deadline =
         if let Action::DeleteIfCreatedBefore(date_time) = config.dangling_snapshots {
@@ -405,13 +548,6 @@ async fn garbage_collect_one_attempt(
         };
 
     let mut non_pointed_but_new = HashSet::new();
-
-    // The snapshot objects in storage, listed once and reused by the delete
-    // pass below. Values are each object's `(created_at, size_bytes)`: the
-    // first decides retention and the physical delete, the second only feeds
-    // the summary's byte count.
-    // `None` when we never listed them: V1 repos, which don't need the
-    // retention check, and runs that keep snapshots, which don't delete any.
     let mut listed_snaps: Option<HashMap<SnapshotId, (DateTime<Utc>, u64)>> = None;
 
     let mut all_snaps = HashSet::new();
@@ -471,7 +607,7 @@ async fn garbage_collect_one_attempt(
         })
         .buffer_unordered(config.max_snapshots_in_memory.get() as usize);
 
-    let (keep_chunks, keep_manifests, mut keep_snapshots) = find_retained(
+    let (keep_chunks, keep_manifests, keep_snapshots) = find_retained(
         Arc::clone(&asset_manager),
         config,
         pointed_snaps.chain(non_pointed_snaps),
@@ -485,24 +621,37 @@ async fn garbage_collect_one_attempt(
         "Retained objects collected"
     );
 
+    let drop_snapshots = all_snaps.difference(&keep_snapshots).cloned().collect();
+    let plan = GcPlan {
+        keep_chunks,
+        keep_manifests,
+        keep_snapshots,
+        listed_snaps,
+        repo_info,
+        changed: None,
+    };
+    Ok((plan, drop_snapshots))
+}
+
+async fn delete_garbage(
+    asset_manager: &AssetManager,
+    config: &GCConfig,
+    plan: GcPlan,
+) -> GCResult<GCSummary> {
+    let GcPlan {
+        keep_chunks,
+        keep_manifests,
+        keep_snapshots,
+        mut listed_snaps,
+        repo_info,
+        changed: _,
+    } = plan;
     let mut summary = GCSummary::default();
     let mut earlier_phase_failed = false;
 
     info!("Starting deletes");
 
-    let drop_snapshots = all_snaps.difference(&keep_snapshots).cloned().collect();
-
-    let mut written_repo_info: Option<Arc<RepoInfo>> = None;
     if config.deletes_snapshots() {
-        if !config.dry_run && repo_info.is_some() {
-            written_repo_info = delete_snapshots_from_repo_info(
-                asset_manager.as_ref(),
-                &mut keep_snapshots,
-                &drop_snapshots,
-                num_updates_per_repo_info_file,
-            )
-            .await?;
-        }
         debug!("Garbage collecting snapshots");
         let report = match listed_snaps.take() {
             Some(listed) => {
@@ -511,21 +660,17 @@ async fn garbage_collect_one_attempt(
                         Ok(ListInfo { id, created_at, size_bytes })
                     },
                 ));
-                gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots, candidates)
-                    .await?
+                gc_snapshots(asset_manager, config, &keep_snapshots, candidates).await?
             }
             None => {
                 let candidates = asset_manager
                     .list_snapshots_with_concurrency(config.list_concurrency())
                     .await?;
-                gc_snapshots(asset_manager.as_ref(), config, &keep_snapshots, candidates)
-                    .await?
+                gc_snapshots(asset_manager, config, &keep_snapshots, candidates).await?
             }
         };
         earlier_phase_failed |= summary.absorb(report, |s| &mut s.snapshots_deleted);
     }
-    drop(drop_snapshots);
-    drop(all_snaps);
 
     // FIXME: with `dangling_snapshots == Action::Keep` but manifests or tx logs set to
     // delete, `keep_snapshots` covers only snapshots listed in repo info. A snapshot
@@ -540,10 +685,7 @@ async fn garbage_collect_one_attempt(
             // So keep_tx_logs is keep_snapshots plus those ids.
             let mut keep_tx_logs = keep_snapshots.clone();
 
-            // use the most up to date repo info available
-            let pruned_source = written_repo_info.as_ref().or(repo_info.as_ref());
-
-            if let Some(repo_info) = pruned_source {
+            if let Some(repo_info) = &repo_info {
                 let pruned = repo_info
                     .all_snapshots()?
                     .map_ok(|si| si.pruned_ancestor_tx_logs)
@@ -551,8 +693,7 @@ async fn garbage_collect_one_attempt(
                 itertools::process_results(pruned, |ids| keep_tx_logs.extend(ids))?;
             }
             let report =
-                gc_transaction_logs(asset_manager.as_ref(), config, &keep_tx_logs)
-                    .await?;
+                gc_transaction_logs(asset_manager, config, &keep_tx_logs).await?;
             earlier_phase_failed |=
                 summary.absorb(report, |s| &mut s.transaction_logs_deleted);
         }
@@ -561,8 +702,7 @@ async fn garbage_collect_one_attempt(
         if earlier_phase_failed {
             summary.skipped_phases.push("manifests".to_string());
         } else {
-            let report =
-                gc_manifests(asset_manager.as_ref(), config, &keep_manifests).await?;
+            let report = gc_manifests(asset_manager, config, &keep_manifests).await?;
             earlier_phase_failed |= summary.absorb(report, |s| &mut s.manifests_deleted);
         }
     }
@@ -571,7 +711,7 @@ async fn garbage_collect_one_attempt(
             summary.skipped_phases.push("chunks".to_string());
         } else {
             asset_manager.clear_chunk_cache();
-            let report = gc_chunks(asset_manager.as_ref(), config, &keep_chunks).await?;
+            let report = gc_chunks(asset_manager, config, &keep_chunks).await?;
             summary.absorb(report, |s| &mut s.chunks_deleted);
         }
     }
@@ -581,8 +721,7 @@ async fn garbage_collect_one_attempt(
 
 /// Updates the repo object eliminating snapshots.
 ///
-/// On success, returns the `RepoInfo` that was actually written or
-/// `None` if no update was written.
+/// On success, returns the `RepoInfo` that was written and its version.
 ///
 /// There are a few complex cases:
 ///
@@ -622,7 +761,7 @@ async fn delete_snapshots_from_repo_info(
     keep_snapshots: &mut HashSet<SnapshotId>,
     drop_snapshots: &HashSet<SnapshotId>,
     num_updates_per_repo_info_file: u16,
-) -> GCResult<Option<Arc<RepoInfo>>> {
+) -> GCResult<(Arc<RepoInfo>, VersionInfo)> {
     trace!("deleting snapshots from repo info");
     let mut written_repo_info: Option<Arc<RepoInfo>> = None;
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
@@ -719,7 +858,7 @@ async fn delete_snapshots_from_repo_info(
             config_bytes.as_deref(),
             repo_info.enabled_feature_flags().inject()?,
             repo_info.disabled_feature_flags().inject()?,
-            &repo_info.status().inject()?,
+            &repo_info.header().inject()?,
         )
         .inject()?;
 
@@ -734,9 +873,15 @@ async fn delete_snapshots_from_repo_info(
             ..Default::default()
         }),
     };
-    let _ = asset_manager.update_repo_info(&single_attempt, do_update).await?;
-
-    Ok(written_repo_info)
+    let version = asset_manager.update_repo_info(&single_attempt, do_update).await?;
+    let written = written_repo_info
+        .ok_or_else(|| {
+            RepositoryError::capture(RepositoryErrorKind::Other(
+                "GC's repo info update wrote no repo info".to_string(),
+            ))
+        })
+        .map_err(GCError::Repository)?;
+    Ok((written, version))
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
@@ -925,6 +1070,100 @@ mod tests {
         assert!(repeated.is_empty(), "snapshots read more than once: {repeated:?}");
         // 5 commits plus the initial snapshot
         assert_eq!(reads_per_snapshot.len(), 6);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    fn config_with(dangling_chunks: Action, storage_leftovers: Action) -> GCConfig {
+        GCConfig::new(
+            HashSet::new(),
+            dangling_chunks,
+            Action::Keep,
+            Action::Keep,
+            Action::Keep,
+            Action::Keep,
+            storage_leftovers,
+            NonZeroU16::new(10).unwrap(),
+            NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(50).unwrap(),
+            None,
+            true,
+        )
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    async fn gc_operations(
+        config: &GCConfig,
+    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_converging_refs(&backend).await?;
+        let (logging, asset_manager) = logging_asset_manager(
+            &backend,
+            repo.storage_settings().clone(),
+            SpecVersionBin::V2,
+        );
+        garbage_collect(asset_manager, config, None, 10).await?;
+        Ok(logging.fetch_operations())
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    fn sweeps(ops: &[(String, String)]) -> usize {
+        ops.iter().filter(|(op, _)| op == "sweep_leftovers").count()
+    }
+
+    #[tokio_test]
+    async fn gc_sweeps_storage_leftovers_once() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let cutoff = Utc::now() - Duration::hours(1);
+        let config = GCConfig::clean_all(
+            cutoff,
+            cutoff,
+            None,
+            NonZeroU16::new(10).unwrap(),
+            NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(50).unwrap(),
+            None,
+            true,
+        );
+        let ops = gc_operations(&config).await?;
+        assert_eq!(sweeps(&ops), 1, "{ops:?}");
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn gc_keeping_leftovers_does_not_sweep()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cutoff = Utc::now() - Duration::hours(1);
+        let config = config_with(Action::DeleteIfCreatedBefore(cutoff), Action::Keep);
+        let ops = gc_operations(&config).await?;
+        assert_eq!(sweeps(&ops), 0, "{ops:?}");
+        Ok(())
+    }
+
+    /// Sweeping alone needs no walk of the repo.
+    #[tokio_test]
+    async fn only_leftovers_is_an_action() -> Result<(), Box<dyn std::error::Error>> {
+        let cutoff = Utc::now() - Duration::hours(1);
+        let config = config_with(Action::Keep, Action::DeleteIfCreatedBefore(cutoff));
+        assert!(config.action_needed());
+        assert!(config.deletes_storage_leftovers());
+        let ops = gc_operations(&config).await?;
+        assert_eq!(sweeps(&ops), 1, "{ops:?}");
+        let walk: Vec<_> = ops
+            .iter()
+            .filter(|(op, path)| {
+                op.starts_with("list_objects")
+                    || path.starts_with(SNAPSHOTS_FILE_PATH)
+                    || path.starts_with(MANIFESTS_FILE_PATH)
+            })
+            .collect();
+        assert!(walk.is_empty(), "{walk:?}");
         Ok(())
     }
 
@@ -1294,5 +1533,77 @@ mod tests {
     async fn listing_errors_abort_the_run_single_listing()
     -> Result<(), Box<dyn std::error::Error>> {
         listing_error_aborts_the_run(false).await
+    }
+
+    /// Only names that are exactly an id's canonical encoding are deletion
+    /// candidates. A lenient parse would read an old alias as the id it
+    /// decodes to and delete that id's object, here a chunk written after the
+    /// cutoff.
+    #[tokio_test]
+    async fn gc_deletes_only_canonical_names() -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_converging_refs(&backend).await?;
+        let ctx = repo.storage_context();
+        let put = async |path: String| {
+            backend
+                .put_object(
+                    &ctx,
+                    &path,
+                    Bytes::from_static(b"x"),
+                    None,
+                    Vec::new(),
+                    Default::default(),
+                )
+                .await
+        };
+
+        let snapshot = loop {
+            let id = SnapshotId::random().to_string();
+            if id.chars().any(|c| c.is_ascii_alphabetic()) {
+                break id;
+            }
+        };
+        let new_chunk = "01000000000000000000";
+        assert_eq!(ChunkId::try_from(new_chunk)?.to_string(), new_chunk);
+        let aliases = [
+            format!("{SNAPSHOTS_FILE_PATH}/{}", snapshot.to_lowercase()),
+            format!("{CHUNKS_FILE_PATH}/{}", &ChunkId::random().to_string()[1..]),
+            format!("{CHUNKS_FILE_PATH}/OI000000000000000000"),
+            format!("{CHUNKS_FILE_PATH}/0L000000000000000000"),
+            format!("{CHUNKS_FILE_PATH}/{}", new_chunk.to_lowercase().replace('1', "l")),
+        ];
+        for alias in &aliases {
+            put(alias.clone()).await?;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let cutoff = Utc::now();
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let new_chunk = format!("{CHUNKS_FILE_PATH}/{new_chunk}");
+        put(new_chunk.clone()).await?;
+
+        let config = GCConfig::clean_all(
+            cutoff,
+            cutoff,
+            None,
+            NonZeroU16::new(10).unwrap(),
+            NonZeroUsize::new(1_000_000_000).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(50).unwrap(),
+            None,
+            false,
+        );
+        let summary =
+            garbage_collect(Arc::clone(repo.asset_manager()), &config, None, 10).await?;
+        assert_eq!(summary.chunks_deleted, 0, "{summary:?}");
+        assert_eq!(summary.snapshots_deleted, 0, "{summary:?}");
+        for path in aliases.iter().chain([&new_chunk]) {
+            backend
+                .get_object_last_modified(&ctx, path)
+                .await
+                .map_err(|e| format!("{path} was deleted: {e}"))?;
+        }
+        Ok(())
     }
 }

@@ -4,11 +4,11 @@
 
 The Icechunk on-disk format is defined by the format specification ("Icechunk Spec"). A spec version is written as `<major>` with an optional `.<minor>` suffix (for example `1`, `2`, or `2.1`); an omitted minor is equivalent to `.0`.
 
-The major version increments only on an on-disk incompatible change, one that older libraries cannot safely read or write. **A major bump changes the on-disk format version and may require a migration** to adopt. The minor version increments on an on-disk compatible change. **A minor version bump never requires a migration**, but in some cases an optional migration may be available, generally to access a new format-level feature. Spec versions 1 and 2 had no minor component (equivalently `.0`); 2.1 is the first minor release.
+The major version increments only on an on-disk incompatible change, one that older libraries cannot safely read or write. **A major bump changes the on-disk format version and may require a migration** to adopt. The minor version increments on an on-disk compatible change. **A minor version bump never requires a migration**, but in some cases an optional migration may be available, generally to access a new format-level feature. Spec versions 1 and 2 had no minor component (equivalently `.0`); 2.1 was the first minor release.
 
-Every metadata file records a single-byte on-disk format version in its header. This byte equals the spec major version only, and is `2` for both spec 2.0 and spec 2.1. Minor spec versions are not encoded in the header; instead, minor-version features are detected at read time.
+Every metadata file records a single-byte on-disk format version in its header. This byte equals the spec major version only, and is `2` for every spec 2.x. Minor spec versions are not recorded on disk. A library learns what a repository requires from its contents: optional fields it finds, and, from spec 2.2, the repository's list of [writer features](./spec-v2-2.md#writer-features).
 
-The current spec is [version 2.1](./spec-v2-1.md), introduced in Icechunk 2.1.0. All Icechunk 2.x libraries can read and write both spec 2.0 and 2.1 repositories (see [Compatibility](#compatibility)). Earlier formats are documented in [version 2](./spec-v2.md) (introduced in Icechunk 2.0.0) and [version 1](./spec-v1.md) (used by Icechunk 1.x).
+The current spec is [version 2.2](./spec-v2-2.md), introduced in Icechunk 2.4.0. Earlier formats are documented in [version 2.1](./spec-v2-1.md) (introduced in Icechunk 2.1.0), [version 2](./spec-v2.md) (introduced in Icechunk 2.0.0) and [version 1](./spec-v1.md) (used by Icechunk 1.x).
 
 ## Library Versions
 
@@ -50,8 +50,31 @@ Migrating an Icechunk repository from one major format version to the next is a 
 
 We maintain a documented and tested upgrade path from all major versions starting with Icechunk 1 to the latest version. Upgrading may be a multi-step process across major versions (e.g. upgrade 1 → 2, then 2 → 3), and we cover each step with integration tests.
 
-### Compatibility
+### Compatibility across major versions
 
-Compatibility across major versions: an Icechunk library of major version N can read and write Icechunk Spec major versions N and N-1. We make best effort to support reading older spec versions, but do not guarantee it. For example, Icechunk 3.x can read and write Spec versions 2.x and 3.x, and will make best effort to read Spec version 1 data. Icechunk libraries do **not** support forward compatibility across major versions. For example, Icechunk 1.x.y cannot read or write Icechunk format version 2 or later. Users must upgrade to a library version whose major version matches or exceeds the desired format.
+An Icechunk library of major version N can read and write Icechunk Spec major versions N and N-1. We make best effort to support reading older spec versions, but do not guarantee it. For example, Icechunk 3.x can read and write Spec versions 2.x and 3.x, and will make best effort to read Spec version 1 data. Icechunk libraries do **not** support forward compatibility across major versions. For example, Icechunk 1.x.y cannot read or write Icechunk format version 2 or later. Users must upgrade to a library version whose major version matches or exceeds the desired format.
 
-Compatibility across minor versions: within a single major version, all minor spec versions are forward and backward read/write compatible. **Any 2.x library can read and write any spec 2.y repository**. When a library operates on a repository written under a newer minor spec than it implements, reads and writes remain safe, but behavior is degraded for the features it does not recognize. For example, an Icechunk 2.0.x library can read and write a spec 2.1 repository, ignoring the `pruned_ancestor_tx_logs` field introduced in 2.1 and behaving as it did before that feature existed.
+### Compatibility across minor versions
+
+Within a single major version N:
+
+- **Any N.x library can read any spec N.y repository.** For example, Icechunk 2.0.6 can read a spec 2.2 repository. A library ignores the features it does not know when reading, and behaves as it did before they existed.
+- **Any N.x library either writes a spec N.y repository safely or refuses to write it**, with an error that says what it is missing. A library never silently drops information that a newer library wrote.
+
+Each major version documents below how it keeps these promises. Known deviations of particular Icechunk releases are listed in [Compatibility Notes for Icechunk Libraries](./library-compatibility.md).
+
+### Major version 2
+
+#### Writer features
+
+From spec 2.2, a repository lists its [writer features](./spec-v2-2.md#writer-features): format features that a library must implement to modify the repository without damaging it. Modifying includes commits, branch and tag changes, expiration and garbage collection. A library refuses to modify a repository that lists a writer feature it does not implement. Most repositories list none, and any 2.x library can write them.
+
+Libraries older than 2.4.0 do not know about writer features, so a repository that lists any writer feature is read-only for them. Change attempts fail with a message that explains the features and the library version required. These libraries can still read the repository.
+
+#### Experimental writer features
+
+A writer feature that the specification marks experimental, such as `filesystem-layout-v1`, may be superseded in a minor release by a new version under a new name. Every 2.x library keeps reading repositories that list an experimental feature. A later 2.x library may stop writing a superseded version: before such a library can modify the repository, it must be converted, to the newer version or to the standard layout. For the filesystem layout, every 2.x release that can write a version of the layout can also convert it back to the standard layout.
+
+#### Storage layouts
+
+A repository stored on a filesystem through `filesystem_storage` uses the experimental [filesystem layout](./spec-filesystem-layout-v1.md), which lists the `filesystem-layout-v1` [writer feature](./spec-v2-2.md#writer-features). From Icechunk 2.4.0, only filesystem storage can modify such a repository. Every 2.x library can read it, through a read-only copy of the repository info that may lag behind the latest change. The [storage guide](../guides/storage.md#filesystem-storage) explains that copy, how to copy or move such a repository, and the conversions between layouts.

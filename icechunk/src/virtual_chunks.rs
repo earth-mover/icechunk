@@ -97,16 +97,40 @@ pub type ContainerName = String;
 /// Configuration for an external data source that virtual chunks can reference.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VirtualChunkContainer {
-    // name is no longer needed, but we keep it for compatibility with
-    // old serialized configurations
-    // We use default because for a while after 1.0 we were skipping
-    // serialization if None. Then we learned rmp_serde doesn't really
-    // support optional fields, so serialization was broken
+    // Relative virtual chunk locations (`vcc://<name>/<path>`) resolve by
+    // this name (spec 2.2). We use default because for a while after 1.0 we
+    // were skipping serialization if None, and old configurations lack it.
     #[serde(default)]
     pub name: Option<ContainerName>,
 
     url_prefix: String,
     pub store: ObjectStoreConfig,
+}
+
+/// A virtual chunk container of a stored repository configuration whose
+/// store settings this library can't decode: a kind of storage added by a
+/// later version, or one this build doesn't include. Its `name` and
+/// `url_prefix` still resolve, reading its chunks fails, and saving the
+/// configuration keeps the stored entry unchanged.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UndecodableVirtualChunkContainer {
+    name: Option<ContainerName>,
+    /// `None` when the entry's `url_prefix` doesn't decode either
+    url_prefix: Option<String>,
+}
+
+impl UndecodableVirtualChunkContainer {
+    pub(crate) fn new(name: Option<ContainerName>, url_prefix: Option<String>) -> Self {
+        Self { name, url_prefix }
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn url_prefix(&self) -> Option<&str> {
+        self.url_prefix.as_deref()
+    }
 }
 
 pub type VirtualChunkCredentialsError = String;
@@ -369,6 +393,8 @@ pub struct VirtualChunkResolver {
     http_fetcher: Option<Arc<dyn HttpVirtualChunkFetcher>>,
     #[serde(default)]
     attribution_labels: AttributionLabels,
+    #[serde(default)]
+    undecodable_containers: Vec<UndecodableVirtualChunkContainer>,
 }
 
 fn new_cache() -> ChunkFetcherCache {
@@ -418,7 +444,21 @@ impl VirtualChunkResolver {
             fetchers: new_cache(),
             http_fetcher: None,
             attribution_labels: AttributionLabels::default(),
+            undecodable_containers: Vec::new(),
         }
+    }
+
+    /// Containers whose store settings don't decode: locations under them
+    /// resolve, and reading them fails with a clear error.
+    pub fn with_undecodable_containers(
+        mut self,
+        containers: impl Iterator<Item = UndecodableVirtualChunkContainer>,
+    ) -> Self {
+        let mut containers: Vec<_> =
+            containers.filter(|cont| cont.url_prefix.is_some()).collect();
+        containers.sort_by_key(|cont| std::cmp::Reverse(cont.url_prefix().map(str::len)));
+        self.undecodable_containers = containers;
+        self
     }
 
     pub fn with_attribution(mut self, labels: AttributionLabels) -> Self {
@@ -440,6 +480,7 @@ impl VirtualChunkResolver {
             fetchers: new_cache(),
             http_fetcher: Some(fetcher),
             attribution_labels: self.attribution_labels.clone(),
+            undecodable_containers: self.undecodable_containers.clone(),
         }
     }
 
@@ -467,6 +508,31 @@ impl VirtualChunkResolver {
         self.containers.iter().find(|c| c.name.as_deref() == Some(name))
     }
 
+    /// Fails when the container with the longest prefix matching the absolute
+    /// `location` is one whose store settings don't decode.
+    fn fail_if_undecodable(&self, location: &str) -> Result<(), VirtualReferenceError> {
+        let Some((cont, url_prefix)) =
+            self.undecodable_containers.iter().find_map(|cont| {
+                let url_prefix = cont.url_prefix()?;
+                location.starts_with(url_prefix).then_some((cont, url_prefix))
+            })
+        else {
+            return Ok(());
+        };
+        if self
+            .matching_container_by_url(location)
+            .is_some_and(|decodable| decodable.url_prefix.len() >= url_prefix.len())
+        {
+            return Ok(());
+        }
+        Err(VirtualReferenceError::capture(
+            VirtualReferenceErrorKind::UndecodableVirtualChunkContainer {
+                url_prefix: url_prefix.to_string(),
+                name: cont.name.clone(),
+            },
+        ))
+    }
+
     /// Expand a chunk location to an absolute URL. For `vcc://name/path` locations,
     /// resolves the name to a container's `url_prefix`. For absolute URLs, returns as-is.
     pub fn expand_location(
@@ -486,13 +552,20 @@ impl VirtualChunkResolver {
         };
         let name = &rest[..slash];
         let relative_path = &rest[slash + 1..];
-        let cont = self
+        let url_prefix = self
             .matching_container_by_name(name)
+            .map(VirtualChunkContainer::url_prefix)
+            .or_else(|| {
+                self.undecodable_containers
+                    .iter()
+                    .find(|cont| cont.name() == Some(name))
+                    .and_then(UndecodableVirtualChunkContainer::url_prefix)
+            })
             .ok_or_else(|| {
                 VirtualReferenceErrorKind::NoContainerForName(name.to_string())
             })
             .capture()?;
-        Ok(format!("{}{}", cont.url_prefix(), relative_path))
+        Ok(format!("{url_prefix}{relative_path}"))
     }
 
     async fn get_fetcher(
@@ -528,6 +601,7 @@ impl VirtualChunkResolver {
         attribution: RequestAttribution<'_>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let location = self.expand_location(chunk_location)?;
+        self.fail_if_undecodable(&location)?;
 
         // The parsed `url` is used only for the scheme/host/port and for matching
         // a container.
@@ -613,6 +687,9 @@ impl VirtualChunkResolver {
         &self,
         location: &VirtualChunkLocation,
     ) -> Result<(), VirtualReferenceError> {
+        if let Ok(expanded) = self.expand_location(location.url()) {
+            self.fail_if_undecodable(&expanded)?;
+        }
         let cont = self
             .matching_container(location)
             .ok_or_else(|| {

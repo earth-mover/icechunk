@@ -2,10 +2,17 @@
 # the toxic-removal timer they race. See icechunk/tests/test_flaky_connections.rs.
 [test-groups]
 lost-response = { max-threads = 1 }
+# Serialize the ignored icechunk-fs-stress process tests: each spawns many
+# stress processes, and the stall and fault-floor checks fail under contention.
+fs-stress-process = { max-threads = 1 }
 
 [[profile.default.overrides]]
 filter = 'test(conditional_put)'
 test-group = 'lost-response'
+
+[[profile.default.overrides]]
+filter = 'binary_id(icechunk-fs-stress::process)'
+test-group = 'fs-stress-process'
 
 # Start the ~60s test first, so that it does not set the tail of a CI test partition.
 [[profile.default.overrides]]

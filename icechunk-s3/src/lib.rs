@@ -44,10 +44,10 @@ pub use icechunk_storage::s3_config::{
     S3StaticCredentials,
 };
 use icechunk_storage::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    VersionInfo, VersionedUpdateResult, obj_not_found_res, obj_store_error,
-    obj_store_error_res, other_error,
+    DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
+    RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
+    WriteHint, obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -456,24 +456,26 @@ pub mod test_util {
 }
 
 /// Conditional header a PUT carries; shared by single-PUT and multipart.
+#[derive(Clone, Copy)]
 enum Conditional<'a> {
     IfNoneMatch,
     IfMatch(&'a str),
 }
 
 fn conditional_for<'a>(
-    previous_version: Option<&'a VersionInfo>,
+    condition: PutCondition<'a>,
     settings: &Settings,
-) -> Option<Conditional<'a>> {
-    let pv = previous_version?;
-    match (
-        pv.etag(),
-        settings.unsafe_use_conditional_create(),
-        settings.unsafe_use_conditional_update(),
-    ) {
-        (None, true, _) => Some(Conditional::IfNoneMatch),
-        (Some(etag), _, true) => Some(Conditional::IfMatch(etag)),
-        (_, _, _) => None,
+) -> StorageResult<Option<Conditional<'a>>> {
+    match condition {
+        PutCondition::Create if settings.unsafe_use_conditional_create() => {
+            Ok(Some(Conditional::IfNoneMatch))
+        }
+        PutCondition::IfVersion(v) if settings.unsafe_use_conditional_update() => {
+            v.etag().map(|e| Some(Conditional::IfMatch(e))).ok_or_else(|| {
+                other_error("conditional update requires a version with an etag")
+            })
+        }
+        _ => Ok(None),
     }
 }
 
@@ -485,6 +487,19 @@ fn is_precondition_code(code: &str) -> bool {
         code,
         "PreconditionFailed" | "ConditionalRequestConflict" | "ConcurrentModification"
     )
+}
+
+/// An `If-Match` PUT on a missing key: S3 answers 404 `NoSuchKey`, which the
+/// `Storage` contract reports as `NotOnLatestVersion`. A 404 without a code
+/// counts too; pass no `status` where it can mean something else
+/// (`NoSuchUpload` on a multipart complete).
+fn is_if_match_on_missing_key(
+    conditional: Option<Conditional<'_>>,
+    status: Option<u16>,
+    code: &str,
+) -> bool {
+    matches!(conditional, Some(Conditional::IfMatch(_)))
+        && (code == "NoSuchKey" || (code.is_empty() && status == Some(404)))
 }
 
 /// Identify a retryable error: any 5xx, HTTP 429, or an S3 code that means "try again"
@@ -727,7 +742,7 @@ impl S3Storage {
         bytes: Bytes,
         content_type: Option<impl Into<String>>,
         metadata: I,
-        previous_version: Option<&VersionInfo>,
+        conditional: Option<Conditional<'_>>,
     ) -> StorageResult<VersionedUpdateResult> {
         let mut req = self
             .get_client(ctx.settings)
@@ -756,7 +771,7 @@ impl S3Storage {
             req = req.storage_class(klass);
         }
 
-        let conditional_applied = match conditional_for(previous_version, ctx.settings) {
+        let conditional_applied = match conditional {
             Some(Conditional::IfNoneMatch) => {
                 req = req.if_none_match("*");
                 true
@@ -787,6 +802,12 @@ impl S3Storage {
                 let code = err.err().meta().code().unwrap_or_default();
                 if is_precondition_code(code) {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
+                } else if is_if_match_on_missing_key(
+                    conditional,
+                    Some(err.raw().status().as_u16()),
+                    code,
+                ) {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
@@ -797,11 +818,47 @@ impl S3Storage {
                 // see https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
                 if status == 409 || status == 412 {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
+                } else if is_if_match_on_missing_key(conditional, Some(status), "") {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
             }
             Err(err) => obj_store_error_res(err),
+        }
+    }
+
+    async fn put_object_with(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        conditional: Option<Conditional<'_>>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let layout = self.layout(ctx).await?;
+        let path = self.key_for(layout, path);
+        if bytes.len() >= ctx.settings.minimum_size_for_multipart_upload() as usize {
+            self.put_object_multipart(
+                ctx,
+                path.as_str(),
+                &bytes,
+                content_type,
+                metadata,
+                conditional,
+            )
+            .await
+        } else {
+            self.put_object_single(
+                ctx,
+                path.as_str(),
+                bytes,
+                content_type,
+                metadata,
+                conditional,
+            )
+            .await
         }
     }
 
@@ -814,7 +871,7 @@ impl S3Storage {
         bytes: &Bytes,
         content_type: Option<impl Into<String>>,
         metadata: I,
-        previous_version: Option<&VersionInfo>,
+        conditional: Option<Conditional<'_>>,
     ) -> StorageResult<VersionedUpdateResult> {
         let mut multi = self
             .get_client(ctx.settings)
@@ -828,9 +885,7 @@ impl S3Storage {
 
         // Write-id rides as metadata on `create_multipart_upload`, so decide
         // here whether the later `complete` will carry a condition.
-        let will_apply_condition =
-            conditional_for(previous_version, ctx.settings).is_some();
-        let write_id = write_id_for(ctx.settings, will_apply_condition, next_write_id);
+        let write_id = write_id_for(ctx.settings, conditional.is_some(), next_write_id);
 
         if ctx.settings.unsafe_use_metadata() {
             if let Some(ct) = content_type {
@@ -921,7 +976,7 @@ impl S3Storage {
             //.checksum_type(aws_sdk_s3::types::ChecksumType::FullObject)
             .multipart_upload(completed_parts);
 
-        match conditional_for(previous_version, ctx.settings) {
+        match conditional {
             Some(Conditional::IfNoneMatch) => req = req.if_none_match("*"),
             Some(Conditional::IfMatch(etag)) => req = req.if_match(strip_quotes(etag)),
             None => {}
@@ -950,6 +1005,8 @@ impl S3Storage {
                         obj_store_error(SdkError::ServiceError(err)),
                     )
                     .await
+                } else if is_if_match_on_missing_key(conditional, None, code) {
+                    Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
                     obj_store_error_res(SdkError::ServiceError(err))
                 }
@@ -1070,6 +1127,14 @@ impl Storage for S3Storage {
         Ok(self.can_write)
     }
 
+    async fn gc_hook(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _phase: GcPhase<'_>,
+    ) -> StorageResult<()> {
+        Ok(())
+    }
+
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
         if self.prefix.is_empty() && !self.allow_empty_prefix_creation {
             Ok(RepositoryCreation::RefusedEmptyPrefix)
@@ -1085,31 +1150,25 @@ impl Storage for S3Storage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        _hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.put_object_with(ctx, path, bytes, content_type, metadata, None)
+            .await?
+            .must_write()
+            .map(|_| ())
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let layout = self.layout(ctx).await?;
-        let path = self.key_for(layout, path);
-        if bytes.len() >= ctx.settings.minimum_size_for_multipart_upload() as usize {
-            self.put_object_multipart(
-                ctx,
-                path.as_str(),
-                &bytes,
-                content_type,
-                metadata,
-                previous_version,
-            )
-            .await
-        } else {
-            self.put_object_single(
-                ctx,
-                path.as_str(),
-                bytes,
-                content_type,
-                metadata,
-                previous_version,
-            )
-            .await
-        }
+        let conditional = conditional_for(condition, ctx.settings)?;
+        self.put_object_with(ctx, path, bytes, content_type, metadata, conditional).await
     }
 
     async fn copy_object(
@@ -1393,16 +1452,14 @@ impl Storage for S3Storage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.get_object_range_conditional(ctx, path, range, None).await.map(|v| {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
             // if previous_version was passed in function call, but we set it to None
             #[expect(clippy::expect_used)]
-            v.expect("Logic bug in get_object_range_conditional, should not get None")
+            v.expect("Logic bug in get_object_range_conditional, should not get None").0
         })
     }
 }
@@ -1963,6 +2020,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn if_version_without_etag_fails_only_when_conditional_update_is_on() {
+        let no_etag = VersionInfo::for_creation();
+        let condition = PutCondition::IfVersion(&no_etag);
+        assert!(conditional_for(condition, &Settings::default()).is_err());
+
+        let disabled = Settings {
+            unsafe_use_conditional_update: Some(false),
+            ..Settings::default()
+        };
+        assert!(matches!(conditional_for(condition, &disabled), Ok(None)));
+    }
+
     fn per_key_error(code: Option<&str>) -> aws_sdk_s3::types::Error {
         let mut b = aws_sdk_s3::types::Error::builder().key("k").message("m");
         if let Some(code) = code {
@@ -1992,6 +2062,21 @@ mod tests {
         }
         assert!(!is_precondition_code("NoSuchUpload"));
         assert!(!is_precondition_code(""));
+    }
+
+    #[test]
+    fn if_match_on_missing_key() {
+        let if_match = Some(Conditional::IfMatch("etag"));
+        assert!(is_if_match_on_missing_key(if_match, Some(404), "NoSuchKey"));
+        assert!(is_if_match_on_missing_key(if_match, Some(404), ""));
+        assert!(is_if_match_on_missing_key(if_match, None, "NoSuchKey"));
+        assert!(!is_if_match_on_missing_key(if_match, None, ""));
+        assert!(!is_if_match_on_missing_key(if_match, None, "NoSuchUpload"));
+        assert!(!is_if_match_on_missing_key(if_match, Some(404), "NoSuchBucket"));
+        assert!(!is_if_match_on_missing_key(if_match, Some(403), "AccessDenied"));
+        for conditional in [None, Some(Conditional::IfNoneMatch)] {
+            assert!(!is_if_match_on_missing_key(conditional, Some(404), "NoSuchKey"));
+        }
     }
 
     #[test]

@@ -1,0 +1,48 @@
+[package]
+name = "icechunk-fs"
+version = "2.3.0"
+description = "Filesystem storage backend for icechunk, safe under concurrent writers"
+readme = "../README.md"
+repository = "https://github.com/earth-mover/icechunk"
+homepage = "https://icechunk.io"
+license = "Apache-2.0"
+keywords = ["zarr", "xarray", "database"]
+categories = ["database", "science", "science::geo"]
+authors = ["Earthmover PBC"]
+edition.workspace = true
+publish = true
+rust-version.workspace = true
+
+[features]
+# Testing only, no stability guarantees: exposes protocol hooks for fault injection
+# (used by icechunk-fs-stress). Adds API, changes no behaviour.
+fault-injection = []
+
+[dependencies]
+icechunk-storage.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+icechunk-format.workspace = true
+icechunk-types.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+futures.workspace = true
+libc.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+tracing.workspace = true
+typetag.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+icechunk-macros.workspace = true
+serde_json.workspace = true
+stateright = "0.31"
+tempfile.workspace = true
+test-log.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util"] }
+
+[lints]
+workspace = true

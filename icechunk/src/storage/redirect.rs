@@ -28,9 +28,9 @@ use icechunk_storage::sealed;
 use icechunk_types::ICResultExt as _;
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
+    RepositoryCreation, Settings, Storage, StorageContext, StorageError, StorageInfo,
+    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,6 +56,11 @@ const HANDLED_SCHEMES: [&str; 9] = [
 impl RedirectStorage {
     pub fn new(url: Url) -> Self {
         Self { url, backend: OnceCell::new() }
+    }
+
+    #[cfg(test)]
+    fn with_backend(url: Url, backend: Arc<dyn Storage + Send + Sync>) -> Self {
+        Self { url, backend: OnceCell::new_with(Some(backend)) }
     }
 
     async fn backend(&self) -> StorageResult<&(dyn Storage + Send + Sync)> {
@@ -325,6 +330,26 @@ impl Storage for RedirectStorage {
         self.backend().await?.can_write().await
     }
 
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        self.backend().await?.writer_features().await
+    }
+
+    async fn gc_hook(
+        &self,
+        ctx: &StorageContext<'_>,
+        phase: GcPhase<'_>,
+    ) -> StorageResult<()> {
+        self.backend().await?.gc_hook(ctx, phase).await
+    }
+
+    async fn create_location_if_needed(&self) -> StorageResult<()> {
+        self.backend().await?.create_location_if_needed().await
+    }
+
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        self.backend().await?.root_is_clean(ctx).await
+    }
+
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
         self.backend().await?.can_create_repository().await
     }
@@ -338,10 +363,8 @@ impl Storage for RedirectStorage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.backend().await?.get_object_range(ctx, path, range).await
     }
 
@@ -352,11 +375,26 @@ impl Storage for RedirectStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.backend()
+            .await?
+            .put_object(ctx, path, bytes, content_type, metadata, hint)
+            .await
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
         self.backend()
             .await?
-            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+            .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await
     }
 
@@ -397,6 +435,11 @@ impl Storage for RedirectStorage {
         self.backend.get().is_some_and(|b| b.lists_id_prefixes_natively())
     }
 
+    fn supports_ic1_repos(&self) -> bool {
+        // the trait's default until the backend is resolved, as above
+        self.backend.get().is_none_or(|b| b.supports_ic1_repos())
+    }
+
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -404,6 +447,15 @@ impl Storage for RedirectStorage {
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
         self.backend().await?.delete_batch(ctx, prefix, batch).await
+    }
+
+    async fn sweep_leftovers(
+        &self,
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.backend().await?.sweep_leftovers(ctx, older_than, dry_run).await
     }
 
     async fn get_object_last_modified(
@@ -424,10 +476,30 @@ impl Storage for RedirectStorage {
     }
 }
 
-#[cfg(all(test, feature = "object-store-http"))]
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::recording::{RecordingStorage, assert_forwards};
 
+    fn url() -> Url {
+        Url::parse("http://redirect.example.com/").unwrap()
+    }
+
+    #[tokio::test]
+    async fn forwards_to_the_resolved_backend() {
+        let inner = Arc::new(RecordingStorage::default());
+        let storage = RedirectStorage::with_backend(url(), Arc::clone(&inner) as Arc<_>);
+        assert_forwards(&storage, &inner).await;
+    }
+
+    #[test]
+    fn sync_methods_answer_the_defaults_before_resolving() {
+        let storage = RedirectStorage::new(url());
+        assert!(!storage.lists_id_prefixes_natively());
+        assert!(storage.supports_ic1_repos());
+    }
+
+    #[cfg(feature = "object-store-http")]
     #[tokio::test]
     async fn test_mk_storage_strips_icechunk_scheme_tag() {
         let redirect =

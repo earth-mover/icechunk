@@ -30,7 +30,7 @@ use tracing::{Instrument as _, debug, error, instrument, trace, warn};
 
 use crate::{
     Storage,
-    asset_manager::{AssetManager, array_label},
+    asset_manager::{AssetManager, Modification, array_label},
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
         RepositoryConfig,
@@ -46,20 +46,26 @@ use crate::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
         SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoAvailability, RepoInfo, RepoStatus, UpdateType},
+        repo_info::{RepoInfo, RepoStatus, UpdateType},
         snapshot::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
+        writer_features::{FeatureName, MinVersion},
     },
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionError, SessionErrorKind, SessionResult},
-    storage::{self, Attribution, AttributionLabels, StorageContext, StorageErrorKind},
+    storage::{
+        self, Attribution, AttributionLabels, FORK_EXPLANATION, StorageContext,
+        StorageErrorKind,
+    },
     virtual_chunks::VirtualChunkResolver,
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
 mod builder;
+#[cfg(test)]
+mod modification_check_tests;
 pub use builder::{Create, CreateMode, Mode, Open, OpenOrCreate, RepositoryBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,11 +122,25 @@ impl DetectedSpecVersion {
 #[non_exhaustive]
 pub enum RepositoryErrorKind {
     #[error(transparent)]
-    StorageError(#[from] StorageErrorKind),
+    StorageError(StorageErrorKind),
     #[error(transparent)]
     FormatError(#[from] IcechunkFormatErrorKind),
     #[error(transparent)]
     Ref(#[from] RefErrorKind),
+    #[error(
+        "the repository lists writer features that this storage doesn't implement ({}), first implemented in {min_version}; it can be read but not modified",
+        .missing.iter().join(", ")
+    )]
+    MissingWriterFeatures { missing: BTreeSet<FeatureName>, min_version: MinVersion },
+    /// A change landed and is durable, but its storage found the repository
+    /// forked. Retrying would make the change twice.
+    #[error(
+        "the change is durable (version {new_version}) and must not be retried, but the repository is forked: {detail}"
+    )]
+    UpdateDurableButRepositoryForked {
+        new_version: Box<storage::VersionInfo>,
+        detail: String,
+    },
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("branch {branch} does not have a snapshots before or at {at}")]
@@ -170,17 +190,38 @@ pub enum RepositoryErrorKind {
     )]
     NoAmendForInitialCommit,
     #[error(
-        "repository cannot be updated after {0} attempts, too many concurrent changes"
+        "the repository changed during this update in each of its {0} attempt(s): too many concurrent changes"
     )]
     RepoUpdateAttemptsLimit(u64),
     #[error(
         "repository version error, this operation requires a repository that is at least version {minimum_spec_version}, please upgrade your on-disk format before executing this operation"
     )]
     BadRepoVersion { minimum_spec_version: SpecVersionBin },
+    #[error(
+        "this storage backend doesn't support Icechunk 1 repositories; migrate the repository to Icechunk 2 with the local filesystem storage (`local_filesystem_storage` in Python) first"
+    )]
+    StorageRefusesIc1,
     #[error("concurrency error, lock could not be acquired")]
     PoisonLock,
     #[error("unexpected error: {0}")]
     Other(String),
+}
+
+impl From<StorageErrorKind> for RepositoryErrorKind {
+    fn from(kind: StorageErrorKind) -> Self {
+        match kind {
+            StorageErrorKind::MissingWriterFeatures { missing, min_version } => {
+                Self::MissingWriterFeatures { missing, min_version }
+            }
+            StorageErrorKind::RepositoryForkedAfterUpdate { new_version, detail } => {
+                Self::UpdateDurableButRepositoryForked {
+                    new_version,
+                    detail: format!("{detail}. {FORK_EXPLANATION}"),
+                }
+            }
+            kind => Self::StorageError(kind),
+        }
+    }
 }
 
 pub type RepositoryError = ICError<RepositoryErrorKind>;
@@ -222,6 +263,9 @@ impl Repository {
                 containers,
                 authorized_virtual_containers.clone(),
                 storage_settings.clone(),
+            )
+            .with_undecodable_containers(
+                config.undecodable_virtual_chunk_containers().cloned(),
             )
             .with_attribution(asset_manager.attribution_labels().clone()),
         );
@@ -409,10 +453,14 @@ impl Repository {
         .await?;
 
         match detected {
-            Some(DetectedSpecVersion::V2Plus { repo_info, .. }) => Ok(repo_info
-                .config()
-                .inject()?
-                .map(|config| (config, storage::VersionInfo::for_creation()))),
+            Some(DetectedSpecVersion::V2Plus { repo_info, .. }) => {
+                Ok(repo_info.config_bytes_raw().inject()?.map(|config| {
+                    (
+                        RepositoryConfig::from_stored(&config),
+                        storage::VersionInfo::for_creation(),
+                    )
+                }))
+            }
             Some(DetectedSpecVersion::V1) => {
                 let am = AssetManager::new_no_cache(
                     Arc::clone(&storage),
@@ -437,9 +485,11 @@ impl Repository {
             let num_updates = self.config.num_updates_per_repo_info_file();
             let spec_version = self.spec_version();
             let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+                let current = repo_info.config_bytes_raw().inject()?;
+                let stored = config.to_stored(current.as_deref()).inject()?;
                 Ok(Arc::new(
                     repo_info
-                        .set_config(spec_version, &config, backup_path, num_updates)
+                        .set_config(spec_version, &stored, backup_path, num_updates)
                         .inject()?,
                 ))
             };
@@ -558,9 +608,7 @@ impl Repository {
             ))
         };
 
-        // SAFETY: this is the only call site for update_repo_info_unchecked.
-        // We need it here to bypass the repo status check when changing the
-        // status itself — normal callers go through update_repo_info.
+        // SAFETY: `do_update` changes only the status.
         unsafe {
             let _ = self
                 .asset_manager
@@ -616,6 +664,11 @@ impl Repository {
     /// `set_to` = Some(true) will enable it
     /// `set_to` = Some(false) will disable it
     /// `set_to` = None will set it to default state by deleting from repo info object
+    ///
+    /// Icechunk before 2.4.0 ignores every flag except `move_node`, `create_tag`
+    /// and `delete_tag`, so disabling another flag doesn't stop writers using an
+    /// older Icechunk. To stop every writer, set the status `ReadOnly` with
+    /// [`Repository::set_status`] instead.
     pub async fn set_feature_flag(
         &self,
         feature_flag: &str,
@@ -1718,17 +1771,14 @@ impl Repository {
         Ok(session)
     }
 
-    async fn fail_unless_online_status(&self, error_msg: &str) -> RepositoryResult<()> {
+    /// Refuses unless the repository can be modified (see
+    /// [`AssetManager::ensure_modifiable`]).
+    async fn fail_unless_modifiable(&self, error_msg: &str) -> RepositoryResult<()> {
         if self.spec_version() >= SpecVersionBin::V2 {
-            let status = self.get_status().await?;
-            if status.availability != RepoAvailability::Online {
-                return Err(RepositoryError::capture(
-                    RepositoryErrorKind::ReadonlyRepository(format!(
-                        "{error_msg}; {0}",
-                        status.error_msg()
-                    )),
-                ));
-            }
+            let (repo_info, _) = self.asset_manager().fetch_repo_info().await?;
+            self.asset_manager()
+                .ensure_modifiable(&repo_info, Modification::Any, Some(error_msg))
+                .await?;
         }
         Ok(())
     }
@@ -1737,7 +1787,7 @@ impl Repository {
     pub async fn writable_session(&self, branch: &str) -> RepositoryResult<Session> {
         self.raise_if_cant_write("Cannot create writable session").await?;
 
-        self.fail_unless_online_status("Cannot create writable session").await?;
+        self.fail_unless_modifiable("Cannot create writable session").await?;
 
         let snapshot_id = self.lookup_branch(branch).await?;
 
@@ -1764,7 +1814,7 @@ impl Repository {
         // this feature is only available in IC2
         self.asset_manager().fail_unless_spec_at_least(SpecVersionBin::V2)?;
 
-        self.fail_unless_online_status("Cannot create rearrange session").await?;
+        self.fail_unless_modifiable("Cannot create rearrange session").await?;
 
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
         let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;

@@ -24,7 +24,7 @@ use crate::{
     },
     private,
     refs::{self, Ref},
-    storage::{self, Attribution, AttributionLabels, StorageContext},
+    storage::{self, Attribution, AttributionLabels, StorageContext, WriteHint},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
@@ -294,6 +294,8 @@ async fn create(
 ) -> RepositoryResult<Repository> {
     debug!("Creating Repository");
     raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
+    let spec_version = spec_version.unwrap_or_default();
+    raise_if_ic1_unsupported(storage.as_ref(), spec_version)?;
     if storage.can_create_repository().await.inject()?
         == storage::RepositoryCreation::RefusedEmptyPrefix
     {
@@ -317,8 +319,6 @@ async fn create(
     let config = RepositoryConfig { storage: Some(storage_settings.clone()), ..config };
     let attribution = attribution.unwrap_or_default();
     let labels = AttributionLabels::from(&attribution);
-
-    let spec_version = spec_version.unwrap_or_default();
 
     let asset_manager = Arc::new(
         AssetManager::new_with_config(
@@ -350,34 +350,44 @@ async fn create(
     let labels_ref = &labels;
     let num_updates = config.num_updates_per_repo_info_file();
     let config_ref = &config;
+    let required_features: Vec<_> = if spec_version >= SpecVersionBin::V2 {
+        storage.writer_features().await.inject()?.required().iter().copied().collect()
+    } else {
+        Vec::new()
+    };
     let create_repo_info = async move {
         // On create we need to create the default branch
         let new_snapshot = Arc::new(Snapshot::initial(spec_version).inject()?);
-        let write_snap = asset_manager_c.write_snapshot(Arc::clone(&new_snapshot));
 
         if spec_version >= SpecVersionBin::V2 {
             let empty_tx_log = transaction_log_from_change_set(
                 &Snapshot::INITIAL_SNAPSHOT_ID,
                 &ChangeSet::for_edits(),
             );
+            // Concurrent creators all write these fixed names: the first
+            // write wins, and the repo info copies the snapshot that stays.
+            let (stored_snapshot, ()) = try_join!(
+                asset_manager_c.create_snapshot(new_snapshot),
+                asset_manager_c.create_transaction_log(
+                    Snapshot::INITIAL_SNAPSHOT_ID,
+                    Arc::new(empty_tx_log),
+                ),
+            )?;
             let snap_info =
-                SnapshotInfo::from_snapshot_file(new_snapshot.as_ref()).inject()?;
-            let config_to_store =
-                if has_overriden_config { Some(config_ref) } else { None };
+                SnapshotInfo::from_snapshot_file(stored_snapshot.as_ref()).inject()?;
+            let config_to_store = if has_overriden_config {
+                Some(config_ref.to_stored(None).inject()?)
+            } else {
+                None
+            };
             let repo_info = Arc::new(RepoInfo::initial(
                 spec_version,
                 snap_info,
                 num_updates,
-                config_to_store,
+                config_to_store.as_ref(),
                 None,
+                &required_features,
             ));
-
-            // Write snapshot and transaction log concurrently first
-            let write_tx = asset_manager_c.write_transaction_log(
-                Snapshot::INITIAL_SNAPSHOT_ID,
-                Arc::new(empty_tx_log),
-            );
-            try_join!(write_snap, write_tx)?;
 
             // Only write the repo info after both succeed, since the repo
             // object is the entry point that makes the repository valid.
@@ -385,7 +395,9 @@ async fn create(
             // missing snapshot/tx data.
             asset_manager_c.create_repo_info(Arc::clone(&repo_info)).await?;
         } else {
-            write_snap.await?;
+            asset_manager_c
+                .write_snapshot(Arc::clone(&new_snapshot), WriteHint::Atomic)
+                .await?;
             refs::update_branch(
                 storage_c.as_ref(),
                 &StorageContext::without_node(settings_ref, labels_ref),
@@ -506,10 +518,15 @@ async fn open(
     }?;
     let spec_version = detected.spec_version();
     trace!(%spec_version, "Repository version found");
+    raise_if_ic1_unsupported(storage.as_ref(), spec_version)?;
 
     let (persisted_config, config_version) = match detected {
         DetectedSpecVersion::V2Plus { repo_info, .. } => {
-            (repo_info.config().inject()?, storage::VersionInfo::for_creation())
+            let config = repo_info.config_bytes_raw().inject()?;
+            (
+                config.as_deref().map(RepositoryConfig::from_stored),
+                storage::VersionInfo::for_creation(),
+            )
         }
         DetectedSpecVersion::V1 => {
             // V1 repos: use the config.yaml result we already fetched
@@ -565,6 +582,16 @@ async fn open(
         asset_manager,
         authorize_virtual_chunk_access,
     )
+}
+
+fn raise_if_ic1_unsupported(
+    storage: &(dyn Storage + Send + Sync),
+    spec_version: SpecVersionBin,
+) -> RepositoryResult<()> {
+    if spec_version < SpecVersionBin::V2 && !storage.supports_ic1_repos() {
+        return Err(RepositoryError::capture(RepositoryErrorKind::StorageRefusesIc1));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

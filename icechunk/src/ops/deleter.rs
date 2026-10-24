@@ -701,8 +701,9 @@ pub(crate) mod testing {
     #[cfg(not(feature = "shuttle"))]
     use crate::format::format_constants::SpecVersionBin;
     use crate::storage::{
-        GetModifiedResult, RepositoryCreation, Settings, StorageErrorKind, StorageInfo,
-        StorageResult, VersionInfo, VersionedUpdateResult,
+        GcPhase, GetModifiedResult, PutCondition, RepositoryCreation, Settings,
+        StorageErrorKind, StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+        VersionedUpdateResult, WriteHint,
     };
 
     /// How `FlakyDeletes::delete_batch` misbehaves under the failing prefix.
@@ -841,6 +842,26 @@ pub(crate) mod testing {
             self.backend.can_write().await
         }
 
+        async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+            self.backend.writer_features().await
+        }
+
+        async fn gc_hook(
+            &self,
+            ctx: &StorageContext<'_>,
+            phase: GcPhase<'_>,
+        ) -> StorageResult<()> {
+            self.backend.gc_hook(ctx, phase).await
+        }
+
+        async fn create_location_if_needed(&self) -> StorageResult<()> {
+            self.backend.create_location_if_needed().await
+        }
+
+        async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+            self.backend.root_is_clean(ctx).await
+        }
+
         async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
             self.backend.can_create_repository().await
         }
@@ -852,10 +873,29 @@ pub(crate) mod testing {
             bytes: Bytes,
             content_type: Option<&str>,
             metadata: Vec<(String, String)>,
-            previous_version: Option<&VersionInfo>,
+            hint: WriteHint,
+        ) -> StorageResult<()> {
+            self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
+        }
+
+        async fn put_object_conditional(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            bytes: Bytes,
+            content_type: Option<&str>,
+            metadata: Vec<(String, String)>,
+            condition: PutCondition<'_>,
         ) -> StorageResult<VersionedUpdateResult> {
             self.backend
-                .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+                .put_object_conditional(
+                    ctx,
+                    path,
+                    bytes,
+                    content_type,
+                    metadata,
+                    condition,
+                )
                 .await
         }
 
@@ -906,6 +946,10 @@ pub(crate) mod testing {
         fn lists_id_prefixes_natively(&self) -> bool {
             self.native_id_prefixes
                 .unwrap_or_else(|| self.backend.lists_id_prefixes_natively())
+        }
+
+        fn supports_ic1_repos(&self) -> bool {
+            self.backend.supports_ic1_repos()
         }
 
         async fn delete_batch(
@@ -972,10 +1016,8 @@ pub(crate) mod testing {
             ctx: &StorageContext<'_>,
             path: &str,
             range: Option<&Range<u64>>,
-        ) -> StorageResult<(
-            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-            VersionInfo,
-        )> {
+        ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+        {
             self.backend.get_object_range(ctx, path, range).await
         }
     }
@@ -1038,6 +1080,25 @@ pub(crate) mod testing {
             100,
         ));
         (am, flaky)
+    }
+
+    #[cfg(not(feature = "shuttle"))]
+    #[tokio::test]
+    async fn flaky_deletes_forwards_to_the_backend() {
+        use crate::storage::recording::{RecordingStorage, assert_forwards};
+        let inner = Arc::new(RecordingStorage::default());
+        let storage = FlakyDeletes {
+            backend: Arc::clone(&inner) as Arc<_>,
+            calls: AtomicUsize::new(0),
+            failing_prefix: None,
+            mode: FailMode::Always,
+            list_error_prefix: None,
+            gate: closed_gate(),
+            in_flight: AtomicUsize::new(0),
+            peak_in_flight: AtomicUsize::new(0),
+            native_id_prefixes: None,
+        };
+        assert_forwards(&storage, &inner).await;
     }
 
     #[cfg(not(feature = "shuttle"))]

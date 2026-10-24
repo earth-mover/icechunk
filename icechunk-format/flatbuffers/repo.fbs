@@ -23,21 +23,27 @@ table SnapshotInfo {
     // Index of this snapshot's parent in the Repo.snapshots list
     // (offset from the start of the list, not from this entry).
     // -1 means no parent (the initial snapshot).
+    // This is the authoritative parent link. It changes when snapshots are
+    // removed: the index shifts, and expiration or GC may re-parent.
     parent_offset: int32;
 
     // Non-leap microseconds since Jan 1, 1970 UTC.
+    // MUST equal Snapshot.flushed_at in the snapshot file, except for the
+    // initial snapshot (see the specification).
     flushed_at: uint64;
 
-    // Commit message.
+    // Commit message. MUST equal Snapshot.message in the snapshot file.
     message: string (required);
 
-    // Snapshot-level metadata.
+    // Snapshot-level metadata. MUST contain the same items as
+    // Snapshot.metadata in the snapshot file.
+    // MUST be sorted in ascending UTF-8 byte order of MetadataItem.name.
     metadata: [MetadataItem];
 
-    // Tx-log ids of ancestor commits that the expiration process
-    // removed from the repo, carried here (oldest first) so this
-    // snapshot's change from its rewritten parent stays complete.
-    // Always null when never expired; an empty vector is never
+    // Tx-log ids of ancestor commits that expiration or garbage
+    // collection removed from the repo, carried here (oldest first) so
+    // this snapshot's change from its rewritten parent stays complete.
+    // Null when no ancestor was ever removed; an empty vector is never
     // written.
     pruned_ancestor_tx_logs: [ObjectId12];
 }
@@ -53,6 +59,12 @@ table RepoStatus {
     // Non-leap microseconds since Jan 1, 1970 UTC.
     set_at: uint64;
     limited_availability_reason: string;
+
+    // Spec 2.2. The repository's own status, present exactly when
+    // Repo.writer_features is non-empty, and never with an underlying
+    // of its own. The enclosing status is then the read-only gate shown
+    // to implementations that predate writer features.
+    underlying: RepoStatus;
 }
 // --8<-- [end:repo_status]
 
@@ -64,6 +76,7 @@ table RepoMigratedUpdate {
   to_version: uint8;
 }
 table RepoStatusChangedUpdate{
+  // The new status. MUST be present.
   status: RepoStatus;
 }
 table ConfigChangedUpdate {
@@ -106,8 +119,12 @@ table ExpirationRanUpdate {
 }
 
 table FeatureFlagChangedUpdate {
+    // The feature flag id.
     id: uint16;
+    // The explicit setting, meaningful only when is_set is true.
     new_value: bool;
+    // true: the flag was set to new_value.
+    // false: the flag was returned to its default.
     is_set: bool;
 }
 // --8<-- [end:update_types]
@@ -139,20 +156,24 @@ table Update {
     update_type: UpdateType (required);
 
     // Non-leap microseconds since Jan 1, 1970 UTC.
+    // MUST be strictly greater than the updated_at of every older entry.
     updated_at: uint64;
 
-    // Path to the backup copy of the repo info file before this update
-    // (stored under the overwritten/ prefix).
+    // Name, relative to the overwritten/ prefix, of the backup of the
+    // repo info this update produced. The next update writes it before
+    // replacing that repo info, so the newest entry has none. Also absent
+    // in entries that have no backup.
     backup_path: string;
   }
 // --8<-- [end:update]
 
 // --8<-- [start:repo_table]
 // The repo info file — the single entry point and only mutable object
-// in an Icechunk V2 repository. Stored at `$ROOT/repo`.
+// in an Icechunk V2 repository. Stored at `$ROOT/repo`, except in the
+// filesystem layout (see the specification).
 table Repo {
 
-  // The spec version of this repository (1 or 2).
+  // The major spec version of this repository: 2 for every spec 2.x.
   spec_version: uint8;
 
   // All tags. MUST be sorted in ascending UTF-8 byte order of Ref.name.
@@ -168,24 +189,30 @@ table Repo {
   // MUST be sorted in ascending byte order of SnapshotInfo.id.
   snapshots: [SnapshotInfo] (required);
 
-  // Current repository availability status.
+  // The repository status, or the status gate when writer_features is
+  // non-empty.
   status: RepoStatus (required);
 
   // Repository-level metadata (user attributes).
+  // MUST be sorted in ascending UTF-8 byte order of MetadataItem.name.
   metadata: [MetadataItem];
 
-  // The ops log — a list of recent operations performed on this repository.
+  // The ops log: the most recent entries, newest first.
   latest_updates: [Update] (required);
 
-  // Path to the previous repo info file (in the overwritten/ prefix),
-  // forming a linked list for ops log entries beyond this file.
+  // Name, relative to the overwritten/ prefix, of the backup whose
+  // latest_updates continues the ops log: its newest entry is the entry
+  // immediately older than the oldest entry in this file.
+  // Absent when this file holds the oldest entry.
   repo_before_updates: string;
 
   // Repository configuration, serialized as FlexBuffers.
+  // Absent means the default configuration.
   config: [uint8] (flexbuffer);
 
   // Feature flag ids explicitly enabled by the user.
   // MUST be sorted in ascending numeric order.
+  // An id in both this list and disabled_feature_flags is enabled.
   enabled_feature_flags: [uint16];
 
   // Feature flag ids explicitly disabled by the user.
@@ -196,6 +223,12 @@ table Repo {
   // Reserved for future use. Opaque bytes for future extensions.
   // Introduced in spec version 2.
   extra: [uint8];
+
+  // Spec 2.2. Names of the writer features this repository uses.
+  // MUST be sorted in ascending UTF-8 byte order, without duplicates.
+  // Null when the repository uses none; an empty vector is never
+  // written, and is read as null.
+  writer_features: [string];
 }
 // --8<-- [end:repo_table]
 

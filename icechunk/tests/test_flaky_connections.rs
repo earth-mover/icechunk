@@ -566,13 +566,13 @@ async fn zero_byte_conditional_put_lost_response()
         |storage, settings, toxic_remover| async move {
             let ctx = StorageContext::unattributed(&settings);
             let result = storage
-                .put_object(
+                .put_object_conditional(
                     &ctx,
                     "zero-byte-test",
                     Bytes::new(),
                     None,
                     Default::default(),
-                    Some(&icechunk::storage::VersionInfo::for_creation()),
+                    icechunk::storage::PutCondition::Create,
                 )
                 .await;
             toxic_remover.await??;

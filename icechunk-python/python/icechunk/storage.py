@@ -4,8 +4,10 @@ from datetime import datetime
 from icechunk._icechunk_python import (
     ChecksumAlgorithm,
     ChunkType,
+    FilesystemStorage,
     GcsBearerCredential,
     ObjectStoreConfig,
+    PublishOutcome,
     S3Options,
     S3StaticCredentials,
     Storage,
@@ -24,7 +26,9 @@ __all__ = [
     "AnyObjectStoreConfig",
     "ChecksumAlgorithm",
     "ChunkType",
+    "FilesystemStorage",
     "ObjectStoreConfig",
+    "PublishOutcome",
     "S3Options",
     "Storage",
     "StorageConcurrencySettings",
@@ -33,6 +37,7 @@ __all__ = [
     "StorageTimeoutSettings",
     "azure_storage",
     "azure_store",
+    "filesystem_storage",
     "gcs_storage",
     "gcs_store",
     "hf_storage",
@@ -70,9 +75,59 @@ def in_memory_storage() -> Storage:
 def local_filesystem_storage(path: str) -> Storage:
     """Create a Storage instance that saves data in the local file system.
 
-    This Storage instance is not recommended for production data
+    This Storage instance is not recommended for production data.
+
+    It is not safe for concurrent commits: two sessions committing at once can
+    both succeed, losing one of the commits. Use `filesystem_storage` when
+    several writers may commit to the repository.
     """
     return Storage.new_local_filesystem(path)
+
+
+def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
+    """Create a Storage instance that saves data in a filesystem, safe for concurrent writers.
+
+    This storage is experimental. Unlike `local_filesystem_storage`, it is safe
+    for concurrent writers on filesystems that meet the requirements in the
+    storage guide: hard links, atomic rename by name and exclusive directory
+    rename.
+
+    It stores the repository info in the filesystem layout: `repo.d/` holds
+    its versions, and `repo` is the mirror, a copy of a version that was
+    current, published by every change. The repository lists the writer
+    feature `filesystem-layout-v1`, so other storage backends and Icechunk
+    before 2.4.0 read it through the mirror and can't modify it. The mirror
+    can lag after crashes or under contention: setting the status to
+    `RepoAvailability.read_only` makes it current once every process that
+    changed the repository earlier has finished, and
+    `FilesystemStorage.publish_mirror` repairs it on a best-effort basis.
+    Everything else is the same as in `local_filesystem_storage`.
+
+    Never let anything else write `repo`: Icechunk before 2.4.0 changing the
+    status, or other tools, fork the repository.
+
+    Repositories in the standard layout, as `local_filesystem_storage` and
+    Icechunk before 2.4.0 write them, are refused until converted, once, with
+    nothing else using the repository, with
+    `FilesystemStorage.convert_to_filesystem_layout`.
+    `FilesystemStorage.convert_to_standard_layout` converts back.
+
+    It is only available on Unix platforms; elsewhere it raises an error.
+    Icechunk 1 repositories are refused: migrate them to Icechunk 2 with
+    `local_filesystem_storage` first.
+
+    Parameters
+    ----------
+    path: str
+        The path to the root of the repository.
+    fsync: bool
+        Whether to fsync data files after writes, and their directories before
+        each change. Turning it off risks losing writes after an OS crash or
+        power loss; it never affects safety between concurrent writers. The
+        fsyncs of the change itself always run: those of the repository info,
+        its mirror and a conversion's backup.
+    """
+    return Storage.new_filesystem(path, fsync=fsync)
 
 
 def http_storage(

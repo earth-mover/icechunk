@@ -2,9 +2,16 @@
 
 ## Python Icechunk Library [unreleased]
 
+### Features
+
+- New experimental `icechunk.filesystem_storage`: filesystem storage that is safe for concurrent writers on filesystems that meet the requirements (hard links, atomic rename and exclusive directory rename). It is opt-in; `local_filesystem_storage` is unchanged and still not safe for concurrent commits. `FilesystemStorage.convert_to_filesystem_layout()` converts a repository created with `local_filesystem_storage` or another backend, which `filesystem_storage` requires before opening it, and `FilesystemStorage.convert_to_standard_layout()` converts back. See [Filesystem Storage](https://icechunk.io/en/stable/guides/storage/#filesystem-storage) in the storage guide.
+- Spec 2.2: repositories can list *writer features*, format features that a library must implement to modify them. A library refuses to modify a repository that lists a writer feature it doesn't implement. See the [version policy](https://icechunk.io/en/stable/reference/version-policy/).
+
 ### Fixes
 
 - `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
+- Icechunk opens repositories whose configuration holds settings it doesn't know or can't decode, such as keys added by later versions or virtual chunk containers for storage it doesn't support, ignores them, and keeps them unchanged when it changes the configuration.
+- Garbage collection deletes only files whose names are exactly the encoding of an object id of the right size; other files in `snapshots/`, `manifests/`, `transactions/` and `chunks/` are kept.
 
 ## Python Icechunk Library 2.3.0
 
