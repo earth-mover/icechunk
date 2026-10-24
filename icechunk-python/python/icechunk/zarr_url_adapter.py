@@ -353,14 +353,14 @@ def _validate_preceding(
     root, *rest = context.preceding
     if not root.scheme:
         raise URLPipelineError(
-            f"icechunk: the root {_redact_query(root.raw)!r} has no URL scheme; spell "
+            f"icechunk: the root {_redact_query(root.url)!r} has no URL scheme; spell "
             "local paths as 'file:///absolute/path'"
         )
     # zarr consumes `zarr:`/`zarr2:`/`zarr3:` format segments itself and only
     # accepts them last, so anything here is a container or another adapter.
     if rest:
         raise URLPipelineError(
-            f"icechunk: unsupported segment {_redact_query(rest[0].raw)!r} before "
+            f"icechunk: unsupported segment {_redact_query(rest[0].url)!r} before "
             "'icechunk:'; the icechunk: adapter only supports a root URL that locates "
             "the repository directly (repositories inside other containers, such as "
             "'repo.zip|zip:|icechunk:', are not supported)"
@@ -417,7 +417,7 @@ class IcechunkURLAdapter(URLPipelineAdapter):
         if segment.query is not None:
             raise URLPipelineError(
                 "icechunk: segments do not accept a query string: "
-                f"{_redact_query(segment.raw)!r}"
+                f"{_redact_query(segment.url)!r}"
             )
         root = _validate_preceding(segment, context)
         if context.mode in _WRITE_MODES:
@@ -439,9 +439,9 @@ class IcechunkURLAdapter(URLPipelineAdapter):
                 )
             try:
                 # Rust would echo the whole root, query included, in its error
-                _check_root_query(root.raw)
+                _check_root_query(root.url)
                 pending = _open_session_from_url_async(
-                    root.raw,
+                    root.url,
                     segment.body,
                     credentials=opts.credentials,
                     anonymous=opts.anonymous,
@@ -473,7 +473,7 @@ class IcechunkURLAdapter(URLPipelineAdapter):
         if opener is None:
             raise URLPipelineError(
                 f"icechunk: unsupported root scheme {root.scheme!r} in "
-                f"{_redact_query(root.raw)!r}; "
+                f"{_redact_query(root.url)!r}; "
                 f"supported schemes are {sorted(BUILTIN_ROOT_SCHEMES)}, plus any "
                 f"registered through the {OPENER_ENTRY_POINT_GROUP!r} entry-point group"
             )
