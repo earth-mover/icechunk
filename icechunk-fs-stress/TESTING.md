@@ -48,8 +48,8 @@ chmod +x fs-stress
 ```
 
 `sha256sum` must print `fs-stress: OK`. With the
-[GitHub CLI](https://cli.github.com) you can also check that our release
-workflow built it:
+[GitHub CLI](https://cli.github.com) you can also check that our [release
+workflow](https://github.com/earth-mover/icechunk/blob/main/.github/workflows/fs-stress-release.yaml) is what built it:
 
 ```sh
 gh attestation verify fs-stress --repo earth-mover/icechunk
