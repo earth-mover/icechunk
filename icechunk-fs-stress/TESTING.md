@@ -107,7 +107,8 @@ fs-stress bundle --root /path/on/your/fs/fs-stress-1
 ```
 
 and send the file it writes as described in
-[Send us the results](#send-us-the-results).
+[Send us the results](#send-us-the-results). The file includes your host
+names and mount lines; see [What the file contains](#what-the-file-contains).
 
 ## Run it on several hosts
 
@@ -130,49 +131,53 @@ examples use 5. You need:
    ```
 
 2. **On every host**, start the workers. Each waits until every host has
-   started, so you can start them one by one:
+   started, so you can start them one by one. Use whichever of these suits
+   your cluster:
 
-   ```sh
-   fs-stress qualify workers --root /path/on/your/fs/fs-stress-1
-   ```
+   - **By hand**, on each host:
 
-   With ssh, from one machine:
+     ```sh
+     fs-stress qualify workers --root /path/on/your/fs/fs-stress-1
+     ```
 
-   ```sh
-   for h in host1 host2 host3 host4 host5; do
-     {
-       ssh -n $h /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1 ||
-         echo "[$h] failed with exit code $?"
-     } &
-   done
-   wait
-   ```
+   - **With ssh**, from one machine:
 
-   Every line starts with the name of the host that printed it. `wait`
-   returns once every host has stopped. Each host that ran prints `This host
-   is done` at the end, and a host that failed prints `[host] failed with
-   exit code N`. 255 means ssh itself failed; the other codes are below.
+     ```sh
+     for h in host1 host2 host3 host4 host5; do
+       {
+         ssh -n $h /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1 ||
+           echo "[$h] failed with exit code $?"
+       } &
+     done
+     wait
+     ```
 
-   With Slurm, one task per node:
+     Every line starts with the name of the host that printed it. `wait`
+     returns once every host has stopped. Each host that ran prints `This
+     host is done` at the end, and a host that failed prints `[host] failed
+     with exit code N`. 255 means ssh itself failed; the other codes are
+     below.
 
-   ```sh
-   srun -N 5 --ntasks-per-node=1 --time=1:00:00 /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1
-   ```
+   - **With Slurm**, one task per node:
 
-   Add your cluster's partition and account options if it needs them, and a
-   time limit of at least an hour.
+     ```sh
+     srun -N 5 --ntasks-per-node=1 --time=1:00:00 /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1
+     ```
 
-   srun stops if you log out. To let the test run without you, submit it
-   with sbatch, which writes the output to a file in the directory you
-   submit from:
+     Add your cluster's partition and account options if it needs them, and
+     a time limit of at least an hour.
 
-   ```sh
-   sbatch -N 5 --ntasks-per-node=1 --time=1:00:00 --output=fs-stress-%j.out \
-     --wrap "srun /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1"
-   ```
+     srun stops if you log out. To let the test run without you, submit it
+     with sbatch instead, which writes the output to a file in the directory
+     you submit from:
 
-   The file fills as the test runs, and `squeue --me` lists the job until
-   it has finished.
+     ```sh
+     sbatch -N 5 --ntasks-per-node=1 --time=1:00:00 --output=fs-stress-%j.out \
+       --wrap "srun /path/to/fs-stress qualify workers --root /path/on/your/fs/fs-stress-1"
+     ```
+
+     The file fills as the test runs, and `squeue --me` lists the job until
+     it has finished.
 
 3. **On one host**, once every host's `qualify workers` has exited, check the
    result:
@@ -189,7 +194,9 @@ examples use 5. You need:
    ```
 
    and send the file it writes as described in
-   [Send us the results](#send-us-the-results).
+   [Send us the results](#send-us-the-results). The file includes your host
+   names and mount lines; see
+   [What the file contains](#what-the-file-contains).
 
 The test has two runs, one after the other, and the hosts wait for each other
 before each. The first run starts once every host has registered. The second
@@ -241,11 +248,22 @@ It writes one file in the current directory, named
 `fs-stress-pass-<time>.tar.gz` or `fs-stress-fail-<time>.tar.gz`, and prints
 its name and size.
 
+### What the file contains
+
+The test's own files: its settings, logs and reports. It also contains your
+host names, kernel versions, the filesystem type, the path of `R`, and each
+host's mount line, which includes the file server's name and the export path.
+If the test didn't pass, it also has the test repository's small metadata
+files and a list of its files. It contains no other data of yours.
+
+### Sending it
+
 Send the file in the #icechunk channel of the
-[Earthmover community Slack](https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ),
-or in a direct message to an Icechunk developer there.
-Or open an [issue](https://github.com/earth-mover/icechunk/issues) **without
-attaching the file**, and we'll contact you with a private way to send it.
+[Earthmover community Slack](https://join.slack.com/t/earthmover-community/shared_invite/zt-2cwje92ir-xU3CfdG8BI~4CJOJy~sceQ).
+If you'd rather not share these details publicly, send it in a direct message
+to an Icechunk developer there, or open an
+[issue](https://github.com/earth-mover/icechunk/issues) **without attaching
+the file** and we'll contact you with a private way to send it.
 
 Please also tell us:
 
@@ -257,16 +275,6 @@ Please also tell us:
 
 Don't worry if you don't know some of this: tell us what you can. Any
 information helps more than none.
-
-**What the file contains.** The test's own files: its settings, logs and
-reports. It also contains your host names, kernel versions, the filesystem
-type, the path of `R`, and each host's mount line, which includes the file
-server's name and the export path. If the test didn't pass, it also has the
-test repository's small metadata files and a list of its files. It contains
-no other data of yours. `bundle` removes nothing. If you'd rather not share
-these details publicly, send the file in a direct message to an Icechunk
-developer on Slack, or open an issue without it and we'll contact you with a
-private way to send it.
 
 ## Clean up
 
