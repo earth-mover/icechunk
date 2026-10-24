@@ -31,7 +31,6 @@ icechunk-types = { path = "icechunk-types", version = "2.3.0" }
 # External dependencies
 anyhow = "1.0.102"
 assert_fs = "1.1.4"
-async-recursion = "1.1.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 aws-config = "1.8.15"
