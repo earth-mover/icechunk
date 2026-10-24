@@ -8,7 +8,7 @@ you from downloading the test to sending us the results. The
 
 `fs-stress` is the test we use to decide which filesystems
 [`filesystem_storage`](https://icechunk.io/en/latest/guides/storage/#filesystem-storage)
-is safe on. It starts many processes, on one or more hosts, that all update
+can prevent race conditions from multiple writers on. It starts many processes, on one or more hosts, that all update
 one Icechunk repository on your filesystem at the same time. While they work,
 it kills and pauses them at the worst moments. At the end it checks that no
 update was lost and that the repository recovers and cleans up.
