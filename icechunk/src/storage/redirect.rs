@@ -58,11 +58,6 @@ impl RedirectStorage {
         Self { url, backend: OnceCell::new() }
     }
 
-    #[cfg(test)]
-    fn with_backend(url: Url, backend: Arc<dyn Storage + Send + Sync>) -> Self {
-        Self { url, backend: OnceCell::new_with(Some(backend)) }
-    }
-
     async fn backend(&self) -> StorageResult<&(dyn Storage + Send + Sync)> {
         self.backend.get_or_try_init(|| self.mk_backend()).await.map(|arc| arc.as_ref())
     }
@@ -435,11 +430,6 @@ impl Storage for RedirectStorage {
         self.backend.get().is_some_and(|b| b.lists_id_prefixes_natively())
     }
 
-    fn supports_ic1_repos(&self) -> bool {
-        // the trait's default until the backend is resolved, as above
-        self.backend.get().is_none_or(|b| b.supports_ic1_repos())
-    }
-
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -479,24 +469,15 @@ impl Storage for RedirectStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::recording::{RecordingStorage, assert_forwards};
 
     fn url() -> Url {
         Url::parse("http://redirect.example.com/").unwrap()
     }
 
-    #[tokio::test]
-    async fn forwards_to_the_resolved_backend() {
-        let inner = Arc::new(RecordingStorage::default());
-        let storage = RedirectStorage::with_backend(url(), Arc::clone(&inner) as Arc<_>);
-        assert_forwards(&storage, &inner).await;
-    }
-
     #[test]
-    fn sync_methods_answer_the_defaults_before_resolving() {
+    fn lists_id_prefixes_by_filtering_before_resolving() {
         let storage = RedirectStorage::new(url());
         assert!(!storage.lists_id_prefixes_natively());
-        assert!(storage.supports_ic1_repos());
     }
 
     #[cfg(feature = "object-store-http")]

@@ -207,10 +207,6 @@ impl Storage for CreatorStorage {
         self.backend.lists_id_prefixes_natively()
     }
 
-    fn supports_ic1_repos(&self) -> bool {
-        self.backend.supports_ic1_repos()
-    }
-
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,

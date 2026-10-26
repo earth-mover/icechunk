@@ -1914,8 +1914,7 @@ pub fn check_modifiable(
     op: Option<&str>,
 ) -> RepositoryResult<()> {
     let listed = repo_info.writer_features().inject()?;
-    let missing =
-        missing_features(&listed, storage_features.implemented().iter().copied());
+    let missing = missing_features(&listed, storage_features.iter().copied());
     if let Some(min_version) = min_version(&missing) {
         return Err(RepositoryError::capture(
             RepositoryErrorKind::MissingWriterFeatures { missing, min_version },
@@ -1923,7 +1922,6 @@ pub fn check_modifiable(
     }
 
     let unlisted: Vec<_> = storage_features
-        .required()
         .iter()
         .filter(|feature| !listed.contains(&FeatureName::from(**feature)))
         .collect();
@@ -2164,7 +2162,12 @@ mod test {
             manifest::{ChunkInfo, ChunkPayload, LocationCompressionConfig},
             snapshot::ArrayShape,
         },
-        storage::{Storage, logging::LoggingStorage, new_in_memory_storage},
+        storage::{
+            Storage,
+            intercepting::{Intercept, InterceptingStorage},
+            logging::LoggingStorage,
+            new_in_memory_storage,
+        },
     };
 
     /// A repo info file header with its file type and compression bytes replaced.
@@ -2951,165 +2954,23 @@ mod test {
 
     /// Claims every conditional read is on the latest version, like a
     /// backend whose listing lags behind the caller's version.
-    #[derive(Debug, Serialize, Deserialize)]
-    struct FalseHitStorage {
-        backend: Arc<dyn Storage + Send + Sync>,
-    }
-
-    impl std::fmt::Display for FalseHitStorage {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "FalseHitStorage({})", self.backend)
-        }
-    }
-
-    impl icechunk_storage::sealed::Sealed for FalseHitStorage {}
+    #[derive(Debug)]
+    struct FalseHits;
 
     #[async_trait::async_trait]
-    #[typetag::serde]
-    impl Storage for FalseHitStorage {
-        fn storage_info(&self) -> storage::StorageInfo {
-            self.backend.storage_info()
-        }
-
-        async fn default_settings(&self) -> storage::StorageResult<storage::Settings> {
-            self.backend.default_settings().await
-        }
-
-        async fn can_write(&self) -> storage::StorageResult<bool> {
-            self.backend.can_write().await
-        }
-
-        async fn writer_features(&self) -> storage::StorageResult<StorageWriterFeatures> {
-            self.backend.writer_features().await
-        }
-
-        async fn gc_hook(
-            &self,
-            ctx: &StorageContext<'_>,
-            phase: storage::GcPhase<'_>,
-        ) -> storage::StorageResult<()> {
-            self.backend.gc_hook(ctx, phase).await
-        }
-
-        async fn create_location_if_needed(&self) -> storage::StorageResult<()> {
-            self.backend.create_location_if_needed().await
-        }
-
-        async fn root_is_clean(
-            &self,
-            ctx: &StorageContext<'_>,
-        ) -> storage::StorageResult<bool> {
-            self.backend.root_is_clean(ctx).await
-        }
-
-        fn supports_ic1_repos(&self) -> bool {
-            self.backend.supports_ic1_repos()
-        }
-
-        fn lists_id_prefixes_natively(&self) -> bool {
-            self.backend.lists_id_prefixes_natively()
-        }
-
-        async fn get_object_range(
-            &self,
-            ctx: &StorageContext<'_>,
-            path: &str,
-            range: Option<&Range<u64>>,
-        ) -> storage::StorageResult<
-            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        > {
-            self.backend.get_object_range(ctx, path, range).await
-        }
-
-        async fn put_object(
-            &self,
-            ctx: &StorageContext<'_>,
-            path: &str,
-            bytes: Bytes,
-            content_type: Option<&str>,
-            metadata: Vec<(String, String)>,
-            hint: WriteHint,
-        ) -> storage::StorageResult<()> {
-            self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
-        }
-
-        async fn put_object_conditional(
-            &self,
-            ctx: &StorageContext<'_>,
-            path: &str,
-            bytes: Bytes,
-            content_type: Option<&str>,
-            metadata: Vec<(String, String)>,
-            condition: PutCondition<'_>,
-        ) -> storage::StorageResult<VersionedUpdateResult> {
-            self.backend
-                .put_object_conditional(
-                    ctx,
-                    path,
-                    bytes,
-                    content_type,
-                    metadata,
-                    condition,
-                )
-                .await
-        }
-
-        async fn copy_object(
-            &self,
-            ctx: &StorageContext<'_>,
-            from: &str,
-            to: &str,
-            content_type: Option<&str>,
-            version: &VersionInfo,
-        ) -> storage::StorageResult<VersionedUpdateResult> {
-            self.backend.copy_object(ctx, from, to, content_type, version).await
-        }
-
-        async fn list_objects<'a>(
-            &'a self,
-            ctx: &StorageContext<'_>,
-            prefix: &str,
-        ) -> storage::StorageResult<BoxStream<'a, storage::StorageResult<ListInfo<String>>>>
-        {
-            self.backend.list_objects(ctx, prefix).await
-        }
-
-        async fn delete_batch(
-            &self,
-            ctx: &StorageContext<'_>,
-            prefix: &str,
-            batch: Vec<(String, u64)>,
-        ) -> storage::StorageResult<storage::DeleteObjectsResult> {
-            self.backend.delete_batch(ctx, prefix, batch).await
-        }
-
-        async fn get_object_last_modified(
-            &self,
-            ctx: &StorageContext<'_>,
-            path: &str,
-        ) -> storage::StorageResult<DateTime<Utc>> {
-            self.backend.get_object_last_modified(ctx, path).await
-        }
-
+    impl Intercept for FalseHits {
         async fn get_object_conditional(
             &self,
+            backend: &(dyn Storage + Send + Sync),
             ctx: &StorageContext<'_>,
             path: &str,
             previous_version: Option<&VersionInfo>,
         ) -> storage::StorageResult<GetModifiedResult> {
             match previous_version {
                 Some(_) => Ok(GetModifiedResult::OnLatestVersion),
-                None => self.backend.get_object_conditional(ctx, path, None).await,
+                None => backend.get_object_conditional(ctx, path, None).await,
             }
         }
-    }
-
-    #[tokio_test]
-    async fn false_hit_storage_forwards_to_the_backend() {
-        use crate::storage::recording::{RecordingStorage, assert_forwards};
-        let inner = Arc::new(RecordingStorage::default());
-        let storage = FalseHitStorage { backend: Arc::clone(&inner) as Arc<_> };
-        assert_forwards(&storage, &inner).await;
     }
 
     #[tokio_test]
@@ -3117,7 +2978,7 @@ mod test {
     -> Result<(), Box<dyn std::error::Error>> {
         let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
         let false_hits: Arc<dyn Storage + Send + Sync> =
-            Arc::new(FalseHitStorage { backend: Arc::clone(&backend) });
+            InterceptingStorage::new(Arc::clone(&backend), Arc::new(FalseHits));
         let settings = storage::Settings::default();
         let cached = AssetManager::new_with_config(
             false_hits,

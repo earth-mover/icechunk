@@ -533,9 +533,7 @@ async fn list_missing_root_is_empty() {
 async fn implements_and_requires_the_filesystem_layout() {
     let dir = tempfile::tempdir().unwrap();
     let features = storage(dir.path()).writer_features().await.unwrap();
-    let layout = BTreeSet::from([WriterFeature::FilesystemLayoutV1]);
-    assert_eq!(features.implemented(), &layout);
-    assert_eq!(features.required(), &layout);
+    assert_eq!(features, BTreeSet::from([WriterFeature::FilesystemLayoutV1]));
 }
 
 #[tokio_test]

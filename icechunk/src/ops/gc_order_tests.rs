@@ -4,8 +4,6 @@
 
 use std::{
     num::{NonZeroU16, NonZeroUsize},
-    ops::Range,
-    pin::Pin,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -14,9 +12,8 @@ use std::{
 
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
-use futures::{Stream, StreamExt as _, future::BoxFuture, stream::BoxStream};
+use futures::{StreamExt as _, future::BoxFuture, stream::BoxStream};
 use icechunk_macros::tokio_test;
-use serde::{Deserialize, Serialize};
 
 use crate::{
     Repository, Storage,
@@ -32,9 +29,10 @@ use crate::{
     },
     repository::RepositoryErrorKind,
     storage::{
-        self, DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
-        StorageContext, StorageError, StorageErrorKind, StorageResult,
-        StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
+        DeleteObjectsResult, GcPhase, ListInfo, PutCondition, StorageContext,
+        StorageError, StorageErrorKind, StorageResult, StorageWriterFeatures,
+        VersionInfo, VersionedUpdateResult, WriteHint,
+        intercepting::{Intercept, InterceptingStorage},
         new_in_memory_storage,
     },
 };
@@ -62,20 +60,17 @@ impl std::fmt::Debug for OnFirstListing {
     }
 }
 
-/// Forwards to `backend` and records [`Event`]s. Implements and requires
-/// `filesystem-layout-v1` when `layout`. Its before-deletes hook can fail, and
-/// its repo-info writes can land and then report a fork.
-#[derive(Debug, Serialize, Deserialize)]
+/// Records [`Event`]s of the storage [`GcTestStorage::wrapped`] makes.
+/// Implements and requires `filesystem-layout-v1` when `layout`. Its
+/// before-deletes hook can fail, and its repo-info writes can land and then
+/// report a fork.
+#[derive(Debug)]
 struct GcTestStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     layout: bool,
-    #[serde(skip)]
     events: Mutex<Vec<Event>>,
-    #[serde(skip)]
     fail_before_deletes: AtomicBool,
-    #[serde(skip)]
     fork_after_update: AtomicBool,
-    #[serde(skip)]
     on_first_listing: OnFirstListing,
 }
 
@@ -89,6 +84,11 @@ impl GcTestStorage {
             fork_after_update: AtomicBool::new(false),
             on_first_listing: OnFirstListing::default(),
         })
+    }
+
+    /// A storage over `backend` intercepted by `self`.
+    fn wrapped(self: &Arc<Self>) -> Arc<dyn Storage + Send + Sync> {
+        InterceptingStorage::new(Arc::clone(&self.backend), Arc::clone(self) as _)
     }
 
     fn record(&self, event: Event) {
@@ -112,39 +112,22 @@ impl GcTestStorage {
     }
 }
 
-impl std::fmt::Display for GcTestStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "GcTestStorage({})", self.backend)
-    }
-}
-
-impl icechunk_storage::sealed::Sealed for GcTestStorage {}
-
 #[async_trait::async_trait]
-#[typetag::serde]
-impl Storage for GcTestStorage {
-    fn storage_info(&self) -> storage::StorageInfo {
-        self.backend.storage_info()
-    }
-
-    async fn default_settings(&self) -> StorageResult<storage::Settings> {
-        self.backend.default_settings().await
-    }
-
-    async fn can_write(&self) -> StorageResult<bool> {
-        self.backend.can_write().await
-    }
-
-    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+impl Intercept for GcTestStorage {
+    async fn writer_features(
+        &self,
+        _backend: &(dyn Storage + Send + Sync),
+    ) -> StorageResult<StorageWriterFeatures> {
         Ok(if self.layout {
-            StorageWriterFeatures::new([WriterFeature::FilesystemLayoutV1], [])
+            StorageWriterFeatures::from([WriterFeature::FilesystemLayoutV1])
         } else {
-            StorageWriterFeatures::default()
+            StorageWriterFeatures::new()
         })
     }
 
     async fn gc_hook(
         &self,
+        backend: &(dyn Storage + Send + Sync),
         ctx: &StorageContext<'_>,
         phase: GcPhase<'_>,
     ) -> StorageResult<()> {
@@ -161,49 +144,12 @@ impl Storage for GcTestStorage {
                 self.record(Event::AfterDeletes(changed.cloned()));
             }
         }
-        self.backend.gc_hook(ctx, phase).await
-    }
-
-    async fn create_location_if_needed(&self) -> StorageResult<()> {
-        self.backend.create_location_if_needed().await
-    }
-
-    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
-        self.backend.root_is_clean(ctx).await
-    }
-
-    fn supports_ic1_repos(&self) -> bool {
-        self.backend.supports_ic1_repos()
-    }
-
-    fn lists_id_prefixes_natively(&self) -> bool {
-        self.backend.lists_id_prefixes_natively()
-    }
-
-    async fn get_object_range(
-        &self,
-        ctx: &StorageContext<'_>,
-        path: &str,
-        range: Option<&Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
-    {
-        self.backend.get_object_range(ctx, path, range).await
-    }
-
-    async fn put_object(
-        &self,
-        ctx: &StorageContext<'_>,
-        path: &str,
-        bytes: Bytes,
-        content_type: Option<&str>,
-        metadata: Vec<(String, String)>,
-        hint: WriteHint,
-    ) -> StorageResult<()> {
-        self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
+        backend.gc_hook(ctx, phase).await
     }
 
     async fn put_object_conditional(
         &self,
+        backend: &(dyn Storage + Send + Sync),
         ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
@@ -211,8 +157,7 @@ impl Storage for GcTestStorage {
         metadata: Vec<(String, String)>,
         condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let res = self
-            .backend
+        let res = backend
             .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await?;
         match res {
@@ -235,71 +180,47 @@ impl Storage for GcTestStorage {
         }
     }
 
-    async fn copy_object(
-        &self,
-        ctx: &StorageContext<'_>,
-        from: &str,
-        to: &str,
-        content_type: Option<&str>,
-        version: &VersionInfo,
-    ) -> StorageResult<VersionedUpdateResult> {
-        self.backend.copy_object(ctx, from, to, content_type, version).await
-    }
-
     async fn list_objects<'a>(
-        &'a self,
+        &self,
+        backend: &'a (dyn Storage + Send + Sync),
         ctx: &StorageContext<'_>,
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.listing().await;
-        self.backend.list_objects(ctx, prefix).await
+        backend.list_objects(ctx, prefix).await
     }
 
     async fn list_objects_with_id_prefixes<'a>(
-        &'a self,
+        &self,
+        backend: &'a (dyn Storage + Send + Sync),
         ctx: &StorageContext<'_>,
         prefix: &str,
         id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         self.listing().await;
-        self.backend.list_objects_with_id_prefixes(ctx, prefix, id_prefixes).await
+        backend.list_objects_with_id_prefixes(ctx, prefix, id_prefixes).await
     }
 
     async fn delete_batch(
         &self,
+        backend: &(dyn Storage + Send + Sync),
         ctx: &StorageContext<'_>,
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
         self.record(Event::Delete(prefix.to_string()));
-        self.backend.delete_batch(ctx, prefix, batch).await
+        backend.delete_batch(ctx, prefix, batch).await
     }
 
     async fn sweep_leftovers(
         &self,
+        backend: &(dyn Storage + Send + Sync),
         ctx: &StorageContext<'_>,
         older_than: DateTime<Utc>,
         dry_run: bool,
     ) -> StorageResult<DeleteObjectsResult> {
         self.record(Event::Sweep);
-        self.backend.sweep_leftovers(ctx, older_than, dry_run).await
-    }
-
-    async fn get_object_last_modified(
-        &self,
-        ctx: &StorageContext<'_>,
-        path: &str,
-    ) -> StorageResult<DateTime<Utc>> {
-        self.backend.get_object_last_modified(ctx, path).await
-    }
-
-    async fn get_object_conditional(
-        &self,
-        ctx: &StorageContext<'_>,
-        path: &str,
-        previous_version: Option<&VersionInfo>,
-    ) -> StorageResult<GetModifiedResult> {
-        self.backend.get_object_conditional(ctx, path, previous_version).await
+        backend.sweep_leftovers(ctx, older_than, dry_run).await
     }
 }
 
@@ -307,7 +228,7 @@ impl Storage for GcTestStorage {
 /// after a reset that left a second commit, its manifest and four chunks
 /// unreachable.
 async fn repo_with_garbage(storage: Arc<GcTestStorage>) -> TestResult<Repository> {
-    let repo = Repository::create(storage).execute().await?;
+    let repo = Repository::create(storage.wrapped()).execute().await?;
     let array: Path = "/arr".try_into()?;
     let mut keep = None;
     for commit in 0..2u8 {
@@ -440,7 +361,7 @@ async fn layout_gc_changes_then_hooks_then_sweeps_then_deletes() -> TestResult {
 async fn layout_gc_changes_even_when_it_drops_nothing() -> TestResult {
     for (chunks, metadata) in [(true, false), (false, false), (true, true)] {
         let storage = GcTestStorage::new(new_in_memory_storage().await?, true);
-        let repo = Repository::create(Arc::clone(&storage) as Arc<_>).execute().await?;
+        let repo = Repository::create(storage.wrapped()).execute().await?;
         let mut session = repo.writable_session("main").await?;
         session.add_group(Path::root(), Bytes::new()).await?;
         session.commit("first").execute().await?;
@@ -546,10 +467,11 @@ async fn read_only_status_refuses_gc() -> TestResult {
         let storage = GcTestStorage::new(new_in_memory_storage().await?, layout);
         let repo = repo_with_garbage(Arc::clone(&storage)).await?;
         let before = object_count(&repo).await?;
-        let other =
-            Repository::open(GcTestStorage::new(Arc::clone(&storage.backend), layout))
-                .execute()
-                .await?;
+        let other = Repository::open(
+            GcTestStorage::new(Arc::clone(&storage.backend), layout).wrapped(),
+        )
+        .execute()
+        .await?;
         *storage.on_first_listing.0.lock().await = Some(Box::pin(async move {
             other.set_status(&read_only()).await.expect("set_status failed");
         }));
@@ -586,6 +508,7 @@ async fn standard_gc_calls_the_hooks_without_a_version() -> TestResult {
     // the kept snapshots keep their chunks: give GC one to delete
     let path = format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random());
     storage
+        .backend
         .put_object(
             &repo.storage_context(),
             &path,

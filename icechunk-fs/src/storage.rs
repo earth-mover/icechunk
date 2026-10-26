@@ -22,9 +22,10 @@ use futures::{
 use icechunk_format::layout_v1;
 use icechunk_storage::{
     DeleteObjectsResult, ETag, GcPhase, GetModifiedResult, ListInfo, PutCondition,
-    Settings, Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo,
-    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
-    other_error, sealed, split_in_multiple_requests,
+    RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageErrorKind, StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+    VersionedUpdateResult, WriteHint, list_objects_filtered_by_id_prefix, other_error,
+    root_is_clean_by_listing, sealed, split_in_multiple_requests,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -446,8 +447,16 @@ impl Storage for FilesystemStorage {
         }
     }
 
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        Ok(Settings::default())
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(true)
+    }
+
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+        Ok(RepositoryCreation::Allowed)
     }
 
     /// Before the deletes, publishes the version GC's change made, and
@@ -494,7 +503,7 @@ impl Storage for FilesystemStorage {
     }
 
     async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
-        Ok(StorageWriterFeatures::new(FEATURES, []))
+        Ok(StorageWriterFeatures::from(FEATURES))
     }
 
     async fn create_location_if_needed(&self) -> StorageResult<()> {
@@ -756,14 +765,23 @@ impl Storage for FilesystemStorage {
         Ok(list_recursive(dir, is_root).map(|info| info.map_err(io_error)).boxed())
     }
 
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        ctx: &StorageContext<'_>,
+        prefix: &str,
+        id_prefixes: &[String],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        list_objects_filtered_by_id_prefix(self, ctx, prefix, id_prefixes).await
+    }
+
     /// Ids live in flat directories and `readdir` has no prefix filter, so each
     /// id-prefix listing would re-read the whole directory.
     fn lists_id_prefixes_natively(&self) -> bool {
         false
     }
 
-    fn supports_ic1_repos(&self) -> bool {
-        false
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        root_is_clean_by_listing(self, ctx).await
     }
 
     /// A missing object counts as deleted. `repo` is never deleted: like

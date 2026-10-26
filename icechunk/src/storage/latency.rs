@@ -182,10 +182,6 @@ impl Storage for LatencyStorage {
         self.backend.lists_id_prefixes_natively()
     }
 
-    fn supports_ic1_repos(&self) -> bool {
-        self.backend.supports_ic1_repos()
-    }
-
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -240,17 +236,7 @@ impl Storage for LatencyStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::{
-        new_in_memory_storage,
-        recording::{RecordingStorage, assert_forwards},
-    };
-
-    #[tokio::test]
-    async fn forwards_to_the_backend() {
-        let inner = Arc::new(RecordingStorage::default());
-        let storage = LatencyStorage::new(Arc::clone(&inner) as Arc<_>, 0, 0);
-        assert_forwards(&storage, &inner).await;
-    }
+    use crate::storage::new_in_memory_storage;
 
     #[tokio::test]
     async fn storage_with_latency() {

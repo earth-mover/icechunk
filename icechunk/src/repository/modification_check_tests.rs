@@ -6,8 +6,6 @@
 use std::{
     collections::BTreeSet,
     num::{NonZeroU16, NonZeroUsize},
-    ops::Range,
-    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -15,10 +13,8 @@ use std::{
 };
 
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
-use futures::{Stream, stream::BoxStream};
+use chrono::Utc;
 use icechunk_macros::tokio_test;
-use serde::{Deserialize, Serialize};
 
 use crate::{
     Repository, Storage,
@@ -36,7 +32,6 @@ use crate::{
             WriterFeature,
         },
     },
-    migrations::{MigrationErrorKind, migrate_1_to_2},
     ops::{
         GCError,
         gc::{ExpiredRefAction, GCConfig, expire, garbage_collect},
@@ -44,9 +39,9 @@ use crate::{
     repository::RepositoryErrorKind,
     session::{Session, SessionErrorKind},
     storage::{
-        self, DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
-        StorageContext, StorageError, StorageErrorKind, StorageResult,
-        StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
+        PutCondition, StorageContext, StorageError, StorageErrorKind, StorageResult,
+        StorageWriterFeatures, VersionedUpdateResult,
+        intercepting::{Intercept, InterceptingStorage},
         new_in_memory_storage,
     },
 };
@@ -55,18 +50,16 @@ type TestResult<A = ()> = Result<A, Box<dyn std::error::Error>>;
 
 const LAYOUT: WriterFeature = WriterFeature::FilesystemLayoutV1;
 
-/// Forwards to `backend`, except that it implements and requires
-/// `filesystem-layout-v1` when `requires_layout`, and its repo-info writes can
-/// be made to land and then report a fork, or to fail for missing features.
-#[derive(Debug, Serialize, Deserialize)]
+/// Intercepts the storage [`TestStorage::wrapped`] makes: it implements and
+/// requires `filesystem-layout-v1` when `requires_layout`, and its repo-info
+/// writes can be made to land and then report a fork, or to fail for missing
+/// features.
+#[derive(Debug)]
 struct TestStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     requires_layout: bool,
-    #[serde(skip)]
     fork_after_update: AtomicBool,
-    #[serde(skip)]
     refuse_for_missing_features: AtomicBool,
-    #[serde(skip)]
     repo_info_writes: AtomicUsize,
 }
 
@@ -80,87 +73,29 @@ impl TestStorage {
             repo_info_writes: AtomicUsize::new(0),
         })
     }
-}
 
-impl std::fmt::Display for TestStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TestStorage({})", self.backend)
+    /// A storage over `backend` intercepted by `self`.
+    fn wrapped(self: &Arc<Self>) -> Arc<dyn Storage + Send + Sync> {
+        InterceptingStorage::new(Arc::clone(&self.backend), Arc::clone(self) as _)
     }
 }
-
-impl icechunk_storage::sealed::Sealed for TestStorage {}
 
 #[async_trait::async_trait]
-#[typetag::serde]
-impl Storage for TestStorage {
-    fn storage_info(&self) -> storage::StorageInfo {
-        self.backend.storage_info()
-    }
-
-    async fn default_settings(&self) -> StorageResult<storage::Settings> {
-        self.backend.default_settings().await
-    }
-
-    async fn can_write(&self) -> StorageResult<bool> {
-        self.backend.can_write().await
-    }
-
-    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+impl Intercept for TestStorage {
+    async fn writer_features(
+        &self,
+        _backend: &(dyn Storage + Send + Sync),
+    ) -> StorageResult<StorageWriterFeatures> {
         Ok(if self.requires_layout {
-            StorageWriterFeatures::new([LAYOUT], [])
+            StorageWriterFeatures::from([LAYOUT])
         } else {
-            StorageWriterFeatures::default()
+            StorageWriterFeatures::new()
         })
-    }
-
-    async fn gc_hook(
-        &self,
-        ctx: &StorageContext<'_>,
-        phase: GcPhase<'_>,
-    ) -> StorageResult<()> {
-        self.backend.gc_hook(ctx, phase).await
-    }
-
-    async fn create_location_if_needed(&self) -> StorageResult<()> {
-        self.backend.create_location_if_needed().await
-    }
-
-    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
-        self.backend.root_is_clean(ctx).await
-    }
-
-    fn supports_ic1_repos(&self) -> bool {
-        self.backend.supports_ic1_repos()
-    }
-
-    fn lists_id_prefixes_natively(&self) -> bool {
-        self.backend.lists_id_prefixes_natively()
-    }
-
-    async fn get_object_range(
-        &self,
-        ctx: &StorageContext<'_>,
-        path: &str,
-        range: Option<&Range<u64>>,
-    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
-    {
-        self.backend.get_object_range(ctx, path, range).await
-    }
-
-    async fn put_object(
-        &self,
-        ctx: &StorageContext<'_>,
-        path: &str,
-        bytes: Bytes,
-        content_type: Option<&str>,
-        metadata: Vec<(String, String)>,
-        hint: WriteHint,
-    ) -> StorageResult<()> {
-        self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
     }
 
     async fn put_object_conditional(
         &self,
+        backend: &(dyn Storage + Send + Sync),
         ctx: &StorageContext<'_>,
         path: &str,
         bytes: Bytes,
@@ -179,8 +114,7 @@ impl Storage for TestStorage {
                 ));
             }
         }
-        let res = self
-            .backend
+        let res = backend
             .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await?;
         match res {
@@ -197,51 +131,6 @@ impl Storage for TestStorage {
             }
             res => Ok(res),
         }
-    }
-
-    async fn copy_object(
-        &self,
-        ctx: &StorageContext<'_>,
-        from: &str,
-        to: &str,
-        content_type: Option<&str>,
-        version: &VersionInfo,
-    ) -> StorageResult<VersionedUpdateResult> {
-        self.backend.copy_object(ctx, from, to, content_type, version).await
-    }
-
-    async fn list_objects<'a>(
-        &'a self,
-        ctx: &StorageContext<'_>,
-        prefix: &str,
-    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        self.backend.list_objects(ctx, prefix).await
-    }
-
-    async fn delete_batch(
-        &self,
-        ctx: &StorageContext<'_>,
-        prefix: &str,
-        batch: Vec<(String, u64)>,
-    ) -> StorageResult<DeleteObjectsResult> {
-        self.backend.delete_batch(ctx, prefix, batch).await
-    }
-
-    async fn get_object_last_modified(
-        &self,
-        ctx: &StorageContext<'_>,
-        path: &str,
-    ) -> StorageResult<DateTime<Utc>> {
-        self.backend.get_object_last_modified(ctx, path).await
-    }
-
-    async fn get_object_conditional(
-        &self,
-        ctx: &StorageContext<'_>,
-        path: &str,
-        previous_version: Option<&VersionInfo>,
-    ) -> StorageResult<GetModifiedResult> {
-        self.backend.get_object_conditional(ctx, path, previous_version).await
     }
 }
 
@@ -485,7 +374,7 @@ async fn modifications_refuse_features_the_storage_does_not_implement() -> TestR
             IcechunkVersion { major: 2, minor: 4, patch: 0 }
         );
         let storage = in_memory_test_storage(false).await?;
-        let mut fixture = fixture(storage).await?;
+        let mut fixture = fixture(storage.wrapped()).await?;
         rewrite_repo_info(&fixture.repo, change_features(&[feature], &[])).await?;
 
         for (op, err) in run_every_op(&mut fixture).await {
@@ -514,7 +403,7 @@ async fn modifications_refuse_features_the_storage_does_not_implement() -> TestR
 #[tokio_test]
 async fn modifications_refuse_an_unlisted_required_feature() -> TestResult {
     let storage = in_memory_test_storage(true).await?;
-    let mut fixture = fixture(storage).await?;
+    let mut fixture = fixture(storage.wrapped()).await?;
     rewrite_repo_info(&fixture.repo, change_features(&[], &[LAYOUT.name()])).await?;
 
     for (op, err) in run_every_op(&mut fixture).await {
@@ -542,7 +431,7 @@ async fn modifications_refuse_an_unlisted_required_feature() -> TestResult {
 async fn every_op_succeeds_when_the_checks_pass() -> TestResult {
     for requires_layout in [false, true] {
         let storage = in_memory_test_storage(requires_layout).await?;
-        let outcomes = run_every_op(&mut fixture(storage).await?).await;
+        let outcomes = run_every_op(&mut fixture(storage.wrapped()).await?).await;
         let failed: Vec<_> = outcomes.iter().filter(|(_, err)| err.is_some()).collect();
         assert!(failed.is_empty(), "requires_layout={requires_layout}: {failed:?}");
     }
@@ -554,7 +443,7 @@ async fn every_op_succeeds_when_the_checks_pass() -> TestResult {
 #[tokio_test]
 async fn malformed_shape_refuses_changes_except_the_status() -> TestResult {
     let storage = in_memory_test_storage(false).await?;
-    let Fixture { repo, first, .. } = fixture(storage).await?;
+    let Fixture { repo, first, .. } = fixture(storage.wrapped()).await?;
     let set_at = Utc::now();
     rewrite_repo_info(&repo, |info| {
         info.with_raw_header_for_tests(
@@ -607,7 +496,7 @@ async fn malformed_shape_refuses_changes_except_the_status() -> TestResult {
 async fn durable_update_that_found_a_fork_is_not_retried() -> TestResult {
     let storage = in_memory_test_storage(false).await?;
     let Fixture { repo, mut commit_session, first, .. } =
-        fixture(Arc::clone(&storage) as Arc<_>).await?;
+        fixture(storage.wrapped()).await?;
     storage.fork_after_update.store(true, Ordering::SeqCst);
     let writes_before = storage.repo_info_writes.load(Ordering::SeqCst);
 
@@ -652,7 +541,7 @@ async fn durable_update_that_found_a_fork_is_not_retried() -> TestResult {
     assert_eq!(cached.resolve_branch("other")?, first);
 
     storage.fork_after_update.store(false, Ordering::SeqCst);
-    let fresh = Repository::open(Arc::clone(&storage) as Arc<_>).execute().await?;
+    let fresh = Repository::open(storage.wrapped()).execute().await?;
     assert_eq!(fresh.lookup_branch("main").await?, snapshot);
     assert_eq!(fresh.lookup_branch("other").await?, first);
     Ok(())
@@ -663,7 +552,7 @@ async fn durable_update_that_found_a_fork_is_not_retried() -> TestResult {
 #[tokio_test]
 async fn creation_lists_the_required_features() -> TestResult {
     let storage = in_memory_test_storage(true).await?;
-    let repo = Repository::create(Arc::clone(&storage) as Arc<_>).execute().await?;
+    let repo = Repository::create(storage.wrapped()).execute().await?;
     let (info, _) = repo.asset_manager().fetch_repo_info().await?;
     assert_eq!(info.raw_writer_features()?, [FeatureName::from(LAYOUT)]);
     info.check_writable_shape(WritableShapeMode::AnyChange)?;
@@ -695,7 +584,7 @@ async fn creation_lists_the_required_features() -> TestResult {
 #[tokio_test]
 async fn storage_missing_features_is_the_repository_error() -> TestResult {
     let storage = in_memory_test_storage(false).await?;
-    let Fixture { repo, first, .. } = fixture(Arc::clone(&storage) as Arc<_>).await?;
+    let Fixture { repo, first, .. } = fixture(storage.wrapped()).await?;
     storage.refuse_for_missing_features.store(true, Ordering::SeqCst);
     let err = repo.create_branch("other", &first).await.err().map(|e| e.kind);
     let Some(RepositoryErrorKind::MissingWriterFeatures { missing, min_version }) = err
@@ -724,24 +613,20 @@ async fn read_only_status_can_be_set_again() -> TestResult {
     Ok(())
 }
 
-/// The migrated repo info couldn't list the features a storage requires.
+/// An IC1 repo info can't list writer features, so a storage that requires
+/// any refuses to open, and so to migrate, an IC1 repository.
 #[tokio_test]
-async fn migration_refuses_a_storage_that_requires_features() -> TestResult {
+async fn a_storage_that_requires_features_refuses_ic1_repositories() -> TestResult {
     let backend = new_in_memory_storage().await?;
     Repository::create(Arc::clone(&backend))
         .spec_version(SpecVersionBin::V1)
         .execute()
         .await?;
-    let repo = Repository::open(TestStorage::new(backend, true)).execute().await?;
-    let err = migrate_1_to_2(repo, false, false, None).await.err().map(|e| e.kind);
-    assert!(
-        matches!(
-            err,
-            Some(MigrationErrorKind::RepositoryError(
-                RepositoryErrorKind::StorageRefusesIc1
-            ))
-        ),
-        "{err:?}"
-    );
+    let err = Repository::open(TestStorage::new(backend, true).wrapped())
+        .execute()
+        .await
+        .err()
+        .map(|e| e.kind);
+    assert!(matches!(err, Some(RepositoryErrorKind::StorageRefusesIc1)), "{err:?}");
     Ok(())
 }

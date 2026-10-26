@@ -46,13 +46,15 @@ pub use icechunk_storage::s3_config::{
 use icechunk_storage::{
     DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
     RepositoryCreation, Settings, Storage, StorageContext, StorageError,
-    StorageErrorKind, StorageInfo, StorageResult, VersionInfo, VersionedUpdateResult,
-    WriteHint, obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    StorageErrorKind, StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+    VersionedUpdateResult, WriteHint, obj_not_found_res, obj_store_error,
+    obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sealed, split_in_multiple_equal_requests, strip_quotes, throttled_error,
+    root_is_clean_by_listing, sealed, split_in_multiple_equal_requests, strip_quotes,
+    throttled_error,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -1123,8 +1125,16 @@ impl Storage for S3Storage {
         StorageInfo { backend_type: "S3 (native)", fields }
     }
 
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        Ok(Settings::default())
+    }
+
     async fn can_write(&self) -> StorageResult<bool> {
         Ok(self.can_write)
+    }
+
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        Ok(StorageWriterFeatures::new())
     }
 
     async fn gc_hook(
@@ -1133,6 +1143,23 @@ impl Storage for S3Storage {
         _phase: GcPhase<'_>,
     ) -> StorageResult<()> {
         Ok(())
+    }
+
+    async fn create_location_if_needed(&self) -> StorageResult<()> {
+        Ok(())
+    }
+
+    async fn sweep_leftovers(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _older_than: DateTime<Utc>,
+        _dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        Ok(DeleteObjectsResult::default())
+    }
+
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        root_is_clean_by_listing(self, ctx).await
     }
 
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {

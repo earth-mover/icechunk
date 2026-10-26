@@ -86,12 +86,6 @@ async fn validate_start(repo: &Repository) -> MigrationResult<()> {
         error!("Storage instance must be writable");
         return Err(MigrationError::capture(MigrationErrorKind::ReadonlyRepo));
     }
-    // The migrated repo info couldn't list the features such a storage requires.
-    if !repo.storage().writer_features().await.inject()?.required().is_empty() {
-        return Err(MigrationError::capture(MigrationErrorKind::RepositoryError(
-            RepositoryErrorKind::StorageRefusesIc1,
-        )));
-    }
     Ok(())
 }
 

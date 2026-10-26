@@ -178,10 +178,6 @@ impl Storage for LoggingStorage {
             .unwrap_or_else(|| self.backend.lists_id_prefixes_natively())
     }
 
-    fn supports_ic1_repos(&self) -> bool {
-        self.backend.supports_ic1_repos()
-    }
-
     async fn delete_batch(
         &self,
         ctx: &StorageContext<'_>,
@@ -241,18 +237,5 @@ impl Storage for LoggingStorage {
             .expect("poison lock")
             .push(("get_object_range".to_string(), path.to_string()));
         self.backend.get_object_range(ctx, path, range).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::storage::recording::{RecordingStorage, assert_forwards};
-
-    #[tokio::test]
-    async fn forwards_to_the_backend() {
-        let inner = Arc::new(RecordingStorage::default());
-        let storage = LoggingStorage::new(Arc::clone(&inner) as Arc<_>);
-        assert_forwards(&storage, &inner).await;
     }
 }

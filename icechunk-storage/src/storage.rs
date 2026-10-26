@@ -574,33 +574,9 @@ pub enum RepositoryCreation {
     RefusedEmptyPrefix,
 }
 
-/// The writer features a storage implements, and those a repository it
-/// creates must list. Every required feature is implemented.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct StorageWriterFeatures {
-    implemented: BTreeSet<WriterFeature>,
-    required: BTreeSet<WriterFeature>,
-}
-
-impl StorageWriterFeatures {
-    /// Implements `required` and `also_implemented`, and requires `required`.
-    pub fn new(
-        required: impl IntoIterator<Item = WriterFeature>,
-        also_implemented: impl IntoIterator<Item = WriterFeature>,
-    ) -> Self {
-        let required: BTreeSet<_> = required.into_iter().collect();
-        let implemented = required.iter().copied().chain(also_implemented).collect();
-        Self { implemented, required }
-    }
-
-    pub fn implemented(&self) -> &BTreeSet<WriterFeature> {
-        &self.implemented
-    }
-
-    pub fn required(&self) -> &BTreeSet<WriterFeature> {
-        &self.required
-    }
-}
+/// The writer features a storage implements, all of which a repository it
+/// creates or modifies must list.
+pub type StorageWriterFeatures = BTreeSet<WriterFeature>;
 
 /// When garbage collection calls [`Storage::gc_hook`]. On a repository that
 /// lists `filesystem-layout-v1`, GC always makes a change and `changed` is the
@@ -624,25 +600,54 @@ pub fn filter_ids_by_id_prefix<'a>(
         .boxed()
 }
 
+/// Keeps the listed objects whose id starts with one of `id_prefixes`, from a
+/// full listing of `prefix`: [`Storage::list_objects_with_id_prefixes`] for
+/// backends that can't list each prefix on the server.
+pub async fn list_objects_filtered_by_id_prefix<'a>(
+    storage: &'a (impl Storage + ?Sized),
+    ctx: &StorageContext<'_>,
+    prefix: &str,
+    id_prefixes: &[String],
+) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+    Ok(filter_ids_by_id_prefix(storage.list_objects(ctx, prefix).await?, id_prefixes))
+}
+
+/// Whether listing the storage root finds nothing: [`Storage::root_is_clean`]
+/// for backends with no cheaper check.
+pub async fn root_is_clean_by_listing(
+    storage: &(impl Storage + ?Sized),
+    ctx: &StorageContext<'_>,
+) -> StorageResult<bool> {
+    match storage.list_objects(ctx, "").await {
+        Ok(mut stream) => match stream.next().await {
+            None => Ok(true),
+            Some(Ok(_)) => Ok(false),
+            Some(Err(err)) => Err(err),
+        },
+        Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => Ok(true),
+        Err(err) => Err(err),
+    }
+}
+
 /// Implementations are free to assume files are never overwritten.
+///
+/// Methods that describe the backend itself (its settings, capabilities and
+/// hooks) have no default, so a wrapper can't silently answer for itself
+/// instead of forwarding to its backend.
 #[async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// Return structured metadata about this storage backend for display/repr.
     fn storage_info(&self) -> StorageInfo;
 
-    async fn default_settings(&self) -> StorageResult<Settings> {
-        Ok(Default::default())
-    }
+    async fn default_settings(&self) -> StorageResult<Settings>;
 
     async fn can_write(&self) -> StorageResult<bool>;
 
-    /// The writer features this storage implements and requires. The default
-    /// is none, so a wrapper that doesn't forward this refuses every
-    /// repository that lists a writer feature.
-    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
-        Ok(StorageWriterFeatures::default())
-    }
+    /// The writer features this storage implements; repositories it creates
+    /// or modifies must list all of them. A storage with any can't hold IC1
+    /// repositories, which can't list writer features.
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures>;
 
     /// Called by garbage collection before its deletes and after them, never
     /// by a dry run.
@@ -653,20 +658,15 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     ) -> StorageResult<()>;
 
     /// Whether a repository may be created at this storage location.
-    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
-        Ok(RepositoryCreation::Allowed)
-    }
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation>;
 
     /// Ensure the storage location is ready to receive writes.
     ///
-    /// Called by [`Repository::create`] before any other I/O. The default
-    /// implementation is a no-op; backends that need to materialize the
-    /// location (e.g. the local filesystem creating the directory) override
-    /// this. Read paths like `open` never call it, so a missing location
-    /// stays missing.
-    async fn create_location_if_needed(&self) -> StorageResult<()> {
-        Ok(())
-    }
+    /// Called by [`Repository::create`] before any other I/O. Backends that
+    /// need to materialize the location (e.g. the local filesystem creating
+    /// the directory) do it here; others do nothing. Read paths like `open`
+    /// never call it, so a missing location stays missing.
+    async fn create_location_if_needed(&self) -> StorageResult<()>;
 
     async fn get_object(
         &self,
@@ -766,26 +766,18 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
     /// Like [`Storage::list_objects`], limited to ids that start with one of `id_prefixes`.
-    /// Unordered. Override to list each prefix concurrently; the default filters.
+    /// Unordered. Backends that can't list each prefix concurrently use
+    /// [`list_objects_filtered_by_id_prefix`].
     async fn list_objects_with_id_prefixes<'a>(
         &'a self,
         ctx: &StorageContext<'_>,
         prefix: &str,
         id_prefixes: &[String],
-    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-        Ok(filter_ids_by_id_prefix(self.list_objects(ctx, prefix).await?, id_prefixes))
-    }
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>>;
 
     /// Whether `list_objects_with_id_prefixes` lists each prefix on the server
     /// rather than filtering a full listing. Callers fan out only when true.
-    fn lists_id_prefixes_natively(&self) -> bool {
-        false
-    }
-
-    /// Whether this backend can hold IC1 (spec version 1) repositories.
-    fn supports_ic1_repos(&self) -> bool {
-        true
-    }
+    fn lists_id_prefixes_natively(&self) -> bool;
 
     async fn delete_batch(
         &self,
@@ -801,12 +793,10 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// reports what it would delete.
     async fn sweep_leftovers(
         &self,
-        _ctx: &StorageContext<'_>,
-        _older_than: DateTime<Utc>,
-        _dry_run: bool,
-    ) -> StorageResult<DeleteObjectsResult> {
-        Ok(DeleteObjectsResult::default())
-    }
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult>;
 
     async fn get_object_last_modified(
         &self,
@@ -870,17 +860,7 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         Ok(res.clone())
     }
 
-    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
-        match self.list_objects(ctx, "").await {
-            Ok(mut stream) => match stream.next().await {
-                None => Ok(true),
-                Some(Ok(_)) => Ok(false),
-                Some(Err(err)) => Err(err),
-            },
-            Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => Ok(true),
-            Err(err) => Err(err),
-        }
-    }
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool>;
 
     async fn get_object_concurrently_multiple(
         &self,
@@ -1027,19 +1007,6 @@ mod tests {
         block_on(filter_ids_by_id_prefix(listing(ids), &id_prefixes).try_collect())
             .map(|infos: Vec<ListInfo<String>>| infos.into_iter().map(|i| i.id).collect())
             .expect("listing cannot fail")
-    }
-
-    #[test]
-    fn required_writer_features_are_implemented() {
-        let layout = BTreeSet::from([WriterFeature::FilesystemLayoutV1]);
-        let required =
-            StorageWriterFeatures::new([WriterFeature::FilesystemLayoutV1], []);
-        assert_eq!(required.implemented(), &layout);
-        assert_eq!(required.required(), &layout);
-        let implemented =
-            StorageWriterFeatures::new([], [WriterFeature::FilesystemLayoutV1]);
-        assert_eq!(implemented.implemented(), &layout);
-        assert!(implemented.required().is_empty());
     }
 
     #[test]

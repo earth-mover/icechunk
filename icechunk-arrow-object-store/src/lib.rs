@@ -21,14 +21,14 @@ use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, GcPhase, Generation,
     GetModifiedResult, ListInfo, PutCondition, RepositoryCreation, RetriesSettings,
     Settings, Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo,
-    StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
+    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
     filter_ids_by_id_prefix, obj_not_found_res, obj_store_error, obj_store_error_res,
     other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sealed,
+    root_is_clean_by_listing, sealed,
 };
 use icechunk_types::ICResultExt as _;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
@@ -656,12 +656,29 @@ impl Storage for ObjectStorage {
         Ok(self.backend.can_write())
     }
 
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        Ok(StorageWriterFeatures::new())
+    }
+
     async fn gc_hook(
         &self,
         _ctx: &StorageContext<'_>,
         _phase: GcPhase<'_>,
     ) -> StorageResult<()> {
         self.backend.check_not_filesystem_layout()
+    }
+
+    async fn sweep_leftovers(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _older_than: DateTime<Utc>,
+        _dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        Ok(DeleteObjectsResult::default())
+    }
+
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        root_is_clean_by_listing(self, ctx).await
     }
 
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {

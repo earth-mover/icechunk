@@ -9,8 +9,10 @@ use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use icechunk::storage::{
     DeleteObjectsResult, ETag, GcPhase, Generation, GetModifiedResult, ListInfo,
-    PutCondition, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
-    VersionInfo, VersionedUpdateResult, WriteHint,
+    PutCondition, RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+    VersionedUpdateResult, WriteHint, list_objects_filtered_by_id_prefix,
+    root_is_clean_by_listing,
 };
 use napi::bindgen_prelude::{Buffer, Promise};
 use napi::threadsafe_function::ThreadsafeFunction;
@@ -313,12 +315,54 @@ impl Storage for JsCallbackStorage {
             .map_err(|e| js_storage_error("JS canWrite failed", e))
     }
 
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        Ok(Settings::default())
+    }
+
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        Ok(StorageWriterFeatures::new())
+    }
+
     async fn gc_hook(
         &self,
         _ctx: &StorageContext<'_>,
         _phase: GcPhase<'_>,
     ) -> StorageResult<()> {
         Ok(())
+    }
+
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+        Ok(RepositoryCreation::Allowed)
+    }
+
+    async fn create_location_if_needed(&self) -> StorageResult<()> {
+        Ok(())
+    }
+
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        ctx: &StorageContext<'_>,
+        prefix: &str,
+        id_prefixes: &[String],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        list_objects_filtered_by_id_prefix(self, ctx, prefix, id_prefixes).await
+    }
+
+    fn lists_id_prefixes_natively(&self) -> bool {
+        false
+    }
+
+    async fn sweep_leftovers(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _older_than: chrono::DateTime<chrono::Utc>,
+        _dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        Ok(DeleteObjectsResult::default())
+    }
+
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        root_is_clean_by_listing(self, ctx).await
     }
 
     async fn get_object_range(

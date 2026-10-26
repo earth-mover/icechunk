@@ -17,6 +17,7 @@ pub use icechunk_storage::{
     RetriesSettings, Settings, Storage, StorageContext, StorageError, StorageErrorKind,
     StorageInfo, StorageResult, StorageWriterFeatures, TimeoutSettings,
     UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult, WriteHint,
+    list_objects_filtered_by_id_prefix, root_is_clean_by_listing,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes,
 };
@@ -68,12 +69,12 @@ pub use icechunk_arrow_object_store::HttpObjectStoreBackend;
 
 pub use icechunk_arrow_object_store::{ObjectStoreBackend, Role};
 
+#[cfg(test)]
+pub(crate) mod intercepting;
 /// Parallel listing of object ids by prefix.
 pub mod listing;
 #[cfg(test)]
 pub mod logging;
-#[cfg(test)]
-pub(crate) mod recording;
 
 /// Storage wrapper that adds artificial read/write latency (for testing).
 pub mod latency;
@@ -113,12 +114,7 @@ mod tests {
     #[icechunk_macros::tokio_test]
     async fn writer_features_default_to_none() {
         let storage = new_in_memory_storage().await.unwrap();
-        assert_eq!(
-            storage.writer_features().await.unwrap(),
-            StorageWriterFeatures::default()
-        );
-        assert!(StorageWriterFeatures::default().implemented().is_empty());
-        assert!(StorageWriterFeatures::default().required().is_empty());
+        assert!(storage.writer_features().await.unwrap().is_empty());
     }
 
     #[cfg(feature = "object-store-fs")]

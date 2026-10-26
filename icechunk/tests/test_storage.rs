@@ -2262,19 +2262,6 @@ async fn filesystem_storage_ignores_unsafe_settings_of_local_filesystem_repos()
     Ok(())
 }
 
-#[cfg(all(feature = "fs", unix))]
-#[tokio_test]
-async fn filesystem_storage_wrapper_forwards_ic1_refusal()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempdir()?;
-    let fs = storage::new_filesystem_storage(dir.path()).await?;
-    assert!(!fs.supports_ic1_repos());
-    let metered = storage::metering::MeteringStorage::new(fs);
-    assert!(!metered.supports_ic1_repos());
-    assert!(new_in_memory_storage().await?.supports_ic1_repos());
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Custom request headers tests.
 //

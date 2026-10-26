@@ -260,7 +260,7 @@ pub async fn init(root: &RunRoot, config: &RunConfig) -> anyhow::Result<()> {
     let ctx = StorageContext::unattributed(&settings);
     storage.create_location_if_needed().await?;
     let required: Vec<WriterFeature> =
-        storage.writer_features().await?.required().iter().copied().collect();
+        storage.writer_features().await?.into_iter().collect();
     let bytes = initial_repo_info(&required)?;
     match storage
         .put_object_conditional(

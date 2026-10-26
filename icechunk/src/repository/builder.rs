@@ -295,7 +295,7 @@ async fn create(
     debug!("Creating Repository");
     raise_if_cant_write(storage.as_ref(), "Cannot create repository").await?;
     let spec_version = spec_version.unwrap_or_default();
-    raise_if_ic1_unsupported(storage.as_ref(), spec_version)?;
+    raise_if_ic1_unsupported(storage.as_ref(), spec_version).await?;
     if storage.can_create_repository().await.inject()?
         == storage::RepositoryCreation::RefusedEmptyPrefix
     {
@@ -351,7 +351,7 @@ async fn create(
     let num_updates = config.num_updates_per_repo_info_file();
     let config_ref = &config;
     let required_features: Vec<_> = if spec_version >= SpecVersionBin::V2 {
-        storage.writer_features().await.inject()?.required().iter().copied().collect()
+        storage.writer_features().await.inject()?.into_iter().collect()
     } else {
         Vec::new()
     };
@@ -518,7 +518,7 @@ async fn open(
     }?;
     let spec_version = detected.spec_version();
     trace!(%spec_version, "Repository version found");
-    raise_if_ic1_unsupported(storage.as_ref(), spec_version)?;
+    raise_if_ic1_unsupported(storage.as_ref(), spec_version).await?;
 
     let (persisted_config, config_version) = match detected {
         DetectedSpecVersion::V2Plus { repo_info, .. } => {
@@ -584,11 +584,15 @@ async fn open(
     )
 }
 
-fn raise_if_ic1_unsupported(
+/// IC1 repositories can't list writer features, so a storage that has any
+/// can't hold them.
+async fn raise_if_ic1_unsupported(
     storage: &(dyn Storage + Send + Sync),
     spec_version: SpecVersionBin,
 ) -> RepositoryResult<()> {
-    if spec_version < SpecVersionBin::V2 && !storage.supports_ic1_repos() {
+    if spec_version < SpecVersionBin::V2
+        && !storage.writer_features().await.inject()?.is_empty()
+    {
         return Err(RepositoryError::capture(RepositoryErrorKind::StorageRefusesIc1));
     }
     Ok(())
