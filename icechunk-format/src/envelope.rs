@@ -14,6 +14,10 @@ use crate::{
     serializers::{VERIFY_THRESHOLD_BYTES, verify_buffer},
 };
 
+/// The zstd level of metadata files when the repository config sets none.
+/// Writers without a repository config, like layout conversions, always use it.
+pub const DEFAULT_COMPRESSION_LEVEL: u8 = 3;
+
 pub fn binary_file_header(
     spec_version: SpecVersionBin,
     file_type: FileTypeBin,

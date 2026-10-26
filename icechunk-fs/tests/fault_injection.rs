@@ -393,8 +393,9 @@ async fn a_crash_at_every_step_of_the_conversion_to_the_standard_layout_then_a_r
             "{step:?}: {names:?}"
         );
         let standard = mirror(dir.path());
-        assert!(!icechunk_format::layout_v1::lists_feature(&standard).unwrap());
-        let attempt = icechunk_format::layout_v1::attempt_id(&standard).unwrap().unwrap();
+        let info = icechunk_format::layout_v1::change_info(&standard).unwrap();
+        assert!(!info.lists_feature);
+        let attempt = info.attempt.unwrap().id;
         assert_eq!(
             std::fs::read(dir.path().join("overwritten").join(attempt)).unwrap(),
             repo_info(2),

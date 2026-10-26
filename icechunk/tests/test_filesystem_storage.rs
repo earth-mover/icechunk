@@ -982,7 +982,7 @@ async fn conversion_to_the_standard_layout_keeps_the_repository()
     assert_eq!(outcome, ConversionOutcome::Converted);
     assert!(!root_names(root)?.iter().any(|name| name.starts_with("repo.d")));
     let standard = mirror(root)?;
-    let attempt = layout_v1::attempt_id(&standard)?.ok_or("no attempt")?;
+    let attempt = layout_v1::change_info(&standard)?.attempt.ok_or("no attempt")?.id;
     assert_eq!(std::fs::read(root.join("overwritten").join(attempt))?, current);
 
     let local =

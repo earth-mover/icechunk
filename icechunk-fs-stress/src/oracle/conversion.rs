@@ -69,8 +69,10 @@ fn tmp_dirs(storage_root: &Path) -> anyhow::Result<Vec<String>> {
 /// The backup the newest ops-log entry of `info` names on its predecessor:
 /// what the change that made `info` backed up.
 fn named_backup(bytes: &[u8]) -> Result<String, String> {
-    layout_v1::attempt_id(bytes)
+    layout_v1::change_info(bytes)
         .map_err(|err| format!("reading its ops log: {}", err.kind()))?
+        .attempt
+        .map(|attempt| attempt.id)
         .ok_or_else(|| "its ops log names no backup of its predecessor".to_owned())
 }
 

@@ -955,8 +955,9 @@ impl PyRebaseFailedError {
 
 impl_pickle!(PyRebaseFailedError);
 
-/// The repository is forked: its mirror holds a repo info that is no version
-/// of the repository.
+/// The repository is forked: something that doesn't implement the filesystem
+/// layout overwrote its `repo` file, so `repo` and `repo.d` hold diverging
+/// histories.
 #[pyclass(
     extends=IcechunkError,
     subclass,

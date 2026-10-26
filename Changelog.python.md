@@ -12,6 +12,7 @@
 - `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
 - Icechunk opens repositories whose configuration holds settings it doesn't know or can't decode, such as keys added by later versions or virtual chunk containers for storage it doesn't support, ignores them, and keeps them unchanged when it changes the configuration.
 - Garbage collection deletes only files whose names are exactly the encoding of an object id of the right size; other files in `snapshots/`, `manifests/`, `transactions/` and `chunks/` are kept.
+- Reading a malformed repo info file, such as one whose snapshot parents are out of range or form a cycle, raises an error instead of crashing or hanging.
 
 ## Python Icechunk Library 2.3.0
 

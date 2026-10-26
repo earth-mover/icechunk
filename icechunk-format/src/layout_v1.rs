@@ -1,13 +1,11 @@
 //! Filesystem layout v1, the `repo.d` layout of the repo info, see the
 //! filesystem layout v1 page of the specification.
-//!
-//! The functions here answer what the layout's protocol needs to know about
-//! the bytes of a repo info file. Bytes that don't decode are a format error.
 
 use chrono::{DateTime, Utc};
 
 use crate::{
     IcechunkResult,
+    envelope::DEFAULT_COMPRESSION_LEVEL,
     repo_info::{RepoInfo, UpdateType},
     repo_info_file::{decode, encode},
     writer_features::{FeatureName, WriterFeature},
@@ -16,9 +14,6 @@ use crate::{
 /// The writer feature a repo info in this layout lists.
 pub const FEATURE: &str = "filesystem-layout-v1";
 
-/// The compression level of the repo infos [`convert`] writes.
-const COMPRESSION_LEVEL: u8 = 3;
-
 /// Whether [`convert`] adds or removes [`FEATURE`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FeatureChange {
@@ -26,7 +21,7 @@ pub enum FeatureChange {
     Remove,
 }
 
-/// The backup paths one repo info file names, see [`backup_paths`].
+/// The backup paths one repo info file contains, see [`backup_paths`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BackupPaths {
     /// The `backup_path` of every ops-log entry that has one, newest first.
@@ -41,50 +36,59 @@ pub fn lists_feature(bytes: &[u8]) -> IcechunkResult<bool> {
     lists(&decode(bytes)?)
 }
 
-/// The `backup_path` the update that made this repo info wrote on its
-/// predecessor entry: it identifies the attempt. `None` without a predecessor
-/// that has one. When paging moved the predecessor out of this file, it is the
-/// file's `repo_before_updates`.
-pub fn attempt_id(bytes: &[u8]) -> IcechunkResult<Option<String>> {
-    attempt_id_of(&decode(bytes)?)
+/// The attempt that wrote a repo info.
+///
+/// Before replacing a version, core copies it to `overwritten/<path>`, with a
+/// path it draws anew for every attempt, and records that path on the
+/// replaced version's ops-log entry. So the path identifies the attempt: the
+/// ops log of the current version points to it if and only if the attempt landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attempt {
+    /// The backup path on the second newest ops-log entry. When paging moved
+    /// that entry to an older file, the same path is this file's
+    /// `repo_before_updates`.
+    pub id: String,
+    /// The id of the attempt that wrote the version this one replaced, `None`
+    /// if this file doesn't name it. A landed `id` sits right above `base_id`.
+    pub base_id: Option<String>,
 }
 
-fn attempt_id_of(info: &RepoInfo) -> IcechunkResult<Option<String>> {
+/// What a change needs to know about its new repo info, see [`change_info`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeInfo {
+    /// Whether it lists [`FEATURE`].
+    pub lists_feature: bool,
+    /// `None` when the replaced version's entry records no backup path, as
+    /// for a first version.
+    pub attempt: Option<Attempt>,
+}
+
+/// [`lists_feature`] and the [`Attempt`] of a repo info, decoding the bytes
+/// once.
+pub fn change_info(bytes: &[u8]) -> IcechunkResult<ChangeInfo> {
+    let info = decode(bytes)?;
+    Ok(ChangeInfo { lists_feature: lists(&info)?, attempt: attempt(&info)? })
+}
+
+fn attempt(info: &RepoInfo) -> IcechunkResult<Option<Attempt>> {
     let mut entries = info.latest_updates()?;
     // The newest entry is this update's own.
     entries.next().transpose()?;
-    match entries.next().transpose()? {
-        Some((_, _, backup_path)) => Ok(backup_path.map(str::to_string)),
-        None => Ok(info.repo_before_updates()?.map(str::to_string)),
-    }
-}
-
-/// The attempt that made a repo info, see [`attempt`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Attempt {
-    /// [`attempt_id`].
-    pub id: String,
-    /// The path right after `id` among the [`backup_paths`] of the same file,
-    /// newest first: that of the attempt that made the base. Every ops log
-    /// that names `id` names it right after.
-    pub below: Option<String>,
-}
-
-/// [`attempt_id`] and the path below it, decoding the bytes once. `None`
-/// when `attempt_id` is.
-pub fn attempt(bytes: &[u8]) -> IcechunkResult<Option<Attempt>> {
-    let info = decode(bytes)?;
-    let Some(id) = attempt_id_of(&info)? else {
+    let id = match entries.next().transpose()? {
+        Some((_, _, backup_path)) => backup_path.map(str::to_string),
+        None => info.repo_before_updates()?.map(str::to_string),
+    };
+    let Some(id) = id else {
         return Ok(None);
     };
-    let named = backup_paths_of(&info)?;
-    let below = named
+    let named = backup_paths_of(info)?;
+    let base_id = named
         .entries
         .into_iter()
         .chain(named.repo_before_updates)
         .skip_while(|path| *path != id)
         .nth(1);
-    Ok(Some(Attempt { id, below }))
+    Ok(Some(Attempt { id, base_id }))
 }
 
 /// The backup paths this one file names: those of its ops-log entries and its
@@ -152,7 +156,7 @@ pub fn convert(
         now,
         num_updates_per_file,
     )?;
-    encode(&converted, spec_version, COMPRESSION_LEVEL)
+    encode(&converted, spec_version, DEFAULT_COMPRESSION_LEVEL)
 }
 
 fn lists(info: &RepoInfo) -> IcechunkResult<bool> {
@@ -246,21 +250,11 @@ mod tests {
     }
 
     #[icechunk_macros::test]
-    fn attempt_id_is_the_predecessors_backup_path() -> TestResult {
-        assert_eq!(attempt_id(&with_feature()?)?, None);
-        let removed =
-            convert_default(&with_feature()?, FeatureChange::Remove, "repo.a", 1)?;
-        assert_eq!(attempt_id(&removed)?.as_deref(), Some("repo.a"));
-        let added = convert_default(&removed, FeatureChange::Add, "repo.b", 2)?;
-        assert_eq!(attempt_id(&added)?.as_deref(), Some("repo.b"));
-        Ok(())
-    }
-
-    #[icechunk_macros::test]
-    fn attempt_id_of_a_paged_predecessor_is_repo_before_updates() -> TestResult {
+    fn the_attempt_of_a_paged_predecessor_is_repo_before_updates() -> TestResult {
         let paged =
             convert(&with_feature()?, FeatureChange::Remove, "repo.a", at(1)?, 1)?;
-        assert_eq!(attempt_id(&paged)?.as_deref(), Some("repo.a"));
+        let attempt = change_info(&paged)?.attempt.ok_or("no attempt")?;
+        assert_eq!(attempt.id, "repo.a");
         assert_eq!(
             backup_paths(&paged)?,
             BackupPaths {
@@ -296,20 +290,24 @@ mod tests {
     }
 
     #[icechunk_macros::test]
-    fn attempt_is_the_attempt_id_and_the_path_below_it() -> TestResult {
-        let attempt_of = |id: &str, below: Option<&str>| {
-            Some(Attempt { id: id.to_string(), below: below.map(str::to_string) })
+    fn change_info_is_the_feature_and_the_attempt() -> TestResult {
+        let info = |lists_feature, id: Option<(&str, Option<&str>)>| ChangeInfo {
+            lists_feature,
+            attempt: id.map(|(id, base_id)| Attempt {
+                id: id.to_string(),
+                base_id: base_id.map(str::to_string),
+            }),
         };
-        assert_eq!(attempt(&with_feature()?)?, None);
+        assert_eq!(change_info(&with_feature()?)?, info(true, None));
         let removed =
             convert_default(&with_feature()?, FeatureChange::Remove, "repo.a", 1)?;
-        assert_eq!(attempt(&removed)?, attempt_of("repo.a", None));
+        assert_eq!(change_info(&removed)?, info(false, Some(("repo.a", None))));
         let added = convert_default(&removed, FeatureChange::Add, "repo.b", 2)?;
-        assert_eq!(attempt(&added)?, attempt_of("repo.b", Some("repo.a")));
+        assert_eq!(change_info(&added)?, info(true, Some(("repo.b", Some("repo.a")))));
         let paged = convert(&added, FeatureChange::Remove, "repo.c", at(3)?, 2)?;
-        assert_eq!(attempt(&paged)?, attempt_of("repo.c", Some("repo.b")));
+        assert_eq!(change_info(&paged)?, info(false, Some(("repo.c", Some("repo.b")))));
         let all_paged = convert(&added, FeatureChange::Remove, "repo.c", at(3)?, 1)?;
-        assert_eq!(attempt(&all_paged)?, attempt_of("repo.c", None));
+        assert_eq!(change_info(&all_paged)?, info(false, Some(("repo.c", None))));
         Ok(())
     }
 
@@ -416,8 +414,7 @@ mod tests {
     fn malformed_bytes_are_format_errors() -> TestResult {
         for bytes in malformed() {
             lists_feature(&bytes).err().ok_or("lists_feature")?;
-            attempt_id(&bytes).err().ok_or("attempt_id")?;
-            attempt(&bytes).err().ok_or("attempt")?;
+            change_info(&bytes).err().ok_or("change_info")?;
             backup_paths(&bytes).err().ok_or("backup_paths")?;
             is_interrupted_creation(&bytes).err().ok_or("is_interrupted_creation")?;
             convert(&bytes, FeatureChange::Add, "repo.a", at(1)?, 10)

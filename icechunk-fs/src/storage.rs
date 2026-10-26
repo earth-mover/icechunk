@@ -613,13 +613,13 @@ impl Storage for FilesystemStorage {
                 .await
             }
             PutCondition::IfVersion(version) if path == REPO => {
-                let base = parse_version(version)
-                    .and_then(|base| check_change_bytes(&bytes).map(|()| base))
+                let (base, change) = parse_version(version)
+                    .and_then(|base| Ok((base, check_change_bytes(bytes)?)))
                     .map_err(|err| protocol_error(&self.root, err))?;
                 self.check_repo_once().await?;
                 self.sync_data_dirs().await?;
                 self.on_repo(move |repo| {
-                    Ok(match repo.change(&bytes, &base)? {
+                    Ok(match repo.change(&change, &base)? {
                         UpdateOutcome::Updated(version) => {
                             VersionedUpdateResult::Updated {
                                 new_version: version.to_version_info(),

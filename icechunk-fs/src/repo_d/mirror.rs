@@ -417,7 +417,9 @@ impl RepoD<'_> {
         });
         let failed = match published {
             Ok(_) => return,
-            Err(ProtocolError::Forked(_)) => "it is a fork".to_string(),
+            Err(ProtocolError::Forked(_)) => {
+                "it is a fork, overwritten bypassing repo.d".to_string()
+            }
             Err(ProtocolError::MirrorUnreadable(_)) => {
                 "it couldn't be read or decoded".to_string()
             }

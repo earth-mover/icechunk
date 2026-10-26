@@ -63,17 +63,19 @@ pub enum StorageErrorKind {
     )]
     LayoutConversionInProgress(String),
     /// The fork check found a fork; nothing was published or deleted.
-    #[error("repository forked: {0}. {FORK_EXPLANATION}")]
+    #[error(
+        "repository forked, the repo file was overwritten bypassing repo.d: {0}. {FORK_EXPLANATION}"
+    )]
     RepositoryForked(String),
     /// The change landed and is durable; its publication found a fork.
     /// Retrying would make the change twice.
     #[error(
-        "the change is durable (version {new_version}) and must not be retried, but its publication found a fork: {detail}. {FORK_EXPLANATION}"
+        "the change is durable (version {new_version}) and must not be retried, but its publication found a fork, a repo file overwritten bypassing repo.d: {detail}. {FORK_EXPLANATION}"
     )]
     RepositoryForkedAfterUpdate { new_version: Box<VersionInfo>, detail: String },
     /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
     #[error(
-        "the repo file couldn't be read or decoded, so a fork can't be ruled out: {0}"
+        "the repo file couldn't be read or decoded, so a fork (a repo file overwritten bypassing repo.d) can't be ruled out: {0}"
     )]
     MirrorUnreadable(String),
     /// The repository lists writer features this storage doesn't implement.
@@ -86,7 +88,7 @@ pub enum StorageErrorKind {
     Other(String),
 }
 
-pub const FORK_EXPLANATION: &str = "The repo file holds a repo info without the filesystem-layout-v1 writer feature whose bytes are no version file of repo.d: a fork; or the standard repo info of an interrupted conversion from the standard layout, which rerunning convert_to_filesystem_layout() completes; or a copy of a version that a stale listing didn't show, in which case running the operation again once listings refresh succeeds";
+pub const FORK_EXPLANATION: &str = "A fork comes from something that doesn't implement the filesystem layout, such as Icechunk 2.3 or older, overwriting the repo file: the repo file and repo.d then hold diverging histories, and recovery is manual. The same check also reports the standard repo info of an interrupted conversion from the standard layout, which rerunning convert_to_filesystem_layout() completes, and a copy of a version that a stale listing didn't show, which running the operation again once listings refresh clears";
 
 impl StorageErrorKind {
     pub fn is_throttled(&self) -> bool {

@@ -49,9 +49,8 @@ pub struct RepoStatus {
     pub limited_availability_reason: Option<String>,
 }
 
-/// A `RepoStatus` table exactly as stored: the raw availability, and the
-/// `underlying` status when this is the gate of a repo info that lists writer
-/// features.
+/// A `RepoStatus` table exactly as stored. Notice this needs to be interpreted
+/// according to spec 2.2
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StoredRepoStatus {
     #[serde(serialize_with = "serialize_raw_availability")]
@@ -73,8 +72,7 @@ fn serialize_raw_availability<S: serde::Serializer>(
 }
 
 impl StoredRepoStatus {
-    /// The encoding of `status` in a repo info listing `writer_features`: the
-    /// status itself without features, otherwise the gate wrapping it.
+    /// Encode `status` in a repo info potentially listing `writer_features`
     pub(crate) fn new(status: &RepoStatus, writer_features: &[FeatureName]) -> Self {
         let own = StoredRepoStatus {
             availability: status.availability.into(),
@@ -115,8 +113,7 @@ impl StoredRepoStatus {
     }
 
     /// The repository's own status: `underlying` when present. `Offline` and
-    /// undefined availabilities read as `ReadOnly`, with a reason naming the
-    /// stored value before any stored reason.
+    /// undefined availabilities read as `ReadOnly`
     pub fn repo_status(&self) -> RepoStatus {
         let own = self.underlying.as_deref().unwrap_or(self);
         let stored_reason = own.limited_availability_reason.as_deref();
@@ -147,8 +144,6 @@ impl StoredRepoStatus {
         RepoStatus { availability, set_at: own.set_at, limited_availability_reason }
     }
 
-    /// The defects that make this the status of a malformed repo info that
-    /// lists `writer_features` (raw).
     fn shape_defects(&self, writer_features: &[FeatureName]) -> Vec<String> {
         let mut defects = Vec::new();
         match (&self.underlying, writer_features.is_empty()) {
@@ -259,15 +254,19 @@ impl RepoHeader {
     }
 }
 
-/// The change [`RepoInfo::check_writable_shape`] is checked for.
+/// The change [`RepoInfo::check_writable_shape`] checks a repo info for.
+///
+/// The shape is how the status and the writer features are stored: features
+/// sorted and unique, and a `ReadOnly` gate over an underlying status exactly
+/// when features are listed. A malformed shape is readable, but only a
+/// status-only change may write over it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WritableShapeMode {
-    /// Any change other than a status-only one.
+    /// Any change but a status-only one: the shape must be well formed.
     AnyChange,
-    /// A change of the status alone. Returns `Ok` for every shape, malformed
-    /// writer features included: the change writes a well-formed status, and
-    /// checking that the implementation implements every listed feature
-    /// (check 1) is the caller's job.
+    /// A change of the status alone: any shape passes, since the change
+    /// rewrites the status well formed. Checking that every listed feature is
+    /// implemented is the caller's job.
     StatusOnlyChange,
 }
 
@@ -340,8 +339,7 @@ pub enum UpdateType {
         to_version: SpecVersionBin,
     },
     RepoStatusChangedUpdate {
-        /// The new status, as stored: the gate when the repo info listed
-        /// writer features. [`StoredRepoStatus::repo_status`] is the status set.
+        /// The new status, as stored
         status: StoredRepoStatus,
     },
     ConfigChangedUpdate,
@@ -1671,8 +1669,8 @@ impl RepoInfo {
         }
     }
 
-    /// Add and remove writer features, keeping the status: the only way to
-    /// change them. Appends a `RepoStatusChangedUpdate` at `update_time`
+    /// Add and remove writer features, keeping the status.
+    /// Appends a `RepoStatusChangedUpdate` at `update_time`
     /// carrying the full new status, and refuses a change that changes nothing.
     pub fn with_writer_features(
         &self,

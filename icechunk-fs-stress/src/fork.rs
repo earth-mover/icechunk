@@ -13,7 +13,9 @@ use std::{
 use anyhow::Context as _;
 use chrono::{DateTime, TimeDelta, Utc};
 use icechunk::format::{
-    OVERWRITTEN_FILES_PATH, layout_v1,
+    OVERWRITTEN_FILES_PATH,
+    envelope::DEFAULT_COMPRESSION_LEVEL,
+    layout_v1,
     repo_info::{
         DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE, RepoAvailability, RepoInfo, RepoStatus,
     },
@@ -38,7 +40,6 @@ pub const FORK_SLOT: &str = "fork";
 const POLL: Duration = Duration::from_millis(10);
 /// With `fork.repeat`, how long after an erasure the actor forks again.
 const REFORK_AFTER: Duration = Duration::from_millis(500);
-const COMPRESSION_LEVEL: u8 = 3;
 
 /// A fork [`write_fork`] wrote.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +104,7 @@ pub fn fork_bytes(base: &[u8], backup: &str) -> anyhow::Result<Vec<u8>> {
         info.set_status(spec, &online, Some((backup, num_updates)))
     }
     .map_err(format("building the fork"))?;
-    repo_info_file::encode(&fork, spec, COMPRESSION_LEVEL)
+    repo_info_file::encode(&fork, spec, DEFAULT_COMPRESSION_LEVEL)
         .map_err(format("encoding the fork"))
 }
 
@@ -309,13 +310,27 @@ mod tests {
             info.latest_updates().unwrap().map(Result::unwrap).collect();
         assert_eq!(updates.len(), 2, "{updates:?}");
         assert!(matches!(updates[0].0, UpdateType::RepoStatusChangedUpdate { .. }));
-        assert_eq!(layout_v1::attempt_id(&fork).unwrap().as_deref(), Some("repo.1.X"));
+        assert_eq!(
+            layout_v1::change_info(&fork)
+                .unwrap()
+                .attempt
+                .map(|attempt| attempt.id)
+                .as_deref(),
+            Some("repo.1.X")
+        );
 
         // A standard repo info gets a status change.
         let standard = storage_mode::initial_repo_info(&[]).unwrap();
         let fork = fork_bytes(&standard, "repo.2.Y").unwrap();
         assert!(!layout_v1::lists_feature(&fork).unwrap());
-        assert_eq!(layout_v1::attempt_id(&fork).unwrap().as_deref(), Some("repo.2.Y"));
+        assert_eq!(
+            layout_v1::change_info(&fork)
+                .unwrap()
+                .attempt
+                .map(|attempt| attempt.id)
+                .as_deref(),
+            Some("repo.2.Y")
+        );
         assert_ne!(payload_etag(&fork), payload_etag(&standard));
     }
 

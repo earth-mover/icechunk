@@ -1,5 +1,4 @@
-//! The repo info file: the binary header and one zstd frame holding the
-//! [`RepoInfo`](crate::repo_info::RepoInfo) flatbuffer.
+//! The repo info file: encoding and decoding
 
 use chrono::{DateTime, Utc};
 use icechunk_types::ICResultExt as _;

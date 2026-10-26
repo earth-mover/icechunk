@@ -358,7 +358,7 @@ impl RepoD<'_> {
             Err(ProtocolError::Forked(_)) => tracing::error!(
                 %root, %version,
                 "a creation found {root}/{REPO} without {} and not a copy of a version \
-                 of {root}/{REPO_D}, a fork: nothing was published",
+                 of {root}/{REPO_D}, a fork overwritten bypassing {REPO_D}: nothing was published",
                 layout_v1::FEATURE
             ),
             Err(ProtocolError::MirrorUnreadable(_)) => tracing::error!(

@@ -283,9 +283,7 @@ fn format_undecodable_vcc(url_prefix: &str, name: &Option<String>) -> String {
     };
     format!(
         "a virtual chunk in this repository resolves to the url prefix {url_prefix}{container}, \
-         whose store settings this Icechunk library can't decode: a kind of storage added by \
-         a later Icechunk version, or one this build doesn't include (the JavaScript/WASM \
-         build has no GCS, Azure or local filesystem support). Its chunks can't be read"
+         whose store settings this Icechunk library can't decode. Its chunks can't be read"
     )
 }
 

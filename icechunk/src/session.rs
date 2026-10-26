@@ -171,7 +171,7 @@ pub enum SessionErrorKind {
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
     /// The commit or flush landed, but the storage found the repository forked.
     #[error(
-        "snapshot {snapshot} is durable (repo info version {new_version}) and must not be retried, but the repository is forked; see the recovery steps for a forked repository in the filesystem storage documentation: {detail}"
+        "snapshot {snapshot} is durable (repo info version {new_version}) and must not be retried, but the repository is forked (its repo file was overwritten bypassing repo.d); see the recovery steps for a forked repository in the filesystem storage documentation: {detail}"
     )]
     CommitDurableButRepositoryForked {
         snapshot: SnapshotId,

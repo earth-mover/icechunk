@@ -6,7 +6,7 @@ use std::{fs, io, path::Path};
 
 use bytes::Bytes;
 use icechunk_format::{
-    OVERWRITTEN_FILES_PATH,
+    IcechunkResult, OVERWRITTEN_FILES_PATH,
     layout_v1::{self, Attempt},
 };
 use uuid::Uuid;
@@ -71,8 +71,8 @@ impl Checked {
 enum Search {
     /// An entry names the attempt.
     Named,
-    /// It didn't find the attempt, but passed the path right below it, or
-    /// the end of the ops log: the attempt isn't in it.
+    /// It didn't find the attempt, but reached its `base_id` or the end of
+    /// the ops log: the attempt isn't in it.
     Absent,
     /// It stopped before either: a file is missing, or it read
     /// [`OPS_LOG_FILES`] files.
@@ -83,34 +83,51 @@ enum Search {
 /// the storage's required features at creation and copies them on every
 /// update, so bytes without it derive from a version that an interrupted
 /// conversion to the standard layout made current.
-pub(crate) fn check_change_bytes(bytes: &[u8]) -> Result<(), ProtocolError> {
-    match layout_v1::lists_feature(bytes) {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(ProtocolError::ConversionInProgress(format!(
+pub(crate) fn check_change_bytes(bytes: Bytes) -> Result<ChangeBytes, ProtocolError> {
+    let info = layout_v1::change_info(&bytes).map_err(|err| {
+        ProtocolError::Other(format!(
+            "the new repo info of a change doesn't decode, nothing was written: {err}"
+        ))
+    })?;
+    if !info.lists_feature {
+        return Err(ProtocolError::ConversionInProgress(format!(
             "the new repo info doesn't list {}: it derives from a version that an \
              interrupted conversion to the standard layout made current; nothing was \
              written",
             layout_v1::FEATURE
-        ))),
-        Err(err) => Err(ProtocolError::Other(format!(
-            "the new repo info of a change doesn't decode, nothing was written: {err}"
-        ))),
+        )));
+    }
+    Ok(ChangeBytes { bytes, attempt: info.attempt })
+}
+
+/// The new repo info of a change, decoded once, by [`check_change_bytes`].
+#[derive(Debug)]
+pub(crate) struct ChangeBytes {
+    pub(super) bytes: Bytes,
+    attempt: Option<Attempt>,
+}
+
+impl ChangeBytes {
+    /// Without the check of step 1: the conversion to the standard layout
+    /// writes bytes without the feature.
+    pub(super) fn unchecked(bytes: Bytes) -> IcechunkResult<Self> {
+        let attempt = layout_v1::change_info(&bytes)?.attempt;
+        Ok(Self { bytes, attempt })
     }
 }
 
 impl RepoD<'_> {
-    /// Changes version `base` to `new_bytes`, if `base` is current, then
+    /// Changes version `base` to `change`, if `base` is current, then
     /// publishes the new version as the mirror before returning. A change
     /// that landed returns `Updated` whatever its publication did, logging
     /// what went wrong, except when the publication found a fork:
-    /// [`ProtocolError::ForkedAfterUpdate`]. The caller checked the bytes with
-    /// [`check_change_bytes`].
+    /// [`ProtocolError::ForkedAfterUpdate`].
     pub(crate) fn change(
         &self,
-        new_bytes: &[u8],
+        change: &ChangeBytes,
         base: &Version,
     ) -> Result<UpdateOutcome, ProtocolError> {
-        let Attempted { outcome, read } = self.attempt_change(new_bytes, base)?;
+        let Attempted { outcome, read } = self.attempt_change(change, base)?;
         let UpdateOutcome::Updated(new) = outcome else {
             return Ok(outcome);
         };
@@ -120,7 +137,7 @@ impl RepoD<'_> {
         let known: Vec<Hash> =
             [base, &new].into_iter().chain(&read).map(|v| v.hash().clone()).collect();
         let mirror = self.root.join(REPO);
-        let failed = match self.publish(&new, Some(new_bytes), &known) {
+        let failed = match self.publish(&new, Some(&change.bytes), &known) {
             Ok(_) => None,
             Err(ProtocolError::Forked(detail)) => {
                 return Err(ProtocolError::ForkedAfterUpdate {
@@ -129,7 +146,8 @@ impl RepoD<'_> {
                 });
             }
             Err(ProtocolError::MirrorUnreadable(_)) => Some(
-                "it couldn't be read or decoded, so a fork can't be ruled out"
+                "it couldn't be read or decoded, so a fork (a repo file overwritten bypassing \
+                 repo.d) can't be ruled out"
                     .to_string(),
             ),
             Err(err) => Some(format!("{err:?}")),
@@ -154,9 +172,10 @@ impl RepoD<'_> {
     /// it is the only caller that writes bytes without the feature.
     pub(super) fn attempt_change(
         &self,
-        new_bytes: &[u8],
+        change: &ChangeBytes,
         base: &Version,
     ) -> Result<Attempted, ProtocolError> {
+        let new_bytes = &change.bytes;
         let new = base.next(Hash::of(new_bytes))?;
         let dir = self.dir();
         let stage = dir.join(stage_name(Uuid::new_v4()));
@@ -220,7 +239,7 @@ impl RepoD<'_> {
                 if self.hooks.sabotaged(Sabotage::TrustRenameEnoent) {
                     return Ok(UpdateOutcome::Updated(new).into());
                 }
-                self.after_failed_rename(new_bytes, base, new)
+                self.after_failed_rename(change.attempt.as_ref(), base, new)
             }
             // The content file stays; the sweep owns it.
             Err(err) => Err(err.into()),
@@ -235,7 +254,9 @@ impl RepoD<'_> {
         new_bytes: &[u8],
         base: &Version,
     ) -> Result<UpdateOutcome, ProtocolError> {
-        Ok(self.attempt_change(new_bytes, base)?.outcome)
+        let change = ChangeBytes::unchecked(Bytes::copy_from_slice(new_bytes))
+            .map_err(|err| ProtocolError::Other(err.to_string()))?;
+        Ok(self.attempt_change(&change, base)?.outcome)
     }
 
     /// The marker was not at our base, or our rename landed and its reply
@@ -245,7 +266,7 @@ impl RepoD<'_> {
     /// listing, the lost-reply check decides.
     fn after_failed_rename(
         &self,
-        new_bytes: &[u8],
+        attempt: Option<&Attempt>,
         base: &Version,
         new: Version,
     ) -> Result<Attempted, ProtocolError> {
@@ -267,7 +288,7 @@ impl RepoD<'_> {
                     &new
                 };
                 self.unlink_version(dead);
-                self.discard_backup(new_bytes);
+                self.discard_backup(attempt);
                 Ok(UpdateOutcome::NotOnLatestVersion.into())
             }
             // Superseded, whether or not our rename landed: our version file
@@ -279,11 +300,11 @@ impl RepoD<'_> {
                 {
                     return Ok(UpdateOutcome::Updated(new).into());
                 }
-                let checked = self.lost_reply_check(new_bytes, base, &new);
+                let checked = self.lost_reply_check(attempt, base, &new);
                 self.unlink_version(&new);
                 let checked = checked?;
                 if let Checked::Lost(_) = checked {
-                    self.discard_backup(new_bytes);
+                    self.discard_backup(attempt);
                 }
                 Ok(checked.attempted(new))
             }
@@ -294,13 +315,13 @@ impl RepoD<'_> {
                 if ack_unproven() {
                     return Ok(UpdateOutcome::Updated(new).into());
                 }
-                let checked = self.lost_reply_check(new_bytes, base, &new)?;
+                let checked = self.lost_reply_check(attempt, base, &new)?;
                 if matches!(&checked, Checked::Landed(read) if *read == new) {
                     fsync_dir(&dir)?;
                     self.tidy_up(&new, base);
                 }
                 if let Checked::Lost(_) = checked {
-                    self.discard_backup(new_bytes);
+                    self.discard_backup(attempt);
                 }
                 Ok(checked.attempted(new))
             }
@@ -311,14 +332,9 @@ impl RepoD<'_> {
     /// change moved the marker past `N`, so `latest.<N>.<h>` is gone for good
     /// and our rename, even one retransmitted later, can't land; no version
     /// will name the backup. Errors are ignored.
-    fn discard_backup(&self, new_bytes: &[u8]) {
-        let backup = match layout_v1::attempt_id(new_bytes) {
-            Ok(Some(backup)) => backup,
-            Ok(None) => return,
-            Err(err) => {
-                tracing::debug!(%err, "could not read the attempt's backup path");
-                return;
-            }
+    fn discard_backup(&self, attempt: Option<&Attempt>) {
+        let Some(Attempt { id: backup, .. }) = attempt else {
+            return;
         };
         let key = format!("{OVERWRITTEN_FILES_PATH}/{backup}");
         let path = match key_path(self.root, &key) {
@@ -351,8 +367,8 @@ impl RepoD<'_> {
         .unwrap_or(Ok(None))
     }
 
-    /// The lost-reply check: whether the attempt `new` that wrote `new_bytes`
-    /// became a version, although the marker isn't at it. Core draws a new
+    /// The lost-reply check: whether `attempt`, which would make version
+    /// `new`, became a version, although the marker isn't at it. Core draws a new
     /// backup path for every attempt and records it on the entry that was
     /// newest before the attempt, so it is in the ops log of the current
     /// version if and only if the attempt landed. Reads the current version,
@@ -363,7 +379,7 @@ impl RepoD<'_> {
     /// which descends from the change at `N+1`, and its search decided.
     fn lost_reply_check(
         &self,
-        new_bytes: &[u8],
+        attempt: Option<&Attempt>,
         base: &Version,
         new: &Version,
     ) -> Result<Checked, ProtocolError> {
@@ -388,9 +404,9 @@ impl RepoD<'_> {
         let search = if version == *new {
             Search::Named
         } else {
-            match layout_v1::attempt(new_bytes).map_err(|err| self.undecodable(err))? {
-                Some(Attempt { id, below }) => {
-                    self.search_ops_log(bytes, &id, below.as_deref())?
+            match attempt {
+                Some(Attempt { id, base_id }) => {
+                    self.search_ops_log(bytes, id, base_id.as_deref())?
                 }
                 None => Search::Undecided,
             }
@@ -404,14 +420,13 @@ impl RepoD<'_> {
 
     /// Searches the backup paths of the ops log of `current`, newest first,
     /// for `attempt`, following `repo_before_updates` through at most
-    /// [`OPS_LOG_FILES`] files. `below`, the path right below `attempt` in its
-    /// own ops log, only decides [`Search::Absent`]: the search goes as far
-    /// with it as without.
+    /// [`OPS_LOG_FILES`] files. Reaching `base_id` only decides
+    /// [`Search::Absent`]: the search goes as far with it as without.
     fn search_ops_log(
         &self,
         current: Bytes,
         attempt: &str,
-        below: Option<&str>,
+        base_id: Option<&str>,
     ) -> Result<Search, ProtocolError> {
         let mut file = current;
         let mut passed = false;
@@ -422,7 +437,7 @@ impl RepoD<'_> {
                 if path == attempt {
                     return Ok(Search::Named);
                 }
-                passed |= Some(path.as_str()) == below;
+                passed |= Some(path.as_str()) == base_id;
             }
             let Some(before) = named.repo_before_updates else {
                 return Ok(Search::Absent);
@@ -521,6 +536,10 @@ mod tests {
 
     use super::{super::testing::*, UpdateOutcome::*, *};
     use crate::hooks::{NoHooks, Point, Sabotage};
+
+    fn change_bytes(bytes: &[u8]) -> ChangeBytes {
+        ChangeBytes::unchecked(Bytes::copy_from_slice(bytes)).unwrap()
+    }
 
     fn v1_bytes() -> Vec<u8> {
         repo_info(1)
@@ -857,7 +876,7 @@ mod tests {
         bytes: &[u8],
         base: &Version,
     ) -> Result<Attempted, ProtocolError> {
-        RepoD { root, hooks }.attempt_change(bytes, base)
+        RepoD { root, hooks }.attempt_change(&change_bytes(bytes), base)
     }
 
     /// Commits from `base`, made by other writers without hooks: each one's
@@ -950,9 +969,9 @@ mod tests {
         assert!(root.path().join("overwritten/other.1").exists());
     }
 
-    /// The search passes the entry below the attempt's, which names the
-    /// attempt that made the base, without finding the attempt: proven not
-    /// landed, although the ops log goes on beyond the files it reads.
+    /// The search reaches the attempt's `base_id` without finding the
+    /// attempt: proven not landed, although the ops log goes on beyond the
+    /// files it reads.
     #[test]
     fn a_superseded_attempt_the_search_passes_deletes_its_backup() {
         let root = tempfile::tempdir().unwrap();
@@ -975,11 +994,11 @@ mod tests {
         assert!(!backup.exists());
     }
 
-    /// The search passes the entry below the attempt's, then the next
-    /// ops-log file is missing: the entries newer than the one it passed are
-    /// all it needed, so the attempt is proven not landed.
+    /// The search reaches the attempt's `base_id`, then the next ops-log
+    /// file is missing: the entries above `base_id` are all it needed, so the
+    /// attempt is proven not landed.
     #[test]
-    fn a_search_that_passed_below_and_then_misses_a_file_deletes_the_backup() {
+    fn a_search_that_reached_the_base_id_and_then_misses_a_file_deletes_the_backup() {
         let root = tempfile::tempdir().unwrap();
         let v0 = seed(root.path());
         let earlier: Vec<String> = (0..4).map(|i| format!("earlier.{i}")).collect();
@@ -1232,7 +1251,7 @@ mod tests {
         bytes: &[u8],
         base: &Version,
     ) -> Result<UpdateOutcome, ProtocolError> {
-        RepoD { root, hooks }.change(bytes, base)
+        RepoD { root, hooks }.change(&change_bytes(bytes), base)
     }
 
     fn mirror(root: &Path) -> Option<Vec<u8>> {
@@ -1325,11 +1344,11 @@ mod tests {
 
     #[test]
     fn a_change_refuses_bytes_without_the_feature() {
-        let err = check_change_bytes(&featureless_repo_info(1)).unwrap_err();
+        let err = check_change_bytes(featureless_repo_info(1).into()).unwrap_err();
         assert!(matches!(&err, ProtocolError::ConversionInProgress(_)), "{err:?}");
-        let err = check_change_bytes(b"not a repo info").unwrap_err();
+        let err = check_change_bytes(Bytes::from_static(b"not a repo info")).unwrap_err();
         assert!(matches!(&err, ProtocolError::Other(_)), "{err:?}");
-        check_change_bytes(&v1_bytes()).unwrap();
+        check_change_bytes(v1_bytes().into()).unwrap();
     }
 
     // ── Sabotages: each breaks the protocol in its own way ──────────────────

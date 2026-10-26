@@ -713,8 +713,9 @@ async fn a_repository_converts_to_the_standard_layout_and_back() {
         BTreeSet::from(["overwritten".to_string(), "repo".to_string()])
     );
     let standard = mirror(dir.path());
-    assert!(!icechunk_format::layout_v1::lists_feature(&standard).unwrap());
-    let attempt = icechunk_format::layout_v1::attempt_id(&standard).unwrap().unwrap();
+    let info = icechunk_format::layout_v1::change_info(&standard).unwrap();
+    assert!(!info.lists_feature);
+    let attempt = info.attempt.unwrap().id;
     assert_eq!(
         std::fs::read(dir.path().join("overwritten").join(attempt)).unwrap(),
         current

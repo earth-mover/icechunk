@@ -23,7 +23,10 @@ use regex::bytes::Regex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
-    format::{IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, Path},
+    format::{
+        IcechunkFormatError, IcechunkFormatErrorKind, IcechunkResult, Path,
+        envelope::DEFAULT_COMPRESSION_LEVEL,
+    },
     storage::{self, RetriesSettings},
     virtual_chunks::{UndecodableVirtualChunkContainer, VirtualChunkContainer},
 };
@@ -106,7 +109,7 @@ impl CompressionConfig {
     }
 
     pub fn level(&self) -> u8 {
-        self.level.unwrap_or(3)
+        self.level.unwrap_or(DEFAULT_COMPRESSION_LEVEL)
     }
 
     pub fn merge(&self, other: Self) -> Self {

@@ -17,6 +17,7 @@ use icechunk::{
     asset_manager::async_reader_to_bytes,
     format::{
         IcechunkFormatError, OVERWRITTEN_FILES_PATH,
+        envelope::DEFAULT_COMPRESSION_LEVEL,
         format_constants::SpecVersionBin,
         repo_info::{RepoInfo, UpdateType},
         repo_info_file,
@@ -60,8 +61,6 @@ pub const METADATA_KEY: &str = "stress";
 /// Ops-log entries per repo info file: few, so that paging the ops log out to
 /// `repo_before_updates` is exercised.
 pub const NUM_UPDATES_PER_FILE: u16 = 50;
-
-const COMPRESSION_LEVEL: u8 = 3;
 
 /// The stress metadata of every repo info a worker writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,9 +125,9 @@ pub fn decode(bytes: &[u8]) -> anyhow::Result<Decoded> {
 }
 
 /// The backup path the update that made `info` wrote on its predecessor
-/// entry, read as `layout_v1::attempt_id` reads it from the file, without
-/// decoding the file again: when paging moved the predecessor out of this
-/// file, the file's `repo_before_updates`.
+/// entry, `layout_v1::Attempt::id`, without decoding the file again: when
+/// paging moved the predecessor out of this file, the file's
+/// `repo_before_updates`.
 fn attempt(info: &RepoInfo) -> anyhow::Result<Option<String>> {
     let read = || format_error("reading the attempt");
     let mut entries = info.latest_updates().map_err(read())?;
@@ -195,7 +194,7 @@ pub fn next_repo_info(
 fn encode(info: &RepoInfo) -> anyhow::Result<Bytes> {
     let spec_version =
         info.spec_version().map_err(format_error("reading the spec version"))?;
-    let bytes = repo_info_file::encode(info, spec_version, COMPRESSION_LEVEL)
+    let bytes = repo_info_file::encode(info, spec_version, DEFAULT_COMPRESSION_LEVEL)
         .map_err(format_error("encoding"))?;
     Ok(bytes.into())
 }
@@ -759,8 +758,9 @@ mod tests {
             assert_eq!(decoded.payload, Some(payload));
             assert_eq!(decoded.attempt.as_ref(), Some(&backup));
             // The filesystem storage's lost-reply check reads the same.
-            assert_eq!(decoded.attempt, layout_v1::attempt_id(&bytes).unwrap());
-            assert!(layout_v1::lists_feature(&bytes).unwrap());
+            let info = layout_v1::change_info(&bytes).unwrap();
+            assert_eq!(decoded.attempt, info.attempt.map(|attempt| attempt.id));
+            assert!(info.lists_feature);
             backups.push(backup);
         }
         let info = decode(&bytes).unwrap().info;
@@ -782,7 +782,8 @@ mod tests {
             let bytes = repo_info_file::encode(&info, spec_version, 3).unwrap();
             assert_eq!(info.latest_updates().unwrap().count(), 1);
             assert_eq!(attempt(&info).unwrap().as_deref(), Some(backup));
-            assert_eq!(attempt(&info).unwrap(), layout_v1::attempt_id(&bytes).unwrap());
+            let read = layout_v1::change_info(&bytes).unwrap().attempt;
+            assert_eq!(attempt(&info).unwrap(), read.map(|attempt| attempt.id));
         }
     }
 

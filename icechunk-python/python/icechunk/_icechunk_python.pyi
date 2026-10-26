@@ -3890,8 +3890,9 @@ class RebaseFailedError(ConflictError):
         """
 
 class RepositoryForkedError(IcechunkError):
-    """The repository is forked: its mirror `repo` holds a repo info that is
-    no version of the repository's `repo.d/`.
+    """The repository is forked: something that doesn't implement the
+    filesystem layout, such as Icechunk 2.3 or older, overwrote its `repo`
+    file, so `repo` and `repo.d/` hold diverging histories.
 
     Nothing was published or deleted. Recovery is manual: see the filesystem
     storage guide.

@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use super::{
     FIRST_BACKOFF, OPS_LOG_FILES, ProtocolError, RepoD, TIME_SCALE,
-    commit::UpdateOutcome,
+    commit::{ChangeBytes, UpdateOutcome},
     discard_tmp_dir,
     lifecycle::{FEATURES, RootRepo, unix_millis, write_marker},
     mirror::{ForkCheck, PublishOutcome, REREADS, is_gone, is_stale, with_root_lock},
@@ -565,9 +565,10 @@ impl RepoD<'_> {
                 now,
                 num_updates,
             )
+            .and_then(|bytes| ChangeBytes::unchecked(Bytes::from(bytes)))
             .map_err(|err| unconvertible(&current, &err))?;
             let outcome = if self.hooks.sabotaged(Sabotage::ToStandardWithoutChange) {
-                UpdateOutcome::Updated(version.next(Hash::of(&converted))?)
+                UpdateOutcome::Updated(version.next(Hash::of(&converted.bytes))?)
             } else {
                 self.attempt_change(&converted, &version)
                     .map_err(|err| {
@@ -583,7 +584,7 @@ impl RepoD<'_> {
                     self.hooks.at(to_standard(ToStandardStep::Change));
                     return Ok(Some(Featureless {
                         version: new,
-                        bytes: Bytes::from(converted),
+                        bytes: converted.bytes,
                         replaced: Some(version),
                     }));
                 }
@@ -896,7 +897,7 @@ mod tests {
             matches!(entries[0].0, UpdateType::RepoStatusChangedUpdate { .. }),
             "{entries:?}"
         );
-        let attempt = layout_v1::attempt_id(&bytes).unwrap().unwrap();
+        let attempt = layout_v1::change_info(&bytes).unwrap().attempt.unwrap().id;
         assert_eq!(backup(root, &attempt), standard);
         version
     }
@@ -1460,7 +1461,7 @@ mod tests {
             };
             assert_eq!(kinds(&entries[1..]), kinds(&older));
         }
-        let attempt = layout_v1::attempt_id(&bytes).unwrap().unwrap();
+        let attempt = layout_v1::change_info(&bytes).unwrap().attempt.unwrap().id;
         assert_eq!(backup(root, &attempt), before);
         bytes
     }
@@ -1476,9 +1477,9 @@ mod tests {
             Some(ConversionOutcome::Converted)
         );
         assert_standard(root.path(), &bytes);
-        let attempt =
-            layout_v1::attempt_id(&fs::read(root.path().join("repo")).unwrap()).unwrap();
-        assert_eq!(Hash::of(&backup(root.path(), &attempt.unwrap())), *version.hash());
+        let mirror = fs::read(root.path().join("repo")).unwrap();
+        let attempt = layout_v1::change_info(&mirror).unwrap().attempt.unwrap().id;
+        assert_eq!(Hash::of(&backup(root.path(), &attempt)), *version.hash());
         assert_eq!(backups(root.path()).len(), backups_before + 1);
         assert_eq!(
             hooks.reached(),
