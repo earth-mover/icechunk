@@ -18,7 +18,7 @@ use icechunk::storage::{GetModifiedResult, StorageContext};
 use rand::{RngExt as _, rngs::StdRng};
 
 use crate::{
-    config::{Backend, Mode, RunConfig, WorkerId, write_synced},
+    config::{Backend, Mode, RunConfig, WorkerId, write_new_linked},
     control::{
         BARRIER_POLL, Control, WaitOutcome, read_control, wait_for_go_reporting,
         write_control,
@@ -328,7 +328,8 @@ pub async fn workers_with_go_after(
         sampler_error,
     };
     let path = root.host_done(&tag);
-    write_synced(&path, &serde_json::to_vec_pretty(&done)?)
+    // `verify` polls for it and reads it as soon as it appears.
+    write_new_linked(&path, root.root(), &serde_json::to_vec_pretty(&done)?)
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(done)
 }

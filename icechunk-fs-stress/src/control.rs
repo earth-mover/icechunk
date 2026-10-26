@@ -11,14 +11,13 @@ use std::{
     collections::BTreeSet,
     fs, io,
     io::Write as _,
-    os::unix::fs::MetadataExt as _,
     time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Context as _, bail};
 
 use crate::{
-    config::write_synced,
+    config::write_new_linked,
     env_info::{HostInfo, host_info},
     layout::{RunRoot, is_valid_tag},
     progress::{BRIEF_EVERY, Progress},
@@ -150,14 +149,9 @@ impl<'a> StopCheck<'a> {
 pub fn register(root: &RunRoot, info: &HostInfo) -> anyhow::Result<()> {
     let path = root.host_info(&info.tag);
     let bytes = serde_json::to_vec_pretty(info)?;
-    let written = write_synced(&path, &bytes);
-    if let Err(err) = &written
-        && err.kind() != io::ErrorKind::AlreadyExists
-    {
-        // Best effort: a partial file would still count as a registration.
-        let _ = fs::remove_file(&path);
-    }
-    written.with_context(|| format!("registering {}", path.display()))
+    // Staged in the root: `hosts/` must hold registrations only.
+    write_new_linked(&path, root.root(), &bytes)
+        .with_context(|| format!("registering {}", path.display()))
 }
 
 /// The tags registered under `hosts/`, which must contain nothing else.
@@ -333,29 +327,23 @@ fn unregister(root: &RunRoot, tag: &str) -> anyhow::Result<()> {
 /// the go to `control`. Returns whether this call decided.
 fn try_go(root: &RunRoot, participants: &BTreeSet<String>) -> anyhow::Result<bool> {
     let go = root.go();
-    let staging = root.root().join(format!("go.{}.tmp", uuid::Uuid::new_v4()));
-    let decided = write_synced(&staging, encode_participants(participants)?.as_bytes())
-        .and_then(|()| match fs::hard_link(&staging, &go) {
-            Ok(()) => Ok(true),
-            // On NFS a retransmitted LINK can report EEXIST for our own
-            // link; the staged file's link count tells.
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                Ok(fs::metadata(&staging)?.nlink() == 2)
-            }
-            Err(err) => Err(err),
-        })
-        .with_context(|| format!("writing {}", go.display()))
-        .and_then(|decided| {
-            if decided {
-                let participants = participants.clone();
-                write_control(root, &Control::Go { participants })
-                    .context("writing the go to control")?;
-            }
-            Ok(decided)
-        });
-    // Best effort: `go` holds the content, and an error being reported wins.
-    let _ = fs::remove_file(&staging);
-    decided
+    let decided = match write_new_linked(
+        &go,
+        root.root(),
+        encode_participants(participants)?.as_bytes(),
+    ) {
+        Ok(()) => true,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => false,
+        Err(err) => {
+            return Err(err).with_context(|| format!("writing {}", go.display()));
+        }
+    };
+    if decided {
+        let participants = participants.clone();
+        write_control(root, &Control::Go { participants })
+            .context("writing the go to control")?;
+    }
+    Ok(decided)
 }
 
 /// The participant list decided at the go.

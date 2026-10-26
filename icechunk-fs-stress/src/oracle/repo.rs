@@ -61,7 +61,7 @@ pub async fn check_repo(
 
     let branches = repo.list_branches().await.map_err(read_error("listing branches"))?;
     let mut creates: HashMap<&str, Vec<(Uuid, Option<&OpResult>)>> = HashMap::new();
-    for &(_, id, op, result) in &ops {
+    for &LoggedOp { id, op, result, .. } in &ops {
         if let Op::CreateBranch { branch } = op {
             creates.entry(branch).or_default().push((id, result));
         }
@@ -124,7 +124,8 @@ pub async fn check_repo(
     let mut acks = BranchAcks::default();
     // The acked commits that landed as acked, with the array they wrote.
     let mut read_backs: Vec<(Uuid, &SnapshotId, Path)> = Vec::new();
-    for (index, &(writer, id, op, result)) in ops.iter().enumerate() {
+    for (index, &LoggedOp { writer, id, intent_ms, op, result }) in ops.iter().enumerate()
+    {
         let is_commit = matches!(op, Op::BranchCommit { .. } | Op::MainCommit);
         if is_commit && unreadable.contains(commit_branch(op)) {
             continue;
@@ -167,7 +168,13 @@ pub async fn check_repo(
                 let found =
                     landed.get(branch).is_some_and(|commits| commits.contains_key(&id));
                 if !found
-                    && removals.removed_commit(index, writer, op, &mut landed_deletions)
+                    && removals.removed_commit(
+                        index,
+                        writer,
+                        intent_ms,
+                        op,
+                        &mut landed_deletions,
+                    )
                 {
                     continue;
                 }
@@ -230,7 +237,7 @@ pub async fn check_repo(
 
     let tag_intents: HashSet<&str> = ops
         .iter()
-        .filter_map(|(_, _, op, _)| match op {
+        .filter_map(|LoggedOp { op, .. }| match op {
             Op::Tag { name, .. } => Some(name.as_str()),
             _ => None,
         })
@@ -322,6 +329,10 @@ impl<'a> BranchAcks<'a> {
     }
 }
 
+/// How far a host's clock may step back between a commit's intent and its
+/// flush, for the expiration rule of [`Removals::removed_commit`].
+const CLOCK_STEP_ALLOWANCE_MS: i64 = 5_000;
+
 /// Deletions by name, in log order, with their positions.
 type Deletions<'a> = HashMap<&'a str, Vec<(usize, Uuid, Option<&'a OpResult>)>>;
 
@@ -329,8 +340,8 @@ type Deletions<'a> = HashMap<&'a str, Vec<(usize, Uuid, Option<&'a OpResult>)>>;
 /// counts, whatever its outcome: a failed one may have landed.
 #[derive(Debug)]
 struct Removals<'a> {
-    /// Some expiration was logged.
-    expired: bool,
+    /// The latest cutoff of the logged expirations.
+    expire_cutoff_ms: Option<i64>,
     /// Each branch's deletions in log order, with their positions.
     branch_deletions: Deletions<'a>,
     tag_deletions: Deletions<'a>,
@@ -344,7 +355,7 @@ struct Removals<'a> {
 impl<'a> Removals<'a> {
     fn new(ops: &[LoggedOp<'a>], landed: &HashMap<&str, Landed>) -> Self {
         let mut removals = Self {
-            expired: false,
+            expire_cutoff_ms: None,
             branch_deletions: HashMap::new(),
             tag_deletions: HashMap::new(),
             landed_positions: HashMap::new(),
@@ -353,7 +364,7 @@ impl<'a> Removals<'a> {
         let is_landed = |branch: &str, id: &Uuid| {
             landed.get(branch).is_some_and(|c| c.contains_key(id))
         };
-        for (index, &(writer, id, op, result)) in ops.iter().enumerate() {
+        for (index, &LoggedOp { writer, id, op, result, .. }) in ops.iter().enumerate() {
             if matches!(op, Op::BranchCommit { .. } | Op::MainCommit) {
                 let branch = commit_branch(op);
                 if is_landed(branch, &id) {
@@ -362,7 +373,10 @@ impl<'a> Removals<'a> {
                 }
             }
             match op {
-                Op::Expire { .. } => removals.expired = true,
+                Op::Expire { older_than_ms } => {
+                    removals.expire_cutoff_ms =
+                        removals.expire_cutoff_ms.max(Some(*older_than_ms));
+                }
                 Op::DeleteBranch { branch } => {
                     removals
                         .branch_deletions
@@ -392,13 +406,17 @@ impl<'a> Removals<'a> {
 
     /// Whether an expiration or a deletion of its branch logged after it
     /// explains why the commit `writer` logged at `index` isn't on its
-    /// branch. Expiration drops a prefix of an ancestry: it can't have
-    /// dropped a commit above one the same slot made to the same branch
-    /// before it, which ended before its intent, that is still there.
+    /// branch. Expiration drops only snapshots flushed before its cutoff,
+    /// and a commit flushes after its intent, by the same host's clock: it
+    /// can't have dropped one whose intent is at or after every cutoff. It
+    /// drops a prefix of an ancestry: it can't have dropped a commit above
+    /// one the same slot made to the same branch before it, which ended
+    /// before its intent, that is still there.
     fn removed_commit(
         &self,
         index: usize,
         writer: &LogName,
+        intent_ms: i64,
         op: &Op,
         landed_deletions: &mut LandedDeletions<'a>,
     ) -> bool {
@@ -407,7 +425,10 @@ impl<'a> Removals<'a> {
             .slot_landed
             .get(&slot)
             .is_some_and(|landed| landed.iter().any(|&at| at < index));
-        if self.expired && !below_a_kept_one {
+        let before_a_cutoff = self.expire_cutoff_ms.is_some_and(|cutoff| {
+            intent_ms < cutoff.saturating_add(CLOCK_STEP_ALLOWANCE_MS)
+        });
+        if before_a_cutoff && !below_a_kept_one {
             return true;
         }
         match op {
@@ -514,8 +535,15 @@ fn conflict_but_landed(
     }
 }
 
-/// An intent with the log it is in and its outcome.
-type LoggedOp<'a> = (&'a LogName, Uuid, &'a Op, Option<&'a OpResult>);
+/// An intent with the log it is in, its time and its outcome.
+#[derive(Debug, Clone, Copy)]
+struct LoggedOp<'a> {
+    writer: &'a LogName,
+    id: Uuid,
+    intent_ms: i64,
+    op: &'a Op,
+    result: Option<&'a OpResult>,
+}
 
 /// Each intent once, in the order its worker logged it, incarnations in
 /// order.
@@ -524,8 +552,14 @@ fn in_log_order<'a>(history: &'a History, intents: &'a Intents) -> Vec<LoggedOp<
     history
         .worker_records()
         .filter_map(|(name, record)| match record {
-            Record::Intent { id, .. } if seen.insert(*id) => {
-                intents.get(id).map(|(op, result, _)| (name, *id, op, result.as_ref()))
+            Record::Intent { t_ms, id, .. } if seen.insert(*id) => {
+                intents.get(id).map(|(op, result, _)| LoggedOp {
+                    writer: name,
+                    id: *id,
+                    intent_ms: *t_ms,
+                    op,
+                    result: result.as_ref(),
+                })
             }
             _ => None,
         })
@@ -542,7 +576,7 @@ pub fn count_operations(history: &History) -> Stats {
 }
 
 fn count(ops: &[LoggedOp<'_>], verdict: &mut Verdict) {
-    for &(_, id, op, result) in ops {
+    for &LoggedOp { id, op, result, .. } in ops {
         if let Op::Cas { .. } = op {
             verdict.violations.push(Violation::Harness {
                 detail: format!("repository-mode intent {id} is {op:?}"),
@@ -1733,6 +1767,31 @@ mod tests {
         let mut expected = vec![branch, main];
         expected.sort();
         assert_eq!(lost_ids(&verdict), expected, "{verdict:?}");
+    }
+
+    /// Expiration drops only what was flushed before its cutoff: a missing
+    /// commit logged after every cutoff, beyond the clock step allowance, is
+    /// lost even with nothing of its slot kept below it.
+    #[tokio::test]
+    async fn expiration_excuses_no_commit_logged_after_its_cutoff() {
+        let (_dir, root, config) = repo_root().await;
+        clean_run(&root, &config).await;
+        let older_than_ms = crate::log::now_ms();
+        let log = forged_log(&root, "gc", 0);
+        let id = Uuid::new_v4();
+        log.append(&intent(id, Op::Expire { older_than_ms })).unwrap();
+        log.append(&outcome(id, OpResult::Ack { snapshot: None })).unwrap();
+
+        // A slot with no commit on `main`, so neither is below a kept one.
+        let [before, after] = [Uuid::new_v4(), Uuid::new_v4()];
+        let log = forged_log(&root, "9", 0);
+        let after_ms = older_than_ms + CLOCK_STEP_ALLOWANCE_MS;
+        for (id, t_ms) in [(before, older_than_ms - 1), (after, after_ms)] {
+            log.append(&Record::Intent { t_ms, id, op: Op::MainCommit }).unwrap();
+            log.append(&ack(id, &SnapshotId::random().to_string())).unwrap();
+        }
+        let verdict = check(&root, &config, false).await;
+        assert_eq!(lost_ids(&verdict), [after], "{verdict:?}");
     }
 
     /// A deletion that visibly didn't land, the commits logged before it

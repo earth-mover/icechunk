@@ -197,6 +197,12 @@ impl RepoD<'_> {
             };
             if let Some(done) = done {
                 self.remove(&stage);
+                if matches!(done, Installed::InPlace(_)) {
+                    // Another publisher's rename put it there, or ours whose
+                    // reply was lost: neither may be durable yet, and GC
+                    // deletes once this publication returns.
+                    fsync_dir(self.root)?;
+                }
                 return Ok(done);
             }
         }

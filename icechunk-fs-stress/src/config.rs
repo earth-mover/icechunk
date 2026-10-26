@@ -324,13 +324,8 @@ impl RunConfig {
         self.validate()?;
         let path = root.run_json();
         let bytes = serde_json::to_vec_pretty(self)?;
-        let staging = root.root().join(format!("run.json.{}", uuid::Uuid::new_v4()));
-        let linked = write_synced(&staging, &bytes)
-            .and_then(|()| fs::hard_link(&staging, &path))
-            .with_context(|| format!("writing {}", path.display()));
-        let removed = fs::remove_file(&staging)
-            .with_context(|| format!("removing {}", staging.display()));
-        linked.and(removed)
+        write_new_linked(&path, root.root(), &bytes)
+            .with_context(|| format!("writing {}", path.display()))
     }
 
     /// `init`'s check that GC, if on, can delete anything during the run.
@@ -459,6 +454,35 @@ pub(crate) fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = fs::OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+/// Creates `path`, which must not exist, with `bytes`: stages them in
+/// `staging_dir` and hard-links the staged file to `path`, so a reader on any
+/// host sees either no file or all of it. `AlreadyExists` if `path` existed.
+pub(crate) fn write_new_linked(
+    path: &Path,
+    staging_dir: &Path,
+    bytes: &[u8],
+) -> std::io::Result<()> {
+    use std::os::unix::fs::MetadataExt as _;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let staging = staging_dir.join(format!("{name}.{}.tmp", uuid::Uuid::new_v4()));
+    let linked = write_synced(&staging, bytes).and_then(|()| {
+        match fs::hard_link(&staging, path) {
+            // On NFS a retransmitted LINK can report EEXIST for our own
+            // link; the staged file's link count tells.
+            Err(err)
+                if err.kind() == std::io::ErrorKind::AlreadyExists
+                    && fs::metadata(&staging)?.nlink() == 2 =>
+            {
+                Ok(())
+            }
+            linked => linked,
+        }
+    });
+    // Best effort: `path` holds the content, and an error being reported wins.
+    let _ = fs::remove_file(&staging);
+    linked
 }
 
 impl Default for FaultConfig {
@@ -806,6 +830,19 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         assert_eq!(names, ["run.json"]);
+    }
+
+    #[test]
+    fn write_new_linked_keeps_the_first_file_and_leaves_no_staging() {
+        let dir = tempfile::tempdir().unwrap();
+        let staging = dir.path().join("staging");
+        fs::create_dir_all(&staging).unwrap();
+        let path = dir.path().join("done.json");
+        write_new_linked(&path, &staging, b"first").unwrap();
+        let err = write_new_linked(&path, &staging, b"second").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        assert_eq!(fs::read_dir(&staging).unwrap().count(), 0);
     }
 
     #[test]

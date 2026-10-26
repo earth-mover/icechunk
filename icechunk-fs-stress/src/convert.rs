@@ -17,9 +17,9 @@ use std::{
     fs, io,
     os::unix::process::ExitStatusExt as _,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, bail, ensure};
@@ -169,6 +169,15 @@ const FIRST_STALE_ROOT_DELAY: Duration =
     Duration::from_millis(if cfg!(test) { 1 } else { 500 });
 const MAX_STALE_ROOT_DELAY: Duration =
     Duration::from_millis(if cfg!(test) { 32 } else { 16_000 });
+
+/// How long a converter may run before the scenario kills it and reports it
+/// hung: converting the scenario's repository takes seconds.
+const CONVERTER_TIMEOUT: Duration =
+    Duration::from_millis(if cfg!(test) { 500 } else { 300_000 });
+/// How long a converter killed for hanging may take to exit. One stuck in the
+/// kernel, as on an unresponsive NFS server, can't, and is left behind.
+const KILLED_CONVERTER_EXIT: Duration = Duration::from_secs(10);
+const CONVERTER_POLL: Duration = Duration::from_millis(50);
 
 /// The delay before the stale-root rerun numbered `k`, from 0.
 fn stale_root_delay(k: u32) -> Duration {
@@ -390,6 +399,11 @@ pub enum Converter {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Run {
     Killed,
+    /// It didn't exit within [`CONVERTER_TIMEOUT`] and was killed; `exited`
+    /// tells whether it exited then.
+    Hung {
+        exited: bool,
+    },
     /// `NothingToConvert` is [`Run::NothingToConvert`].
     Finished(OpResult),
     /// It returned `NothingToConvert`, logged as an `Ack`.
@@ -424,7 +438,13 @@ impl Converter {
                     command.args(["--kill-at", &serde_name(step)?]);
                 }
                 let mut child = command.spawn().context("spawning a converter")?;
-                let status = tokio::task::spawn_blocking(move || child.wait()).await??;
+                let Some(status) = wait_for_exit(&mut child, CONVERTER_TIMEOUT).await?
+                else {
+                    child.kill()?;
+                    let exited =
+                        wait_for_exit(&mut child, KILLED_CONVERTER_EXIT).await?.is_some();
+                    return Ok(Run::Hung { exited });
+                };
                 if status.signal() == Some(libc::SIGKILL) {
                     return Ok(Run::Killed);
                 }
@@ -463,6 +483,23 @@ impl Converter {
                 run
             }
         }
+    }
+}
+
+/// `child`'s exit status, or `None` if it didn't exit within `timeout`.
+async fn wait_for_exit(
+    child: &mut Child,
+    timeout: Duration,
+) -> io::Result<Option<ExitStatus>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
+        tokio::time::sleep(CONVERTER_POLL).await;
     }
 }
 
@@ -769,6 +806,17 @@ impl Scenario<'_> {
                         planted = Some(self.plant(round)?);
                     }
                     continue;
+                }
+                Run::Hung { exited } => {
+                    self.verdict.violations.push(Violation::ConversionEndState {
+                        direction,
+                        detail: format!(
+                            "run {attempt} didn't exit within {} s{}",
+                            CONVERTER_TIMEOUT.as_secs(),
+                            if exited { "" } else { ", nor after a SIGKILL" }
+                        ),
+                    });
+                    return Ok(false);
                 }
                 Run::Finished(result) => (result, false),
                 Run::NothingToConvert => (OpResult::Ack { snapshot: None }, true),
@@ -1180,6 +1228,7 @@ pub(crate) mod tests {
     };
 
     use super::*;
+    use crate::config::write_new_linked;
 
     /// Unwinds the conversion's thread at `at`, without the panic hook's
     /// message, as a kill there leaves the files.
@@ -1291,7 +1340,11 @@ pub(crate) mod tests {
             stragglers: 0,
             sampler_error: None,
         };
-        write_synced(&phase.host_done(tag), &serde_json::to_vec(&done)?)?;
+        write_new_linked(
+            &phase.host_done(tag),
+            phase.root(),
+            &serde_json::to_vec(&done)?,
+        )?;
         Ok(())
     }
 
@@ -1801,6 +1854,31 @@ pub(crate) mod tests {
         // Counted over the logs of the round it stopped in: two commits and
         // the conversion from the standard layout.
         assert_eq!(report.verdict.stats.acks, 3, "{}", report.summary());
+    }
+
+    /// A converter that never exits is killed after the timeout.
+    #[tokio::test]
+    async fn a_hung_converter_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("hang");
+        // Written by a child, so no fork of this process inherits the file
+        // open for writing, which would fail its exec with ETXTBSY.
+        let written = Command::new("sh")
+            .args([
+                "-c",
+                r#"printf '#!/bin/sh\nexec sleep 3600\n' > "$1" && chmod +x "$1""#,
+            ])
+            .arg("sh")
+            .arg(&exe)
+            .status()
+            .unwrap();
+        assert!(written.success());
+        let root = ScenarioRoot::new(dir.path().to_path_buf());
+        let run = Converter::Process(exe)
+            .run(&root, 1, Direction::FromStandard, 0, None)
+            .await
+            .unwrap();
+        assert_eq!(run, Run::Hung { exited: true });
     }
 
     #[tokio::test]
