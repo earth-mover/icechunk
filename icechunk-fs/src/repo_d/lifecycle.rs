@@ -171,9 +171,11 @@ impl RepoD<'_> {
         match self.open_status()? {
             OpenStatus::Ok => Ok(true),
             OpenStatus::NotFound => Ok(false),
-            OpenStatus::OrphanMirror => Err(ProtocolError::OrphanMirror),
-            OpenStatus::StandardLayout => Err(ProtocolError::StandardLayout),
-            OpenStatus::Unreadable(why) => Err(ProtocolError::RepoUnreadable(why)),
+            OpenStatus::OrphanMirror => Err(ProtocolError::orphan_mirror(self.root)),
+            OpenStatus::StandardLayout => Err(ProtocolError::standard_layout(self.root)),
+            OpenStatus::Unreadable(why) => {
+                Err(ProtocolError::repo_unreadable(self.root, &why))
+            }
         }
     }
 
@@ -186,7 +188,9 @@ impl RepoD<'_> {
         Ok(match self.root_repo()? {
             RootRepo::Missing => Some(Placement::Link),
             RootRepo::InterruptedCreation => Some(Placement::Replace),
-            RootRepo::Standard(_) => return Err(ProtocolError::StandardLayout),
+            RootRepo::Standard(_) => {
+                return Err(ProtocolError::standard_layout(self.root));
+            }
             RootRepo::OrphanMirror | RootRepo::Undecodable(_) => None,
         })
     }
@@ -407,11 +411,11 @@ impl RepoD<'_> {
 pub(crate) fn check_in_layout(bytes: &[u8]) -> Result<(), ProtocolError> {
     match layout_v1::lists_feature(bytes) {
         Ok(true) => Ok(()),
-        Ok(false) => Err(ProtocolError::NotInLayout(format!(
+        Ok(false) => Err(ProtocolError::Other(format!(
             "the repo info of a new repository must list {}",
             layout_v1::FEATURE
         ))),
-        Err(err) => Err(ProtocolError::NotInLayout(format!(
+        Err(err) => Err(ProtocolError::Other(format!(
             "the repo info of a new repository must list {} and doesn't decode: {err}",
             layout_v1::FEATURE
         ))),
@@ -545,7 +549,7 @@ mod tests {
         for bytes in [featureless_repo_info(0), UNDECODABLE.to_vec()] {
             let root = tempfile::tempdir().unwrap();
             let err = repo(root.path()).create(&bytes).unwrap_err();
-            assert!(matches!(&err, ProtocolError::NotInLayout(_)), "{err:?}");
+            assert!(matches!(&err, ProtocolError::Other(_)), "{err:?}");
             assert!(names(root.path()).is_empty());
         }
     }
@@ -557,7 +561,10 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         plant(root.path(), &featureless_repo_info(3));
         let err = repo(root.path()).create(&v0_bytes()).unwrap_err();
-        assert!(matches!(err, ProtocolError::StandardLayout), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("is in the standard layout")),
+            "{err:?}"
+        );
         assert_eq!(names(root.path()), strings(["repo"]));
         assert_eq!(fs::read(root.path().join("repo")).unwrap(), featureless_repo_info(3));
     }
@@ -869,11 +876,20 @@ mod tests {
             opened
         };
         let err = opens(&changed_repo_info(1)).unwrap_err();
-        assert!(matches!(err, ProtocolError::OrphanMirror), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("an orphan mirror")),
+            "{err:?}"
+        );
         let err = opens(&featureless_repo_info(1)).unwrap_err();
-        assert!(matches!(err, ProtocolError::StandardLayout), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("is in the standard layout")),
+            "{err:?}"
+        );
         let err = opens(UNDECODABLE).unwrap_err();
-        assert!(matches!(err, ProtocolError::RepoUnreadable(_)), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("can't be read or decoded and")),
+            "{err:?}"
+        );
         assert!(!opens(&repo_info(1)).unwrap());
     }
 }

@@ -88,16 +88,18 @@ impl RepoD<'_> {
             let standard = match self.root_repo()? {
                 RootRepo::Standard(bytes) => bytes,
                 RootRepo::Missing | RootRepo::InterruptedCreation => return Ok(None),
-                RootRepo::OrphanMirror => return Err(ProtocolError::OrphanMirror),
+                RootRepo::OrphanMirror => {
+                    return Err(ProtocolError::orphan_mirror(self.root));
+                }
                 RootRepo::Undecodable(why) => {
-                    return Err(ProtocolError::RepoUnreadable(why));
+                    return Err(ProtocolError::repo_unreadable(self.root, &why));
                 }
             };
             match self.convert_standard(&standard)? {
                 Some(outcome) => break outcome,
                 None if !classified_again => classified_again = true,
                 None => {
-                    return Err(ProtocolError::Incomplete(format!(
+                    return Err(ProtocolError::Other(format!(
                         "renaming the new repo.d into {} failed twice; {RERUN}",
                         self.root.display()
                     )));
@@ -174,7 +176,7 @@ impl RepoD<'_> {
     fn resume_conversion(&self) -> Result<ConversionOutcome, ProtocolError> {
         let dir = self.dir();
         let Some(Current { bytes, version }) = self.read_latest()? else {
-            return Err(ProtocolError::Incomplete(format!(
+            return Err(ProtocolError::Other(format!(
                 "{} disappeared during the conversion; {RERUN}",
                 dir.display()
             )));
@@ -215,8 +217,10 @@ impl RepoD<'_> {
                 if !self.hooks.sabotaged(Sabotage::FromStandardWithoutProvenance)
                     && !self.built_from(&bytes, &standard)?
                 {
-                    return Err(ProtocolError::ManualRecovery(format!(
-                        "{dir} exists next to {mirror}, which doesn't list {feature}, and no \
+                    return Err(ProtocolError::manual_recovery(
+                        self.root,
+                        &format!(
+                            "{dir} exists next to {mirror}, which doesn't list {feature}, and no \
                          backup named or linked in the last {OPS_LOG_FILES} ops-log files of \
                          {current} holds the bytes of {mirror}: convert_to_filesystem_layout() \
                          didn't build {dir} from it, {mirror} changed after the conversion \
@@ -225,11 +229,12 @@ impl RepoD<'_> {
                          {dir}, move {mirror} aside and run publish_mirror(); to keep \
                          {mirror}, archive and delete {dir}, then run \
                          convert_to_filesystem_layout()",
-                        dir = dir.display(),
-                        mirror = mirror.display(),
-                        feature = layout_v1::FEATURE,
-                        current = describe(),
-                    )));
+                            dir = dir.display(),
+                            mirror = mirror.display(),
+                            feature = layout_v1::FEATURE,
+                            current = describe(),
+                        ),
+                    ));
                 }
                 self.publish_conversion(&version, &bytes, Some(Hash::of(&standard)))?;
                 Ok(ConversionOutcome::Converted)
@@ -329,7 +334,7 @@ impl RepoD<'_> {
         match self.publish(version, Some(bytes), &known) {
             Ok(Publication::Published(PublishOutcome::Current)) => {}
             Ok(Publication::Published(PublishOutcome::GaveUp { .. })) => {
-                return Err(ProtocolError::Incomplete(format!(
+                return Err(ProtocolError::Other(format!(
                     "the publication of the mirror {mirror} gave up; {RERUN}"
                 )));
             }
@@ -347,7 +352,7 @@ impl RepoD<'_> {
                 )));
             }
             Err(ProtocolError::Io(err)) => {
-                return Err(ProtocolError::Incomplete(format!(
+                return Err(ProtocolError::Other(format!(
                     "publishing the mirror {mirror} failed: {err}; {RERUN}"
                 )));
             }
@@ -439,9 +444,11 @@ impl RepoD<'_> {
                     // is in the standard layout already.
                     RootRepo::Standard(_) => break ConversionOutcome::NothingToConvert,
                     RootRepo::Missing | RootRepo::InterruptedCreation => return Ok(None),
-                    RootRepo::OrphanMirror => return Err(ProtocolError::OrphanMirror),
+                    RootRepo::OrphanMirror => {
+                        return Err(ProtocolError::orphan_mirror(self.root));
+                    }
                     RootRepo::Undecodable(why) => {
-                        return Err(ProtocolError::RepoUnreadable(why));
+                        return Err(ProtocolError::repo_unreadable(self.root, &why));
                     }
                 }
             }
@@ -449,7 +456,7 @@ impl RepoD<'_> {
                 Some(()) => break ConversionOutcome::Converted,
                 None if !classified_again => classified_again = true,
                 None => {
-                    return Err(ProtocolError::Incomplete(format!(
+                    return Err(ProtocolError::Other(format!(
                         "{} was listed and then missing twice; {TO_STANDARD_RERUN}",
                         self.dir().display()
                     )));
@@ -533,7 +540,7 @@ impl RepoD<'_> {
                     if self.copies_a_later_change(&copy, &version)? =>
                 {
                     if relists == RELISTS {
-                        return Err(ProtocolError::Incomplete(format!(
+                        return Err(ProtocolError::Other(format!(
                             "{} holds version {} of {}, which is newer than {current} or \
                              doesn't list {}, but {RELISTS} more listings still showed \
                              {current}: listings of {} are stale. Nothing was changed; run \
@@ -591,7 +598,7 @@ impl RepoD<'_> {
                     nudge(&dir);
                 }
                 UpdateOutcome::NotOnLatestVersion => {
-                    return Err(ProtocolError::Incomplete(format!(
+                    return Err(ProtocolError::Other(format!(
                         "the change from {current} conflicted after {RELISTS} more listings \
                          of {}: they are stale, or something else changes the repository. \
                          Nothing was changed; with nothing else using the repository, run \
@@ -648,7 +655,7 @@ impl RepoD<'_> {
         match self.publish(version, Some(bytes), &known) {
             Ok(Publication::Published(PublishOutcome::Current)) => Ok(()),
             Ok(Publication::Published(PublishOutcome::GaveUp { .. })) => {
-                Err(ProtocolError::Incomplete(format!(
+                Err(ProtocolError::Other(format!(
                     "the publication of the mirror {mirror} gave up; {TO_STANDARD_RERUN}"
                 )))
             }
@@ -665,7 +672,7 @@ impl RepoD<'_> {
                  nothing was published and {dir} was kept. Make {mirror} readable or \
                  move it aside, then {TO_STANDARD_RERUN}"
             ))),
-            Err(ProtocolError::Io(err)) => Err(ProtocolError::Incomplete(format!(
+            Err(ProtocolError::Io(err)) => Err(ProtocolError::Other(format!(
                 "publishing the mirror {mirror} failed: {err}; {TO_STANDARD_RERUN}"
             ))),
             Err(err) => Err(err),
@@ -729,7 +736,7 @@ fn check_convertible(
 }
 
 fn unconvertible(what: &str, err: &IcechunkFormatError) -> ProtocolError {
-    ProtocolError::Malformed(format!("{what} can't be converted: {}", err.kind()))
+    ProtocolError::Other(format!("{what} can't be converted: {}", err.kind()))
 }
 
 /// Now, to the microsecond the ops log stores, raised above the time of the
@@ -757,7 +764,7 @@ fn to_standard_interrupted(step: &str, err: ProtocolError) -> ProtocolError {
 fn incomplete(rerun: &str, step: &str, err: ProtocolError) -> ProtocolError {
     match err {
         ProtocolError::Io(err) => {
-            ProtocolError::Incomplete(format!("{step} failed: {err}; {rerun}"))
+            ProtocolError::Other(format!("{step} failed: {err}; {rerun}"))
         }
         err => err,
     }
@@ -1006,9 +1013,15 @@ mod tests {
             err
         };
         let err = refused(&changed_repo_info(1));
-        assert!(matches!(err, ProtocolError::OrphanMirror), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("an orphan mirror")),
+            "{err:?}"
+        );
         let err = refused(UNDECODABLE);
-        assert!(matches!(err, ProtocolError::RepoUnreadable(_)), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("can't be read or decoded and")),
+            "{err:?}"
+        );
     }
 
     /// Runs a conversion that crashes at `step`.
@@ -1084,7 +1097,7 @@ mod tests {
         let before = (names(root.path()), names(&root.path().join("repo.d")));
         let err = convert(root.path(), &NoHooks).unwrap_err();
         assert!(
-            matches!(&err, ProtocolError::ManualRecovery(msg)
+            matches!(&err, ProtocolError::Other(msg)
                 if msg.contains("publish_mirror()") && msg.contains("convert_to_filesystem_layout()")),
             "{err:?}"
         );
@@ -1172,7 +1185,7 @@ mod tests {
         });
         let err = convert(root.path(), &hooks).unwrap_err();
         assert!(
-            matches!(&err, ProtocolError::Incomplete(msg)
+            matches!(&err, ProtocolError::Other(msg)
                 if msg.contains("renaming the new repo.d into place failed: injected")
                     && msg.ends_with("rerun convert_to_filesystem_layout() to complete the conversion")),
             "{err:?}"
@@ -1194,7 +1207,7 @@ mod tests {
         // Root writes anyway: nothing more to test.
         if let Err(err) = converted_anyway {
             assert!(
-                matches!(&err, ProtocolError::Incomplete(msg)
+                matches!(&err, ProtocolError::Other(msg)
                     if msg.starts_with("building the new repo.d failed: ")
                         && msg.contains("rerun convert_to_filesystem_layout()")),
                 "{err:?}"
@@ -1236,7 +1249,7 @@ mod tests {
         });
         let err = convert(root.path(), &hooks).unwrap_err();
         assert!(
-            matches!(&err, ProtocolError::Incomplete(msg) if msg.contains("rerun convert_to_filesystem_layout()")),
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("rerun convert_to_filesystem_layout()")),
             "{err:?}"
         );
         assert_eq!(fs::read(root.path().join("repo")).unwrap(), standard);
@@ -1315,7 +1328,7 @@ mod tests {
             } else {
                 let err = rerun.unwrap_err();
                 assert!(
-                    matches!(err, ProtocolError::ManualRecovery(_)),
+                    matches!(&err, ProtocolError::Other(msg) if msg.contains("needs manual recovery")),
                     "{case}: {err:?}"
                 );
                 assert_eq!(
@@ -1574,9 +1587,15 @@ mod tests {
             err
         };
         let err = refused(&changed_repo_info(1));
-        assert!(matches!(err, ProtocolError::OrphanMirror), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("an orphan mirror")),
+            "{err:?}"
+        );
         let err = refused(UNDECODABLE);
-        assert!(matches!(err, ProtocolError::RepoUnreadable(_)), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("can't be read or decoded and")),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -1906,7 +1925,7 @@ mod tests {
         let hooks = TestHooks::default();
         let err = to_standard(root.path(), &hooks).unwrap_err();
         assert!(
-            matches!(&err, ProtocolError::Incomplete(msg)
+            matches!(&err, ProtocolError::Other(msg)
                 if msg.contains("run convert_to_standard_layout() again")),
             "{err:?}"
         );
@@ -2032,6 +2051,9 @@ mod tests {
         assert_eq!(fs::read(root.path().join("repo")).unwrap(), bytes);
         assert_eq!(repo(root.path()).open_status().unwrap(), OpenStatus::OrphanMirror);
         let err = to_standard(root.path(), &NoHooks).unwrap_err();
-        assert!(matches!(err, ProtocolError::OrphanMirror), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("an orphan mirror")),
+            "{err:?}"
+        );
     }
 }

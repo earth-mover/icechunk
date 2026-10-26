@@ -19,7 +19,6 @@ use futures::{
     future::ready,
     stream::{self, BoxStream},
 };
-use icechunk_format::layout_v1;
 use icechunk_storage::{
     DeleteObjectsResult, ETag, GcPhase, GetModifiedResult, ListInfo, PutCondition,
     RepositoryCreation, Settings, Storage, StorageContext, StorageError,
@@ -347,35 +346,14 @@ fn write_error(err: io::Error) -> StorageError {
 
 /// Errors that need a remedy name it in their message.
 fn protocol_error(root: &Path, err: ProtocolError) -> StorageError {
-    let root = root.display();
     match err {
         ProtocolError::Io(err) => write_error(err),
-        ProtocolError::NotInLayout(msg) => {
+        ProtocolError::Other(msg) | ProtocolError::Corrupt(msg) => {
             other_error(format!("FilesystemStorage: {msg}"))
         }
-        ProtocolError::StandardLayout => other_error(format!(
-            "FilesystemStorage: the repository in {root} is in the standard layout: \
-             {root}/repo doesn't list the writer feature {feature} and {root}/repo.d \
-             doesn't exist. Stop every writer, then run convert_to_filesystem_layout() \
-             once",
-            feature = layout_v1::FEATURE
-        )),
-        ProtocolError::OrphanMirror => other_error(format!(
-            "FilesystemStorage: {root}/repo lists the writer feature {feature} but \
-             {root}/repo.d doesn't exist: an orphan mirror, repo.d was deleted or not \
-             copied. Restore repo.d if a copy exists. Otherwise create repo.d/ holding \
-             <N>.<h> with the bytes of {root}/repo, where N is the current Unix time in \
-             milliseconds and h their SHA-256, and an empty latest.<K>.<N>.<h>, \
-             K = 999999999999999 - N in 15 digits; changes after the version the \
-             mirror holds are lost",
-            feature = layout_v1::FEATURE
-        )),
-        ProtocolError::RepoUnreadable(why) => other_error(format!(
-            "FilesystemStorage: {root}/repo can't be read or decoded and {root}/repo.d \
-             doesn't exist ({why}); nothing overwrites it"
-        )),
-        ProtocolError::ManualRecovery(msg) => other_error(format!(
-            "FilesystemStorage: the repository in {root} needs manual recovery: {msg}"
+        ProtocolError::NoConsistentView(cause) => other_error(format!(
+            "FilesystemStorage: no consistent view of {}/repo.d: {cause}",
+            root.display()
         )),
         ProtocolError::MissingFeatures { missing, min_version } => {
             StorageError::capture(StorageErrorKind::MissingWriterFeatures {
@@ -383,16 +361,6 @@ fn protocol_error(root: &Path, err: ProtocolError) -> StorageError {
                 min_version,
             })
         }
-        ProtocolError::Malformed(msg) | ProtocolError::Incomplete(msg) => {
-            other_error(format!("FilesystemStorage: {msg}"))
-        }
-        ProtocolError::InvalidVersion(msg) => {
-            other_error(format!("FilesystemStorage: {msg}"))
-        }
-        ProtocolError::NoConsistentView(cause) => other_error(format!(
-            "FilesystemStorage: no consistent view of {root}/repo.d: {cause}"
-        )),
-        ProtocolError::Corrupt(msg) => other_error(format!("FilesystemStorage: {msg}")),
         ProtocolError::Forked(detail) => {
             StorageError::capture(StorageErrorKind::RepositoryForked(detail))
         }
@@ -401,9 +369,6 @@ fn protocol_error(root: &Path, err: ProtocolError) -> StorageError {
                 new_version: Box::new(new.to_version_info()),
                 detail,
             })
-        }
-        ProtocolError::GcWithoutChange(msg) => {
-            other_error(format!("FilesystemStorage: {msg}"))
         }
         ProtocolError::MirrorUnreadable(detail) => {
             StorageError::capture(StorageErrorKind::MirrorUnreadable(detail))
@@ -415,7 +380,7 @@ fn protocol_error(root: &Path, err: ProtocolError) -> StorageError {
 }
 
 fn parse_version(version: &VersionInfo) -> Result<Version, ProtocolError> {
-    Version::from_version_info(version).map_err(ProtocolError::InvalidVersion)
+    Version::from_version_info(version).map_err(ProtocolError::Other)
 }
 
 /// A read of `repo`, where a missing `repo.d` is classified as `open` does:

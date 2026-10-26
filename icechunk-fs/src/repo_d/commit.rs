@@ -94,7 +94,7 @@ pub(crate) fn check_change_bytes(bytes: &[u8]) -> Result<(), ProtocolError> {
              written",
             layout_v1::FEATURE
         ))),
-        Err(err) => Err(ProtocolError::NotInLayout(format!(
+        Err(err) => Err(ProtocolError::Other(format!(
             "the new repo info of a change doesn't decode, nothing was written: {err}"
         ))),
     }
@@ -1338,7 +1338,7 @@ mod tests {
         let err = check_change_bytes(&featureless_repo_info(1)).unwrap_err();
         assert!(matches!(&err, ProtocolError::ConversionInProgress(_)), "{err:?}");
         let err = check_change_bytes(b"not a repo info").unwrap_err();
-        assert!(matches!(&err, ProtocolError::NotInLayout(_)), "{err:?}");
+        assert!(matches!(&err, ProtocolError::Other(_)), "{err:?}");
         check_change_bytes(&v1_bytes()).unwrap();
     }
 

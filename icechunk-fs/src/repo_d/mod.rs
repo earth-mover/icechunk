@@ -17,7 +17,10 @@ use std::{
     time::Duration,
 };
 
-use icechunk_format::writer_features::{FeatureName, MinVersion};
+use icechunk_format::{
+    layout_v1,
+    writer_features::{FeatureName, MinVersion},
+};
 use uuid::Uuid;
 
 use crate::{
@@ -36,34 +39,11 @@ pub(crate) struct RepoD<'a> {
 
 #[derive(Debug)]
 pub(crate) enum ProtocolError {
-    /// The bytes of a creation don't list `filesystem-layout-v1`, or the
-    /// bytes of a creation or a change don't decode.
-    NotInLayout(String),
-    /// `$ROOT/repo` doesn't list `filesystem-layout-v1` and `repo.d` doesn't
-    /// exist: a repository in the standard layout, to convert.
-    StandardLayout,
-    /// `$ROOT/repo` lists `filesystem-layout-v1` with a longer history than
-    /// a creation's and `repo.d` doesn't exist: manual recovery.
-    OrphanMirror,
-    /// `$ROOT/repo` can't be read or decoded and `repo.d` doesn't exist; why.
-    RepoUnreadable(String),
-    /// A rerun of the conversion from the standard layout can't attribute the
-    /// `repo.d` it found to its own earlier run; what it found and the
-    /// remedy.
-    ManualRecovery(String),
     /// The repo info lists writer features this storage doesn't implement.
     MissingFeatures {
         missing: BTreeSet<FeatureName>,
         min_version: MinVersion,
     },
-    /// A repo info that decodes but can't be changed: its shape is malformed,
-    /// or it can't be converted; why.
-    Malformed(String),
-    /// An operation stopped before it finished; what happened and that
-    /// rerunning it completes it.
-    Incomplete(String),
-    /// A version without both an etag and a generation.
-    InvalidVersion(String),
     /// Ran out of tries; why the last one failed.
     NoConsistentView(String),
     /// A version file whose bytes don't hash to its name, or don't decode.
@@ -76,16 +56,62 @@ pub(crate) enum ProtocolError {
         new: Version,
         detail: String,
     },
-    /// GC's hook was called without the version of GC's change on a
-    /// repository in the filesystem layout whose current version lists
-    /// `filesystem-layout-v1`.
-    GcWithoutChange(String),
     /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
     MirrorUnreadable(String),
     /// The current version doesn't list `filesystem-layout-v1`: a conversion
     /// to the standard layout was interrupted.
     ConversionInProgress(String),
     Io(io::Error),
+    /// Any other failure: what happened, and the remedy where there is one.
+    Other(String),
+}
+
+impl ProtocolError {
+    /// `$ROOT/repo` doesn't list `filesystem-layout-v1` and `repo.d` doesn't
+    /// exist: a repository in the standard layout, to convert.
+    pub(crate) fn standard_layout(root: &Path) -> Self {
+        let root = root.display();
+        Self::Other(format!(
+            "the repository in {root} is in the standard layout: {root}/repo doesn't \
+             list the writer feature {feature} and {root}/repo.d doesn't exist. Stop \
+             every writer, then run convert_to_filesystem_layout() once",
+            feature = layout_v1::FEATURE
+        ))
+    }
+
+    /// `$ROOT/repo` lists `filesystem-layout-v1` with a longer history than a
+    /// creation's and `repo.d` doesn't exist.
+    pub(crate) fn orphan_mirror(root: &Path) -> Self {
+        let root = root.display();
+        Self::Other(format!(
+            "{root}/repo lists the writer feature {feature} but {root}/repo.d doesn't \
+             exist: an orphan mirror, repo.d was deleted or not copied. Restore repo.d \
+             if a copy exists. Otherwise create repo.d/ holding <N>.<h> with the bytes \
+             of {root}/repo, where N is the current Unix time in milliseconds and h \
+             their SHA-256, and an empty latest.<K>.<N>.<h>, K = 999999999999999 - N in \
+             15 digits; changes after the version the mirror holds are lost",
+            feature = layout_v1::FEATURE
+        ))
+    }
+
+    /// `$ROOT/repo` can't be read or decoded and `repo.d` doesn't exist.
+    pub(crate) fn repo_unreadable(root: &Path, why: &str) -> Self {
+        let root = root.display();
+        Self::Other(format!(
+            "{root}/repo can't be read or decoded and {root}/repo.d doesn't exist \
+             ({why}); nothing overwrites it"
+        ))
+    }
+
+    /// A rerun of the conversion from the standard layout can't attribute the
+    /// `repo.d` it found to its own earlier run; `msg` says what it found and
+    /// the remedy.
+    pub(crate) fn manual_recovery(root: &Path, msg: &str) -> Self {
+        Self::Other(format!(
+            "the repository in {} needs manual recovery: {msg}",
+            root.display()
+        ))
+    }
 }
 
 impl From<io::Error> for ProtocolError {

@@ -401,14 +401,14 @@ impl RepoD<'_> {
             Publication::Published(PublishOutcome::Current) => Ok(()),
             Publication::Published(PublishOutcome::GaveUp { left: Some(left) })
                 if Version::from_version_info(&left)
-                    .map_err(ProtocolError::InvalidVersion)?
+                    .map_err(ProtocolError::Other)?
                     .n()
                     >= changed.n() =>
             {
                 Ok(())
             }
             Publication::Published(PublishOutcome::GaveUp { .. }) => {
-                Err(ProtocolError::Incomplete(format!(
+                Err(ProtocolError::Other(format!(
                     "the publication of the mirror {mirror} before GC's deletes gave up \
                      without installing version {} or a later one; nothing was deleted, \
                      run GC again",
@@ -468,7 +468,7 @@ impl RepoD<'_> {
                 "{current} doesn't list {}; GC deleted nothing",
                 layout_v1::FEATURE
             ))),
-            Ok(true) => Err(ProtocolError::GcWithoutChange(format!(
+            Ok(true) => Err(ProtocolError::Other(format!(
                 "GC called the storage's hook without the version of its change, but \
                  {current} lists {}: a repository in the filesystem layout is collected \
                  only after GC's change; GC deleted nothing",
@@ -1181,7 +1181,7 @@ mod tests {
             warnings(|| repo(root.path(), &hooks).publish_before_gc_deletes(&v0));
         let err = failed.unwrap_err();
         assert!(
-            matches!(&err, ProtocolError::Incomplete(msg) if msg.contains("run GC again")),
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("run GC again")),
             "{err:?}"
         );
         assert!(!mirror(root.path()).exists());
@@ -1240,7 +1240,7 @@ mod tests {
 
         let v0 = seed(root.path());
         let err = repo(root.path(), &hooks).refuse_gc_without_change().unwrap_err();
-        assert!(matches!(&err, ProtocolError::GcWithoutChange(_)), "{err:?}");
+        assert!(matches!(&err, ProtocolError::Other(_)), "{err:?}");
 
         change(root.path(), &featureless_repo_info(1), &v0);
         let err = repo(root.path(), &hooks).refuse_gc_without_change().unwrap_err();
