@@ -67,6 +67,16 @@ pub(crate) enum ProtocolError {
 }
 
 impl ProtocolError {
+    /// Appends `suffix` to the message of a fork or an unreadable mirror:
+    /// what that means for the operation that found it.
+    pub(crate) fn context(self, suffix: &str) -> Self {
+        match self {
+            Self::Forked(msg) => Self::Forked(msg + suffix),
+            Self::MirrorUnreadable(msg) => Self::MirrorUnreadable(msg + suffix),
+            err => err,
+        }
+    }
+
     /// `$ROOT/repo` doesn't list `filesystem-layout-v1` and `repo.d` doesn't
     /// exist: a repository in the standard layout, to convert.
     pub(crate) fn standard_layout(root: &Path) -> Self {

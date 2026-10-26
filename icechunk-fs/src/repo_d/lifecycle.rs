@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use super::{
     ProtocolError, RepoD, Step, discard_tmp_dir,
-    mirror::{Publication, PublishOutcome, with_root_lock},
+    mirror::{PublishOutcome, with_root_lock},
 };
 use crate::{
     hooks::{CreationStep, Point},
@@ -348,21 +348,20 @@ impl RepoD<'_> {
     fn log_unpublished(
         &self,
         version: &Version,
-        published: Result<Publication, ProtocolError>,
+        published: Result<PublishOutcome, ProtocolError>,
     ) {
         let root = self.root.display();
         let version = version.file_name();
         match published {
-            Ok(Publication::Published(PublishOutcome::Current)) => {}
-            // `publish` warned.
-            Ok(Publication::Published(PublishOutcome::GaveUp { .. })) => {}
-            Ok(Publication::Fork) => tracing::error!(
+            // `publish` warned of giving up.
+            Ok(_) => {}
+            Err(ProtocolError::Forked(_)) => tracing::error!(
                 %root, %version,
                 "a creation found {root}/{REPO} without {} and not a copy of a version \
                  of {root}/{REPO_D}, a fork: nothing was published",
                 layout_v1::FEATURE
             ),
-            Ok(Publication::Unreadable) => tracing::error!(
+            Err(ProtocolError::MirrorUnreadable(_)) => tracing::error!(
                 %root, %version,
                 "a creation couldn't read or decode {root}/{REPO}: nothing was published"
             ),

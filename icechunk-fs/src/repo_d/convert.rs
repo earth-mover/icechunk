@@ -20,10 +20,7 @@ use super::{
     commit::UpdateOutcome,
     discard_tmp_dir,
     lifecycle::{FEATURES, RootRepo, unix_millis, write_marker},
-    mirror::{
-        ForkCheck, Publication, PublishOutcome, REREADS, is_gone, is_stale,
-        with_root_lock,
-    },
+    mirror::{ForkCheck, PublishOutcome, REREADS, is_gone, is_stale, with_root_lock},
     read::{Current, read_version_file},
 };
 use crate::{
@@ -332,13 +329,13 @@ impl RepoD<'_> {
         let mirror = self.root.join(REPO);
         let mirror = mirror.display();
         match self.publish(version, Some(bytes), &known) {
-            Ok(Publication::Published(PublishOutcome::Current)) => {}
-            Ok(Publication::Published(PublishOutcome::GaveUp { .. })) => {
+            Ok(PublishOutcome::Current) => {}
+            Ok(PublishOutcome::GaveUp { .. }) => {
                 return Err(ProtocolError::Other(format!(
                     "the publication of the mirror {mirror} gave up; {RERUN}"
                 )));
             }
-            Ok(Publication::Fork) => {
+            Err(ProtocolError::Forked(_)) => {
                 return Err(ProtocolError::Forked(format!(
                     "{mirror} doesn't list {} and is neither a version file of {} nor the \
                      standard repo info this conversion converts; nothing was published",
@@ -346,10 +343,8 @@ impl RepoD<'_> {
                     self.dir().display()
                 )));
             }
-            Ok(Publication::Unreadable) => {
-                return Err(ProtocolError::MirrorUnreadable(format!(
-                    "{mirror} couldn't be read or decoded; nothing was published"
-                )));
+            Err(err @ ProtocolError::MirrorUnreadable(_)) => {
+                return Err(err.context("; nothing was published"));
             }
             Err(ProtocolError::Io(err)) => {
                 return Err(ProtocolError::Other(format!(
@@ -653,13 +648,11 @@ impl RepoD<'_> {
         let dir = self.dir();
         let dir = dir.display();
         match self.publish(version, Some(bytes), &known) {
-            Ok(Publication::Published(PublishOutcome::Current)) => Ok(()),
-            Ok(Publication::Published(PublishOutcome::GaveUp { .. })) => {
-                Err(ProtocolError::Other(format!(
-                    "the publication of the mirror {mirror} gave up; {TO_STANDARD_RERUN}"
-                )))
-            }
-            Ok(Publication::Fork) => Err(ProtocolError::Forked(format!(
+            Ok(PublishOutcome::Current) => Ok(()),
+            Ok(PublishOutcome::GaveUp { .. }) => Err(ProtocolError::Other(format!(
+                "the publication of the mirror {mirror} gave up; {TO_STANDARD_RERUN}"
+            ))),
+            Err(ProtocolError::Forked(_)) => Err(ProtocolError::Forked(format!(
                 "{mirror} doesn't list {} and is neither a version file of {dir} nor a \
                  version this conversion read; the conversion's change landed, nothing \
                  was published and {dir} was kept. Recover the fork by hand (see the \
@@ -667,11 +660,13 @@ impl RepoD<'_> {
                  convert_to_filesystem_layout()",
                 layout_v1::FEATURE,
             ))),
-            Ok(Publication::Unreadable) => Err(ProtocolError::MirrorUnreadable(format!(
-                "{mirror} couldn't be read or decoded; the conversion's change landed, \
+            Err(ProtocolError::MirrorUnreadable(_)) => {
+                Err(ProtocolError::MirrorUnreadable(format!(
+                    "{mirror} couldn't be read or decoded; the conversion's change landed, \
                  nothing was published and {dir} was kept. Make {mirror} readable or \
                  move it aside, then {TO_STANDARD_RERUN}"
-            ))),
+                )))
+            }
             Err(ProtocolError::Io(err)) => Err(ProtocolError::Other(format!(
                 "publishing the mirror {mirror} failed: {err}; {TO_STANDARD_RERUN}"
             ))),

@@ -61,17 +61,6 @@ pub enum PublishOutcome {
     GaveUp { left: Option<VersionInfo> },
 }
 
-/// What [`RepoD::publish`] did: each caller decides what a fork or an
-/// unreadable mirror means for its operation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Publication {
-    Published(PublishOutcome),
-    /// `$ROOT/repo` is a fork; nothing was published.
-    Fork,
-    /// `$ROOT/repo` couldn't be read or decoded; nothing was published.
-    Unreadable,
-}
-
 /// What one round of a publication did to `$ROOT/repo`.
 enum Installed {
     Renamed,
@@ -79,7 +68,6 @@ enum Installed {
     InPlace(Version),
     /// The target's bytes or our stage were gone.
     Nothing,
-    Refused(Publication),
     /// The rename failed with ETXTBSY: a process on this NFS client holds
     /// `$ROOT/repo` open. Nothing changed; the stage was removed.
     Busy(io::Error),
@@ -88,14 +76,16 @@ enum Installed {
 impl RepoD<'_> {
     /// Publishes `proved`, a version a server-decided step proved current,
     /// whose bytes the caller may pass. `known` holds hashes of repo infos
-    /// the operation read: `$ROOT/repo` holding one of them is no fork.
-    /// Forks and unreadable mirrors are outcomes; `Err` is an I/O failure.
+    /// the operation read: `$ROOT/repo` holding one of them is no fork. A
+    /// fork or an unreadable mirror, left as it is, is
+    /// [`ProtocolError::Forked`] or [`ProtocolError::MirrorUnreadable`], to
+    /// which callers add what that means for their operation.
     pub(crate) fn publish(
         &self,
         proved: &Version,
         proved_bytes: Option<&[u8]>,
         known: &[Hash],
-    ) -> Result<Publication, ProtocolError> {
+    ) -> Result<PublishOutcome, ProtocolError> {
         self.hooks.at(Point::BeforePublish);
         let mut target = if self.hooks.sabotaged(Sabotage::PublishNonCurrent) {
             self.highest_version_file()?.unwrap_or_else(|| proved.clone())
@@ -116,7 +106,6 @@ impl RepoD<'_> {
                     true
                 }
                 Installed::Nothing => false,
-                Installed::Refused(outcome) => return Ok(outcome),
                 Installed::Busy(err) if round == ROUNDS => return Err(err.into()),
                 Installed::Busy(_) => {
                     thread::sleep(BUSY_PAUSE / TIME_SCALE);
@@ -128,7 +117,7 @@ impl RepoD<'_> {
             if listed.n() > target.n() {
                 target = listed;
             } else if installed {
-                return Ok(Publication::Published(PublishOutcome::Current));
+                return Ok(PublishOutcome::Current);
             }
         }
         let left_name = left.as_ref().map(Version::file_name);
@@ -143,9 +132,7 @@ impl RepoD<'_> {
                 None => "the version it holds is unknown".to_string(),
             }
         );
-        Ok(Publication::Published(PublishOutcome::GaveUp {
-            left: left.as_ref().map(Version::to_version_info),
-        }))
+        Ok(PublishOutcome::GaveUp { left: left.as_ref().map(Version::to_version_info) })
     }
 
     /// One round: stage the target, check for a fork, rename the stage over
@@ -181,9 +168,21 @@ impl RepoD<'_> {
             let (check, held) =
                 self.check_mirror(&known).inspect_err(|_| self.remove(&stage))?;
             let done = match check {
-                ForkCheck::Fork => Some(Installed::Refused(Publication::Fork)),
+                ForkCheck::Fork => {
+                    self.remove(&stage);
+                    return Err(ProtocolError::Forked(format!(
+                        "{} doesn't list {} and isn't a copy of a version file of {}",
+                        self.root.join(REPO).display(),
+                        layout_v1::FEATURE,
+                        dir.display()
+                    )));
+                }
                 ForkCheck::Unreadable => {
-                    Some(Installed::Refused(Publication::Unreadable))
+                    self.remove(&stage);
+                    return Err(ProtocolError::MirrorUnreadable(format!(
+                        "{} couldn't be read or decoded",
+                        self.root.join(REPO).display()
+                    )));
                 }
                 ForkCheck::NotFork { .. } if held.as_ref() == Some(target.hash()) => {
                     Some(Installed::InPlace(target.clone()))
@@ -361,21 +360,9 @@ impl RepoD<'_> {
                 )));
             }
         }
-        let mirror = self.root.join(REPO);
-        match self.publish(&version, Some(&bytes), &[version.hash().clone()])? {
-            Publication::Fork => Err(ProtocolError::Forked(format!(
-                "{} doesn't list {} and isn't a copy of a version file of {}; nothing was \
-                 published",
-                mirror.display(),
-                layout_v1::FEATURE,
-                self.dir().display()
-            ))),
-            Publication::Unreadable => Err(ProtocolError::MirrorUnreadable(format!(
-                "{} couldn't be read or decoded; nothing was published",
-                mirror.display()
-            ))),
-            Publication::Published(outcome) => Ok(Some(outcome)),
-        }
+        self.publish(&version, Some(&bytes), &[version.hash().clone()])
+            .map(Some)
+            .map_err(|err| err.context("; nothing was published"))
     }
 }
 
@@ -397,9 +384,12 @@ impl RepoD<'_> {
         };
         let mirror = self.root.join(REPO);
         let mirror = mirror.display();
-        match self.publish(&target, None, &[])? {
-            Publication::Published(PublishOutcome::Current) => Ok(()),
-            Publication::Published(PublishOutcome::GaveUp { left: Some(left) })
+        match self
+            .publish(&target, None, &[])
+            .map_err(|err| err.context("; GC published nothing and deleted nothing"))?
+        {
+            PublishOutcome::Current => Ok(()),
+            PublishOutcome::GaveUp { left: Some(left) }
                 if Version::from_version_info(&left)
                     .map_err(ProtocolError::Other)?
                     .n()
@@ -407,23 +397,11 @@ impl RepoD<'_> {
             {
                 Ok(())
             }
-            Publication::Published(PublishOutcome::GaveUp { .. }) => {
-                Err(ProtocolError::Other(format!(
-                    "the publication of the mirror {mirror} before GC's deletes gave up \
-                     without installing version {} or a later one; nothing was deleted, \
-                     run GC again",
-                    changed.file_name()
-                )))
-            }
-            Publication::Fork => Err(ProtocolError::Forked(format!(
-                "{mirror} doesn't list {} and isn't a copy of a version file of {}; GC \
-                 published nothing and deleted nothing",
-                layout_v1::FEATURE,
-                self.dir().display()
-            ))),
-            Publication::Unreadable => Err(ProtocolError::MirrorUnreadable(format!(
-                "{mirror} couldn't be read or decoded; GC published nothing and deleted \
-                 nothing"
+            PublishOutcome::GaveUp { .. } => Err(ProtocolError::Other(format!(
+                "the publication of the mirror {mirror} before GC's deletes gave up \
+                 without installing version {} or a later one; nothing was deleted, run \
+                 GC again",
+                changed.file_name()
             ))),
         }
     }
@@ -438,9 +416,11 @@ impl RepoD<'_> {
             self.publish(&target, None, &[])
         });
         let failed = match published {
-            Ok(Publication::Published(_)) => return,
-            Ok(Publication::Fork) => "it is a fork".to_string(),
-            Ok(Publication::Unreadable) => "it couldn't be read or decoded".to_string(),
+            Ok(_) => return,
+            Err(ProtocolError::Forked(_)) => "it is a fork".to_string(),
+            Err(ProtocolError::MirrorUnreadable(_)) => {
+                "it couldn't be read or decoded".to_string()
+            }
             Err(err) => format!("{err:?}"),
         };
         tracing::error!(
@@ -548,13 +528,32 @@ mod tests {
         }
     }
 
+    /// A publication's outcome, a fork or an unreadable mirror included.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum Publication {
+        Published(PublishOutcome),
+        Fork,
+        Unreadable,
+    }
+
+    impl From<Result<PublishOutcome, ProtocolError>> for Publication {
+        fn from(published: Result<PublishOutcome, ProtocolError>) -> Self {
+            match published {
+                Ok(outcome) => Self::Published(outcome),
+                Err(ProtocolError::Forked(_)) => Self::Fork,
+                Err(ProtocolError::MirrorUnreadable(_)) => Self::Unreadable,
+                Err(err) => panic!("{err:?}"),
+            }
+        }
+    }
+
     fn publish(
         root: &Path,
         hooks: &TestHooks,
         proved: &Version,
         bytes: Option<&[u8]>,
     ) -> Publication {
-        RepoD { root, hooks }.publish(proved, bytes, &[]).unwrap()
+        RepoD { root, hooks }.publish(proved, bytes, &[]).into()
     }
 
     const CURRENT: Publication = Publication::Published(PublishOutcome::Current);
@@ -1058,15 +1057,16 @@ mod tests {
         });
         // A publisher whose listing showed v0, with its bytes.
         let repo = RepoD { root: root.path(), hooks: &hooks };
-        let outcome = repo.publish(&v0, Some(&v0_bytes()), &[v0.hash().clone()]).unwrap();
+        let outcome: Publication =
+            repo.publish(&v0, Some(&v0_bytes()), &[v0.hash().clone()]).into();
         assert_eq!(outcome, Publication::Fork);
         assert_eq!(fs::read(mirror(root.path())).unwrap(), featureless_repo_info(1));
         assert!(mirror_stages(root.path()).is_empty());
 
         fs::rename(&hidden, &file).unwrap();
         let fresh = RepoD { root: root.path(), hooks: &NoHooks };
-        let outcome =
-            fresh.publish(&v0, Some(&v0_bytes()), &[v0.hash().clone()]).unwrap();
+        let outcome: Publication =
+            fresh.publish(&v0, Some(&v0_bytes()), &[v0.hash().clone()]).into();
         assert_eq!(outcome, CURRENT);
         assert_eq!(fs::read(mirror(root.path())).unwrap(), featureless_repo_info(1));
     }

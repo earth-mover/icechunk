@@ -12,9 +12,7 @@ use icechunk_format::{
 use uuid::Uuid;
 
 use super::{
-    Listed, OPS_LOG_FILES, ProtocolError, RepoD, is_dead, list_names,
-    mirror::{Publication, PublishOutcome},
-    read::Current,
+    Listed, OPS_LOG_FILES, ProtocolError, RepoD, is_dead, list_names, read::Current,
     remove_stage, with_retries,
 };
 use crate::{
@@ -123,22 +121,14 @@ impl RepoD<'_> {
             [base, &new].into_iter().chain(&read).map(|v| v.hash().clone()).collect();
         let mirror = self.root.join(REPO);
         let failed = match self.publish(&new, Some(new_bytes), &known) {
-            Ok(Publication::Published(
-                PublishOutcome::Current | PublishOutcome::GaveUp { .. },
-            )) => None,
-            Ok(Publication::Fork) => {
+            Ok(_) => None,
+            Err(ProtocolError::Forked(detail)) => {
                 return Err(ProtocolError::ForkedAfterUpdate {
-                    detail: format!(
-                        "{} doesn't list {} and isn't a copy of a version file of {}; \
-                         nothing was published",
-                        mirror.display(),
-                        layout_v1::FEATURE,
-                        self.dir().display()
-                    ),
+                    detail: format!("{detail}; nothing was published"),
                     new,
                 });
             }
-            Ok(Publication::Unreadable) => Some(
+            Err(ProtocolError::MirrorUnreadable(_)) => Some(
                 "it couldn't be read or decoded, so a fork can't be ruled out"
                     .to_string(),
             ),
