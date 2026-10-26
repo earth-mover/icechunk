@@ -378,12 +378,12 @@ async fn modifications_refuse_features_the_storage_does_not_implement() -> TestR
         rewrite_repo_info(&fixture.repo, change_features(&[feature], &[])).await?;
 
         for (op, err) in run_every_op(&mut fixture).await {
-            let Some(
-                ref kind @ RepositoryErrorKind::MissingWriterFeatures {
+            let Some(RepositoryErrorKind::StorageError(
+                ref kind @ StorageErrorKind::MissingWriterFeatures {
                     ref missing,
                     min_version: found,
                 },
-            ) = err
+            )) = err
             else {
                 panic!("{feature}: {op:?} didn't refuse for missing features: {err:?}");
             };
@@ -528,9 +528,9 @@ async fn durable_update_that_found_a_fork_is_not_retried() -> TestResult {
     assert!(matches!(again, Some(SessionErrorKind::CommitNotAllowed)), "{again:?}");
 
     let err = repo.create_branch("other", &first).await.err().map(|e| e.kind);
-    let Some(RepositoryErrorKind::UpdateDurableButRepositoryForked {
-        new_version, ..
-    }) = err
+    let Some(RepositoryErrorKind::StorageError(
+        StorageErrorKind::RepositoryForkedAfterUpdate { new_version, .. },
+    )) = err
     else {
         panic!("{err:?}");
     };
@@ -569,10 +569,12 @@ async fn creation_lists_the_required_features() -> TestResult {
     assert!(
         matches!(
             &err,
-            Some(RepositoryErrorKind::MissingWriterFeatures {
-                min_version: MinVersion::Icechunk(WRITER_FEATURES_SINCE),
-                ..
-            })
+            Some(RepositoryErrorKind::StorageError(
+                StorageErrorKind::MissingWriterFeatures {
+                    min_version: MinVersion::Icechunk(WRITER_FEATURES_SINCE),
+                    ..
+                }
+            ))
         ),
         "{err:?}"
     );
@@ -580,14 +582,16 @@ async fn creation_lists_the_required_features() -> TestResult {
     Ok(())
 }
 
-/// The storage's own missing-features error surfaces as the repository's.
+/// The storage's own missing-features error surfaces unchanged.
 #[tokio_test]
-async fn storage_missing_features_is_the_repository_error() -> TestResult {
+async fn storage_missing_features_surfaces_unchanged() -> TestResult {
     let storage = in_memory_test_storage(false).await?;
     let Fixture { repo, first, .. } = fixture(storage.wrapped()).await?;
     storage.refuse_for_missing_features.store(true, Ordering::SeqCst);
     let err = repo.create_branch("other", &first).await.err().map(|e| e.kind);
-    let Some(RepositoryErrorKind::MissingWriterFeatures { missing, min_version }) = err
+    let Some(RepositoryErrorKind::StorageError(
+        StorageErrorKind::MissingWriterFeatures { missing, min_version },
+    )) = err
     else {
         panic!("{err:?}");
     };

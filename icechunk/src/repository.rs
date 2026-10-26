@@ -51,14 +51,10 @@ use crate::{
             ManifestFileInfo, NodeData, NodeType, Snapshot, SnapshotInfo,
             SnapshotProperties,
         },
-        writer_features::{FeatureName, MinVersion},
     },
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionError, SessionErrorKind, SessionResult},
-    storage::{
-        self, Attribution, AttributionLabels, FORK_EXPLANATION, StorageContext,
-        StorageErrorKind,
-    },
+    storage::{self, Attribution, AttributionLabels, StorageContext, StorageErrorKind},
     virtual_chunks::VirtualChunkResolver,
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
@@ -122,25 +118,11 @@ impl DetectedSpecVersion {
 #[non_exhaustive]
 pub enum RepositoryErrorKind {
     #[error(transparent)]
-    StorageError(StorageErrorKind),
+    StorageError(#[from] StorageErrorKind),
     #[error(transparent)]
     FormatError(#[from] IcechunkFormatErrorKind),
     #[error(transparent)]
     Ref(#[from] RefErrorKind),
-    #[error(
-        "the repository lists writer features that this storage doesn't implement ({}), first implemented in {min_version}; it can be read but not modified",
-        .missing.iter().join(", ")
-    )]
-    MissingWriterFeatures { missing: BTreeSet<FeatureName>, min_version: MinVersion },
-    /// A change landed and is durable, but its storage found the repository
-    /// forked. Retrying would make the change twice.
-    #[error(
-        "the change is durable (version {new_version}) and must not be retried, but the repository is forked: {detail}"
-    )]
-    UpdateDurableButRepositoryForked {
-        new_version: Box<storage::VersionInfo>,
-        detail: String,
-    },
     #[error("snapshot not found: `{id}`")]
     SnapshotNotFound { id: SnapshotId },
     #[error("branch {branch} does not have a snapshots before or at {at}")]
@@ -205,23 +187,6 @@ pub enum RepositoryErrorKind {
     PoisonLock,
     #[error("unexpected error: {0}")]
     Other(String),
-}
-
-impl From<StorageErrorKind> for RepositoryErrorKind {
-    fn from(kind: StorageErrorKind) -> Self {
-        match kind {
-            StorageErrorKind::MissingWriterFeatures { missing, min_version } => {
-                Self::MissingWriterFeatures { missing, min_version }
-            }
-            StorageErrorKind::RepositoryForkedAfterUpdate { new_version, detail } => {
-                Self::UpdateDurableButRepositoryForked {
-                    new_version,
-                    detail: format!("{detail}. {FORK_EXPLANATION}"),
-                }
-            }
-            kind => Self::StorageError(kind),
-        }
-    }
 }
 
 pub type RepositoryError = ICError<RepositoryErrorKind>;

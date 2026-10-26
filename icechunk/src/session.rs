@@ -1669,29 +1669,11 @@ impl Session {
             ))
         };
 
-        match self
-            .asset_manager
+        self.asset_manager
             .update_repo_info(self.config.repo_update_retries(), do_update)
             .await
-        {
-            Ok(_) => Ok(()),
-            Err(RepositoryError {
-                kind:
-                    RepositoryErrorKind::UpdateDurableButRepositoryForked {
-                        new_version,
-                        detail,
-                    },
-                context,
-            }) => Err(ICError {
-                kind: SessionErrorKind::CommitDurableButRepositoryForked {
-                    snapshot: new_snap.id().clone(),
-                    new_version,
-                    detail,
-                },
-                context,
-            }),
-            Err(err) => Err(err.inject()),
-        }
+            .map(|_| ())
+            .map_err(|err| commit_error(err, new_snap.id().clone()))
     }
 
     async fn flush_v1(&mut self, _: Arc<Snapshot>) -> SessionResult<()> {
@@ -1768,13 +1750,7 @@ impl Session {
             (SpecVersionBin::V2, false) => self.raise_if_rearrange_disabled().await,
         };
         if let Err(err) = res {
-            if let SessionErrorKind::CommitDurableButRepositoryForked {
-                snapshot, ..
-            } = err.kind()
-            {
-                // The flush landed: a second one would duplicate it.
-                self.mark_committed(snapshot.clone());
-            }
+            self.mark_if_durable(&err);
             return Err(err);
         }
 
@@ -1885,14 +1861,7 @@ impl Session {
         let id = match res {
             Ok(id) => id,
             Err(err) => {
-                if let SessionErrorKind::CommitDurableButRepositoryForked {
-                    snapshot,
-                    ..
-                } = err.kind()
-                {
-                    // The commit landed: a second one would duplicate it.
-                    self.mark_committed(snapshot.clone());
-                }
+                self.mark_if_durable(&err);
                 return Err(err);
             }
         };
@@ -1902,6 +1871,16 @@ impl Session {
 
     /// After a commit or a flush, the session is read only, pointed at the new
     /// snapshot.
+    /// A commit or flush that landed though its storage found a fork: a
+    /// second one would duplicate it.
+    fn mark_if_durable(&mut self, err: &SessionError) {
+        if let SessionErrorKind::CommitDurableButRepositoryForked { snapshot, .. } =
+            err.kind()
+        {
+            self.mark_committed(snapshot.clone());
+        }
+    }
+
     fn mark_committed(&mut self, snapshot: SnapshotId) {
         self.change_set = ChangeSet::for_edits();
         self.snapshot_id = snapshot;
@@ -3465,19 +3444,29 @@ async fn do_commit(
             kind: RepositoryErrorKind::NoAmendForInitialCommit,
             context,
         }) => Err(ICError { kind: SessionErrorKind::NoAmendForInitialCommit, context }),
-        Err(RepositoryError {
+        Err(err) => Err(commit_error(err, new_snapshot_id)),
+    }
+}
+
+/// The error of the repo-info change of a commit or flush of `snapshot`: one
+/// that landed though its storage found a fork names the snapshot.
+fn commit_error(err: RepositoryError, snapshot: SnapshotId) -> SessionError {
+    match err {
+        RepositoryError {
             kind:
-                RepositoryErrorKind::UpdateDurableButRepositoryForked { new_version, detail },
+                RepositoryErrorKind::StorageError(
+                    StorageErrorKind::RepositoryForkedAfterUpdate { new_version, detail },
+                ),
             context,
-        }) => Err(ICError {
+        } => ICError {
             kind: SessionErrorKind::CommitDurableButRepositoryForked {
-                snapshot: new_snapshot_id,
+                snapshot,
                 new_version,
-                detail,
+                detail: format!("{detail}. {}", storage::FORK_EXPLANATION),
             },
             context,
-        }),
-        Err(err) => Err(err.inject()),
+        },
+        err => err.inject(),
     }
 }
 

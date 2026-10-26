@@ -423,7 +423,12 @@ async fn layout_gc_stops_after_a_durable_forked_change() -> TestResult {
         matches!(
             &err,
             GCError::Repository(e)
-                if matches!(e.kind, RepositoryErrorKind::UpdateDurableButRepositoryForked { .. })
+                if matches!(
+                    e.kind,
+                    RepositoryErrorKind::StorageError(
+                        StorageErrorKind::RepositoryForkedAfterUpdate { .. }
+                    )
+                )
         ),
         "{msg}"
     );

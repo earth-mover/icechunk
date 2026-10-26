@@ -184,9 +184,6 @@ fn repository_outcome(kind: &RepositoryErrorKind) -> OpResult {
             OpResult::Conflict
         }
         RepositoryErrorKind::ReadonlyRepository(_) => OpResult::ReadOnly { message },
-        RepositoryErrorKind::UpdateDurableButRepositoryForked { .. } => {
-            OpResult::DurableButForked { snapshot: None, message }
-        }
         RepositoryErrorKind::StorageError(kind) => storage_mode::classify_storage(kind),
         _ => OpResult::Error { message },
     }
@@ -877,9 +874,13 @@ pub(crate) mod tests {
         let snapshot = SnapshotId::random();
         let new_version = || Box::new(icechunk::storage::VersionInfo::for_creation());
         let read_only = || RepositoryErrorKind::ReadonlyRepository("held".to_owned());
-        let durable = || RepositoryErrorKind::UpdateDurableButRepositoryForked {
-            new_version: new_version(),
-            detail: "fork".to_owned(),
+        let durable = || {
+            RepositoryErrorKind::StorageError(
+                StorageErrorKind::RepositoryForkedAfterUpdate {
+                    new_version: new_version(),
+                    detail: "fork".to_owned(),
+                },
+            )
         };
         let converting =
             || StorageErrorKind::LayoutConversionInProgress("rerun".to_owned());

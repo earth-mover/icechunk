@@ -24,8 +24,7 @@ use pretty_assertions::assert_eq;
 type TestResult<A> = Result<A, Box<dyn Error>>;
 
 const GUARD_PHRASE: &str = "local_filesystem_storage refuses";
-const MISSING_FEATURES_PHRASE: &str =
-    "writer features that this storage doesn't implement";
+const MISSING_FEATURES_PHRASE: &str = "writer features this storage doesn't implement";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RepoFile {

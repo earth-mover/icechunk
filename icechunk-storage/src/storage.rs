@@ -65,9 +65,10 @@ pub enum StorageErrorKind {
     /// The fork check found a fork; nothing was published or deleted.
     #[error("repository forked: {0}. {FORK_EXPLANATION}")]
     RepositoryForked(String),
-    /// The update landed and is durable; its publication found a fork.
+    /// The change landed and is durable; its publication found a fork.
+    /// Retrying would make the change twice.
     #[error(
-        "the update is durable (version {new_version}) but its publication found a fork: {detail}. {FORK_EXPLANATION}"
+        "the change is durable (version {new_version}) and must not be retried, but its publication found a fork: {detail}. {FORK_EXPLANATION}"
     )]
     RepositoryForkedAfterUpdate { new_version: Box<VersionInfo>, detail: String },
     /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
@@ -77,7 +78,7 @@ pub enum StorageErrorKind {
     MirrorUnreadable(String),
     /// The repository lists writer features this storage doesn't implement.
     #[error(
-        "the repository lists writer features this storage doesn't implement ({}), first implemented in {min_version}",
+        "the repository lists writer features this storage doesn't implement ({}), first implemented in {min_version}; it can be read but not modified",
         .missing.iter().join(", ")
     )]
     MissingWriterFeatures { missing: BTreeSet<FeatureName>, min_version: MinVersion },
@@ -1020,7 +1021,7 @@ mod tests {
         };
         assert_eq!(
             kind.to_string(),
-            "the repository lists writer features this storage doesn't implement (other-v2, test-feature-v1), first implemented in a newer Icechunk"
+            "the repository lists writer features this storage doesn't implement (other-v2, test-feature-v1), first implemented in a newer Icechunk; it can be read but not modified"
         );
     }
 

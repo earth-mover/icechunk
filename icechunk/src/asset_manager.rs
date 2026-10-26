@@ -1104,32 +1104,23 @@ impl AssetManager {
                     tokio::time::sleep(delay).await;
                     attempts += 1;
                 }
-                Err(RepositoryError {
-                    kind:
-                        RepositoryErrorKind::UpdateDurableButRepositoryForked {
-                            new_version,
-                            detail,
+                Err(err) => {
+                    // A change that landed though its storage found a fork:
+                    // cache it, and never retry it.
+                    if let RepositoryErrorKind::StorageError(
+                        StorageErrorKind::RepositoryForkedAfterUpdate {
+                            new_version, ..
                         },
-                    context,
-                }) => {
-                    // The change landed: cache it, and never retry it.
-                    if self.use_repo_info_cache {
+                    ) = &err.kind
+                        && self.use_repo_info_cache
+                    {
                         *self
                             .repo_cache
                             .write()
                             .map_err(|_| RepositoryErrorKind::PoisonLock)
-                            .capture()? = Some((new_repo, (*new_version).clone()));
+                            .capture()? = Some((new_repo, (**new_version).clone()));
                     }
-                    return Err(RepositoryError {
-                        kind: RepositoryErrorKind::UpdateDurableButRepositoryForked {
-                            new_version,
-                            detail,
-                        },
-                        context,
-                    });
-                }
-                err @ Err(_) => {
-                    return err;
+                    return Err(err);
                 }
             }
         }
@@ -1916,9 +1907,9 @@ pub fn check_modifiable(
     let listed = repo_info.writer_features().inject()?;
     let missing = missing_features(&listed, storage_features.iter().copied());
     if let Some(min_version) = min_version(&missing) {
-        return Err(RepositoryError::capture(
-            RepositoryErrorKind::MissingWriterFeatures { missing, min_version },
-        ));
+        return Err(RepositoryError::capture(RepositoryErrorKind::StorageError(
+            StorageErrorKind::MissingWriterFeatures { missing, min_version },
+        )));
     }
 
     let unlisted: Vec<_> = storage_features

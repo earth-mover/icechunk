@@ -296,7 +296,12 @@ async fn other_backends_read_the_mirror_and_cannot_write() -> Result<(), Box<dyn
         assert_eq!(main_ancestry(&other).await?, ancestry);
         let err = other.writable_session("main").await.err().ok_or("writable")?;
         assert!(
-            matches!(err.kind, RepositoryErrorKind::MissingWriterFeatures { .. }),
+            matches!(
+                err.kind,
+                RepositoryErrorKind::StorageError(
+                    StorageErrorKind::MissingWriterFeatures { .. }
+                )
+            ),
             "{err:?}"
         );
         assert!(err.to_string().contains("filesystem-layout-v1"), "{err}");
@@ -776,7 +781,12 @@ async fn a_fork_makes_commits_durable_errors_and_gc_delete_nothing()
         matches!(
             &err,
             GCError::Repository(err)
-                if matches!(err.kind, RepositoryErrorKind::UpdateDurableButRepositoryForked { .. })
+                if matches!(
+                    err.kind,
+                    RepositoryErrorKind::StorageError(
+                        StorageErrorKind::RepositoryForkedAfterUpdate { .. }
+                    )
+                )
         ),
         "{err:?}"
     );

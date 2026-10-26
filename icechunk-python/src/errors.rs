@@ -403,13 +403,6 @@ fn classify_repository(kind: &RepositoryErrorKind) -> Classified {
             class("FormatError", codes::UNSUPPORTED_SPEC_VERSION)
         }
         K::PoisonLock => class("InternalError", codes::POISON_LOCK),
-        K::MissingWriterFeatures { .. } => {
-            class("ReadOnlyError", codes::MISSING_WRITER_FEATURES)
-        }
-        K::UpdateDurableButRepositoryForked { .. } => class(
-            "UpdateDurableButRepositoryForkedError",
-            codes::UPDATE_DURABLE_BUT_REPOSITORY_FORKED,
-        ),
         _ => general(codes::UNKNOWN),
     }
 }
