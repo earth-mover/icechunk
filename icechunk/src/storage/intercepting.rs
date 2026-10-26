@@ -1,5 +1,7 @@
 //! A test storage that forwards every call to its backend, except the ones
 //! its [`Intercept`] overrides.
+//!
+//! Compiled only for tests.
 
 use std::{fmt, ops::Range, pin::Pin, sync::Arc};
 

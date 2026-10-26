@@ -1,6 +1,7 @@
 //! Generators of fixtures for reading old repositories that only Rust can
 //! write: checked-in ones read by `icechunk-python/tests/test_can_read_old.py`,
-//! and ones kept outside the repository.
+//! and ones written outside this source tree for manual checks against older
+//! releases.
 
 use std::{error::Error, path::Path};
 
@@ -77,7 +78,7 @@ const DEEP_OPS_LOG_CYCLES: i8 = 100;
 /// standard-layout repository listing `test-feature-v1` (like
 /// `test-repo-v2-unknown-feature`) with a long ops log split into pages of
 /// [`DEEP_OPS_LOG_PAGE_SIZE`] entries, for checks against older Icechunk
-/// releases (not in the repository).
+/// releases (not checked in).
 ///
 /// The history is written in the filesystem layout, where every status change
 /// stores the gate with `underlying`: [`DEEP_OPS_LOG_CYCLES`] cycles of a

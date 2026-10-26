@@ -108,10 +108,7 @@ pub struct VirtualChunkContainer {
 }
 
 /// A virtual chunk container of a stored repository configuration whose
-/// store settings this library can't decode: a kind of storage added by a
-/// later version, or one this build doesn't include. Its `name` and
-/// `url_prefix` still resolve, reading its chunks fails, and saving the
-/// configuration keeps the stored entry unchanged.
+/// store settings we can't decode (they may come from a future version).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UndecodableVirtualChunkContainer {
     name: Option<ContainerName>,

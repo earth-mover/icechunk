@@ -214,7 +214,7 @@ async fn save_config_replaces_a_container_it_cannot_decode_only_by_name() -> Tes
     let saved = stored_config(&storage).await?;
     assert_eq!(containers(&saved)?, vec!["s3://bucket/newer/"]);
     let repo = Repository::open(Arc::clone(&storage)).execute().await?;
-    assert_eq!(repo.config().undecodable_virtual_chunk_containers().count(), 0);
+    assert_eq!(repo.undecodable_virtual_chunk_containers().count(), 0);
     Ok(())
 }
 
@@ -260,8 +260,7 @@ async fn save_config_after_a_binding_round_trip_keeps_what_it_cannot_decode() ->
     let later = repo_with_later_configuration(&storage).await?;
 
     let repo = Repository::open(Arc::clone(&storage)).execute().await?;
-    let round_tripped =
-        RepositoryConfig { undecodable: Default::default(), ..repo.config().clone() };
+    let round_tripped = repo.config().clone();
     let repo = repo.reopen(Some(round_tripped), None).await?;
     repo.save_config().await?;
     let saved = stored_config(&storage).await?;

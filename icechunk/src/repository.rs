@@ -33,7 +33,7 @@ use crate::{
     asset_manager::{AssetManager, Modification, array_label},
     config::{
         Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, ManifestPreloadCondition,
-        RepositoryConfig,
+        RepositoryConfig, UndecodableConfig,
     },
     diff::{Diff, DiffBuilder},
     display::AncestryGraph,
@@ -55,7 +55,7 @@ use crate::{
     refs::{self, Ref, RefError, RefErrorKind},
     session::{Session, SessionError, SessionErrorKind, SessionResult},
     storage::{self, Attribution, AttributionLabels, StorageContext, StorageErrorKind},
-    virtual_chunks::VirtualChunkResolver,
+    virtual_chunks::{UndecodableVirtualChunkContainer, VirtualChunkResolver},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
@@ -202,6 +202,8 @@ pub type RepositoryResult<T> = Result<T, RepositoryError>;
 pub struct Repository {
     spec_version: SpecVersionBin,
     config: RepositoryConfig,
+    /// What the stored configuration holds that `config` couldn't decode.
+    undecodable_config: UndecodableConfig,
     storage_settings: storage::Settings,
     config_version: storage::VersionInfo,
     storage: Arc<dyn Storage + Send + Sync>,
@@ -212,9 +214,11 @@ pub struct Repository {
 }
 
 impl Repository {
+    #[expect(clippy::too_many_arguments)]
     fn new(
         spec_version: SpecVersionBin,
         config: RepositoryConfig,
+        undecodable_config: UndecodableConfig,
         config_version: storage::VersionInfo,
         storage: Arc<dyn Storage + Send + Sync>,
         storage_settings: storage::Settings,
@@ -230,13 +234,14 @@ impl Repository {
                 storage_settings.clone(),
             )
             .with_undecodable_containers(
-                config.undecodable_virtual_chunk_containers().cloned(),
+                undecodable_config.virtual_chunk_containers().cloned(),
             )
             .with_attribution(asset_manager.attribution_labels().clone()),
         );
         Ok(Self {
             spec_version,
             config,
+            undecodable_config,
             config_version,
             storage,
             storage_settings,
@@ -373,7 +378,10 @@ impl Repository {
         // merge user config on top of persisted config and library defaults
         // no storage merging happening yet
         let repo_config = self.config().clone();
-        let config = config.map(|c| repo_config.merge(c)).unwrap_or(repo_config);
+        let config =
+            config.map(|c| repo_config.merge(c)).unwrap_or_else(|| repo_config.clone());
+        let undecodable_config =
+            self.undecodable_config.clone().after_merge(&repo_config, &config);
         // construct the merged storage settings
         let storage_settings = match config.storage.clone() {
             Some(s) => storage_defaults.merge(s),
@@ -386,6 +394,7 @@ impl Repository {
         Self::new(
             self.spec_version,
             config,
+            undecodable_config,
             self.config_version.clone(),
             Arc::clone(&self.storage),
             storage_settings,
@@ -421,7 +430,7 @@ impl Repository {
             Some(DetectedSpecVersion::V2Plus { repo_info, .. }) => {
                 Ok(repo_info.config_bytes_raw().inject()?.map(|config| {
                     (
-                        RepositoryConfig::from_stored(&config),
+                        RepositoryConfig::from_stored(&config).0,
                         storage::VersionInfo::for_creation(),
                     )
                 }))
@@ -447,11 +456,13 @@ impl Repository {
         // For V2+ repos, write config into the repo info object atomically
         if self.spec_version >= SpecVersionBin::V2 {
             let config = self.config().clone();
+            let undecodable_config = self.undecodable_config.clone();
             let num_updates = self.config.num_updates_per_repo_info_file();
             let spec_version = self.spec_version();
             let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
                 let current = repo_info.config_bytes_raw().inject()?;
-                let stored = config.to_stored(current.as_deref()).inject()?;
+                let stored =
+                    config.to_stored(&undecodable_config, current.as_deref()).inject()?;
                 Ok(Arc::new(
                     repo_info
                         .set_config(spec_version, &stored, backup_path, num_updates)
@@ -698,6 +709,15 @@ impl Repository {
 
     pub fn config(&self) -> &RepositoryConfig {
         &self.config
+    }
+
+    /// The virtual chunk containers of the stored configuration whose store
+    /// settings this library can't decode. Their chunks can't be read, and
+    /// saving the configuration keeps them.
+    pub fn undecodable_virtual_chunk_containers(
+        &self,
+    ) -> impl Iterator<Item = &UndecodableVirtualChunkContainer> {
+        self.undecodable_config.virtual_chunk_containers()
     }
 
     pub fn storage_settings(&self) -> &storage::Settings {

@@ -2,6 +2,8 @@
 //! shape, status) and the durable-but-forked change, through real
 //! repositories on in-memory storage and a wrapper that changes what the
 //! storage implements and how its repo-info writes end.
+//!
+//! Compiled only for tests.
 
 use std::{
     collections::BTreeSet,

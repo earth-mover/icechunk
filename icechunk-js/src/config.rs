@@ -337,7 +337,6 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
             previous_file: None,
             repo_update_retries: None,
             num_updates_per_repo_info_file: None,
-            undecodable: Default::default(),
         })
     }
 }

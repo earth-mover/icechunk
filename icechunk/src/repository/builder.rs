@@ -16,7 +16,9 @@ use crate::{
     Storage,
     asset_manager::AssetManager,
     change_set::{ChangeSet, transaction_log_from_change_set},
-    config::{Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, RepositoryConfig},
+    config::{
+        Credentials, DEFAULT_MAX_CONCURRENT_REQUESTS, RepositoryConfig, UndecodableConfig,
+    },
     format::{
         format_constants::SpecVersionBin,
         repo_info::RepoInfo,
@@ -376,7 +378,7 @@ async fn create(
             let snap_info =
                 SnapshotInfo::from_snapshot_file(stored_snapshot.as_ref()).inject()?;
             let config_to_store = if has_overriden_config {
-                Some(config_ref.to_stored(None).inject()?)
+                Some(config_ref.to_stored(&UndecodableConfig::default(), None).inject()?)
             } else {
                 None
             };
@@ -456,6 +458,7 @@ async fn create(
     Repository::new(
         spec_version,
         config,
+        UndecodableConfig::default(),
         config_version,
         storage,
         storage_settings,
@@ -520,19 +523,28 @@ async fn open(
     trace!(%spec_version, "Repository version found");
     raise_if_ic1_unsupported(storage.as_ref(), spec_version).await?;
 
-    let (persisted_config, config_version) = match detected {
+    let (persisted_config, undecodable_config, config_version) = match detected {
         DetectedSpecVersion::V2Plus { repo_info, .. } => {
-            let config = repo_info.config_bytes_raw().inject()?;
+            let (config, undecodable) = repo_info
+                .config_bytes_raw()
+                .inject()?
+                .map(|bytes| RepositoryConfig::from_stored(&bytes))
+                .unzip();
             (
-                config.as_deref().map(RepositoryConfig::from_stored),
+                config,
+                undecodable.unwrap_or_default(),
                 storage::VersionInfo::for_creation(),
             )
         }
         DetectedSpecVersion::V1 => {
             // V1 repos: use the config.yaml result we already fetched
             match config_yaml_result? {
-                Some((c, v)) => (Some(c), v),
-                None => (None, storage::VersionInfo::for_creation()),
+                Some((c, v)) => (Some(c), UndecodableConfig::default(), v),
+                None => (
+                    None,
+                    UndecodableConfig::default(),
+                    storage::VersionInfo::for_creation(),
+                ),
             }
         }
     };
@@ -546,7 +558,9 @@ async fn open(
         None => RepositoryConfig::default(),
     };
     // merge user config on top of persisted config and library defaults
-    let merged_config = config.map(|c| repo_config.merge(c)).unwrap_or(repo_config);
+    let merged_config =
+        config.map(|c| repo_config.merge(c)).unwrap_or_else(|| repo_config.clone());
+    let undecodable_config = undecodable_config.after_merge(&repo_config, &merged_config);
 
     // Re-merge in case persisted config introduced additional storage
     // settings. Note: the S3 client is already initialized with `settings`
@@ -576,6 +590,7 @@ async fn open(
     Repository::new(
         spec_version,
         final_config,
+        undecodable_config,
         config_version,
         storage,
         storage_settings,

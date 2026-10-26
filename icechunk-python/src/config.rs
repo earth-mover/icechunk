@@ -2571,7 +2571,6 @@ impl TryFrom<&PyRepositoryConfig> for RepositoryConfig {
                     .as_ref()
                     .map(|r| (&*r.borrow(py)).into()),
                 num_updates_per_repo_info_file: value.num_updates_per_repo_info_file,
-                undecodable: Default::default(),
             })
         })
     }

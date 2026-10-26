@@ -572,17 +572,13 @@ pub struct RepositoryConfig {
 
     #[serde(default)]
     pub num_updates_per_repo_info_file: Option<u16>,
-
-    /// What this library couldn't decode in the stored configuration.
-    #[serde(default, skip_serializing_if = "UndecodableConfig::is_empty")]
-    pub undecodable: UndecodableConfig,
 }
 
 /// What a library couldn't decode in a stored repository configuration.
 /// Saving the configuration keeps those stored values, see
 /// [`RepositoryConfig::to_stored`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UndecodableConfig {
+pub(crate) struct UndecodableConfig {
     /// Known top-level keys whose stored value didn't decode and that no
     /// later configuration has changed.
     #[serde(default)]
@@ -594,8 +590,27 @@ pub struct UndecodableConfig {
 }
 
 impl UndecodableConfig {
-    pub fn is_empty(&self) -> bool {
-        self.keys.is_empty() && self.virtual_chunk_containers.is_empty()
+    pub(crate) fn virtual_chunk_containers(
+        &self,
+    ) -> impl Iterator<Item = &UndecodableVirtualChunkContainer> {
+        self.virtual_chunk_containers.values()
+    }
+
+    /// What stays undecodable once `merged`, the result of merging another
+    /// configuration into `stored`, replaces `stored`. A key stays unless the
+    /// merge changes its value: echoing the same configuration back (as a
+    /// binding round trip does) doesn't count as setting it. A container
+    /// stays unless a container of `merged` replaces it.
+    pub(crate) fn after_merge(
+        mut self,
+        stored: &RepositoryConfig,
+        merged: &RepositoryConfig,
+    ) -> Self {
+        let json = |config| serde_json::to_value(config).unwrap_or_default();
+        let (before, after) = (json(stored), json(merged));
+        self.keys.retain(|key| before.get(key) == after.get(key));
+        self.drop_replaced_containers(merged.virtual_chunk_containers.as_ref());
+        self
     }
 
     /// Drops the containers that a decodable container of `containers`
@@ -682,12 +697,7 @@ impl RepositoryConfig {
     }
 
     pub fn merge(&self, other: Self) -> Self {
-        let mut undecodable = self.undecodable.clone();
-        undecodable.keys.extend(other.undecodable.keys.iter().cloned());
-        undecodable
-            .virtual_chunk_containers
-            .extend(other.undecodable.virtual_chunk_containers.clone());
-        let mut merged = Self {
+        Self {
             inline_chunk_threshold_bytes: other
                 .inline_chunk_threshold_bytes
                 .or(self.inline_chunk_threshold_bytes),
@@ -771,29 +781,13 @@ impl RepositoryConfig {
                 (Some(c), None) => Some(*c),
                 (Some(_), Some(theirs)) => Some(theirs),
             },
-            undecodable: UndecodableConfig::default(),
-        };
-        // A key that didn't decode stays undecodable unless this merge
-        // changes its value: echoing the same configuration back (as a
-        // binding round trip does) doesn't count as setting it.
-        let (before, after) = (self.decodable_json(), merged.decodable_json());
-        undecodable.keys.retain(|key| before.get(key) == after.get(key));
-        undecodable.drop_replaced_containers(merged.virtual_chunk_containers.as_ref());
-        merged.undecodable = undecodable;
-        merged
-    }
-
-    fn decodable_json(&self) -> serde_json::Value {
-        let decodable =
-            Self { undecodable: UndecodableConfig::default(), ..self.clone() };
-        serde_json::to_value(decodable).unwrap_or_default()
+        }
     }
 }
 
 impl RepositoryConfig {
     /// Add a container, replacing any container with the same name or the
-    /// same `url_prefix`, including one whose store settings this library
-    /// can't decode.
+    /// same `url_prefix`.
     pub fn set_virtual_chunk_container(
         &mut self,
         cont: VirtualChunkContainer,
@@ -806,7 +800,6 @@ impl RepositoryConfig {
             containers.retain(|_, v| v.name.as_deref() != Some(new_name.as_str()));
         }
         containers.insert(cont.url_prefix().to_string(), cont);
-        self.undecodable.drop_replaced_containers(self.virtual_chunk_containers.as_ref());
         Ok(())
     }
 
@@ -835,41 +828,33 @@ impl RepositoryConfig {
         self.virtual_chunk_containers = Some(Default::default());
     }
 
-    pub fn undecodable_virtual_chunk_containers(
-        &self,
-    ) -> impl Iterator<Item = &UndecodableVirtualChunkContainer> {
-        self.undecodable.virtual_chunk_containers.values()
-    }
-
-    /// Decode the configuration a repo info stores (`Repo.config`). Never
-    /// fails: a top-level key whose value this library can't decode reads as
-    /// absent, and a virtual chunk container whose store settings it can't
-    /// decode is kept as undecodable. Logs a warning for each.
-    pub(crate) fn from_stored(bytes: &[u8]) -> Self {
+    /// Decode the configuration a repo info stores (`Repo.config`), and what
+    /// of it this library can't decode. Never fails: a top-level key whose
+    /// value this library can't decode reads as absent, and a virtual chunk
+    /// container whose store settings it can't decode is kept as
+    /// undecodable. Logs a warning for each.
+    pub(crate) fn from_stored(bytes: &[u8]) -> (Self, UndecodableConfig) {
         let decoded = decode_stored(bytes);
         for problem in decoded.problems {
             tracing::warn!("{problem}");
         }
-        decoded.config
+        (decoded.config, decoded.undecodable)
     }
 
     /// Encode the configuration as a repo info stores it, merged into
     /// `current`, the stored configuration of the repo info it replaces. Of
     /// `current`, it keeps the keys this library doesn't know, the values of
     /// known keys it can't decode (unless this configuration sets the key and
-    /// didn't read it undecodable, see [`UndecodableConfig`]), and the virtual
-    /// chunk containers whose store settings it can't decode (unless a
-    /// container of this configuration replaces one: same key or name).
+    /// `undecodable`, what reading this configuration couldn't decode, doesn't
+    /// list it), and the virtual chunk containers whose store settings it can't
+    /// decode (unless a container of this configuration replaces one: same
+    /// key or name).
     pub(crate) fn to_stored(
         &self,
+        undecodable: &UndecodableConfig,
         current: Option<&[u8]>,
     ) -> IcechunkResult<StoredRepositoryConfig> {
-        let ours_bytes = flexbuffers::to_vec(Self {
-            undecodable: UndecodableConfig::default(),
-            ..self.clone()
-        })
-        .map_err(Box::new)
-        .capture()?;
+        let ours_bytes = flexbuffers::to_vec(self).map_err(Box::new).capture()?;
         let ours = Reader::get_root(ours_bytes.as_slice())
             .and_then(|root| root.get_map())
             .map_err(reader_error)?;
@@ -877,7 +862,7 @@ impl RepositoryConfig {
             .and_then(|bytes| Reader::get_root(bytes).and_then(|r| r.get_map()).ok());
         let current_decoded = current.map(decode_stored);
         let current_undecodable_keys =
-            current_decoded.as_ref().map(|d| &d.undecodable_keys);
+            current_decoded.as_ref().map(|d| &d.undecodable.keys);
         let kept_containers: Vec<(&str, Reader<&[u8]>)> =
             match (&current_decoded, &current_map) {
                 (Some(decoded), Some(current)) => {
@@ -886,7 +871,6 @@ impl RepositoryConfig {
                         .and_then(|value| value.get_map())
                         .ok();
                     decoded
-                        .config
                         .undecodable
                         .virtual_chunk_containers
                         .iter()
@@ -912,7 +896,7 @@ impl RepositoryConfig {
             let is_null = value.flexbuffer_type() == FlexBufferType::Null;
             let keeps_current = current_undecodable_keys
                 .is_some_and(|keys| keys.contains(key))
-                && (is_null || self.undecodable.keys.contains(key));
+                && (is_null || undecodable.keys.contains(key));
             let stored = match current_map.as_ref().and_then(|c| c.index(key).ok()) {
                 Some(current) if keeps_current => StoredValue::Value(current),
                 _ if key == VIRTUAL_CHUNK_CONTAINERS_KEY
@@ -983,7 +967,7 @@ fn reader_error(err: ReaderError) -> IcechunkFormatError {
 
 struct DecodedStoredConfig {
     config: RepositoryConfig,
-    undecodable_keys: BTreeSet<String>,
+    undecodable: UndecodableConfig,
     problems: Vec<String>,
 }
 
@@ -993,7 +977,7 @@ fn decode_stored(bytes: &[u8]) -> DecodedStoredConfig {
         Err(err) => {
             return DecodedStoredConfig {
                 config: RepositoryConfig::default(),
-                undecodable_keys: BTreeSet::new(),
+                undecodable: UndecodableConfig::default(),
                 problems: vec![format!(
                     "ignoring the repository configuration, this Icechunk library can't decode it: {err}"
                 )],
@@ -1020,18 +1004,13 @@ fn decode_stored(bytes: &[u8]) -> DecodedStoredConfig {
         previous_file: decoder.key("previous_file"),
         repo_update_retries: decoder.key("repo_update_retries"),
         num_updates_per_repo_info_file: decoder.key("num_updates_per_repo_info_file"),
-        undecodable: UndecodableConfig::default(),
-    };
-    let config = RepositoryConfig {
-        undecodable: UndecodableConfig {
-            keys: decoder.undecodable_keys.clone(),
-            virtual_chunk_containers: undecodable_virtual_chunk_containers,
-        },
-        ..config
     };
     DecodedStoredConfig {
         config,
-        undecodable_keys: decoder.undecodable_keys,
+        undecodable: UndecodableConfig {
+            keys: decoder.undecodable_keys,
+            virtual_chunk_containers: undecodable_virtual_chunk_containers,
+        },
         problems: decoder.problems,
     }
 }
@@ -1150,7 +1129,7 @@ mod tests {
 
     use crate::{
         ObjectStoreConfig, RepositoryConfig,
-        config::{CachingConfig, S3Options},
+        config::{CachingConfig, S3Options, UndecodableConfig},
         strategies::{repository_config, s3_static_credentials},
         virtual_chunks::VirtualChunkContainer,
     };
@@ -1584,8 +1563,14 @@ manifest: null
         /// the whole map at once) read back unchanged.
         #[icechunk_macros::test]
         fn stored_config_round_trips(config in repository_config()) {
-            let stored = flexbuffers::to_vec(config.to_stored(None).unwrap()).unwrap();
-            prop_assert_eq!(&RepositoryConfig::from_stored(&stored), &config);
+            let stored = flexbuffers::to_vec(
+                config.to_stored(&UndecodableConfig::default(), None).unwrap(),
+            )
+            .unwrap();
+            prop_assert_eq!(
+                RepositoryConfig::from_stored(&stored),
+                (config.clone(), UndecodableConfig::default())
+            );
             let strict: RepositoryConfig = flexbuffers::from_slice(&stored).unwrap();
             prop_assert_eq!(&strict, &config);
         }
@@ -1597,9 +1582,11 @@ manifest: null
 
     fn stored_as_json(
         config: &RepositoryConfig,
+        undecodable: &UndecodableConfig,
         current: Option<&[u8]>,
     ) -> serde_json::Value {
-        let bytes = flexbuffers::to_vec(config.to_stored(current).unwrap()).unwrap();
+        let bytes =
+            flexbuffers::to_vec(config.to_stored(undecodable, current).unwrap()).unwrap();
         flexbuffers::from_slice(&bytes).unwrap()
     }
 
@@ -1627,18 +1614,22 @@ manifest: null
 
     #[icechunk_macros::test]
     fn stored_config_decodes_each_key_on_its_own() {
-        let config = RepositoryConfig::from_stored(&stored(&later_config()));
+        let (config, undecodable) =
+            RepositoryConfig::from_stored(&stored(&later_config()));
         assert_eq!(config.inline_chunk_threshold_bytes, Some(7));
         assert_eq!(config.caching, None);
         let decoded: Vec<_> =
             config.virtual_chunk_containers().map(|c| c.url_prefix()).collect();
         assert_eq!(decoded, vec!["s3://bucket/"]);
-        let undecodable: Vec<_> = config
-            .undecodable_virtual_chunk_containers()
+        let undecodable_containers: Vec<_> = undecodable
+            .virtual_chunk_containers()
             .map(|c| (c.name(), c.url_prefix()))
             .collect();
-        assert_eq!(undecodable, vec![(Some("future"), Some("future://bucket/"))]);
-        assert_eq!(config.undecodable.keys, BTreeSet::from(["caching".to_string()]));
+        assert_eq!(
+            undecodable_containers,
+            vec![(Some("future"), Some("future://bucket/"))]
+        );
+        assert_eq!(undecodable.keys, BTreeSet::from(["caching".to_string()]));
     }
 
     #[icechunk_macros::test]
@@ -1647,7 +1638,7 @@ manifest: null
         {
             assert_eq!(
                 RepositoryConfig::from_stored(&bytes),
-                RepositoryConfig::default()
+                (RepositoryConfig::default(), UndecodableConfig::default())
             );
         }
     }
@@ -1656,14 +1647,14 @@ manifest: null
     fn to_stored_keeps_what_it_cannot_decode_unless_set_by_intent() {
         let later = later_config();
         let current = stored(&later);
-        let read = RepositoryConfig::from_stored(&current);
+        let (read, undecodable) = RepositoryConfig::from_stored(&current);
         // a value injected without merging, as opening injects defaults
         let config = RepositoryConfig {
             caching: Some(CachingConfig::default()),
             inline_chunk_threshold_bytes: Some(8),
             ..read.clone()
         };
-        let saved = stored_as_json(&config, Some(&current));
+        let saved = stored_as_json(&config, &undecodable, Some(&current));
         assert_eq!(saved["inline_chunk_threshold_bytes"], 8);
         for key in ["caching", "key_from_the_future", "virtual_chunk_containers"] {
             assert_eq!(saved[key], later[key], "{key}");
@@ -1671,17 +1662,26 @@ manifest: null
 
         // the same value echoed back through a merge doesn't count as setting it
         let echoed = config.merge(config.clone());
-        assert_eq!(stored_as_json(&echoed, Some(&current))["caching"], later["caching"]);
+        let echoed_undecodable = undecodable.clone().after_merge(&config, &echoed);
+        assert_eq!(
+            stored_as_json(&echoed, &echoed_undecodable, Some(&current))["caching"],
+            later["caching"]
+        );
 
         let caching = CachingConfig { num_chunk_refs: Some(3), ..Default::default() };
         let set = config
             .merge(RepositoryConfig { caching: Some(caching), ..Default::default() });
-        let saved = stored_as_json(&set, Some(&current));
+        let set_undecodable = undecodable.after_merge(&config, &set);
+        let saved = stored_as_json(&set, &set_undecodable, Some(&current));
         assert_eq!(saved["caching"], serde_json::to_value(caching).unwrap());
 
         // a known key that a concurrent writer made undecodable, and that this
         // configuration doesn't set, is kept
-        let saved = stored_as_json(&RepositoryConfig::default(), Some(&current));
+        let saved = stored_as_json(
+            &RepositoryConfig::default(),
+            &UndecodableConfig::default(),
+            Some(&current),
+        );
         assert_eq!(saved["caching"], later["caching"]);
     }
 
@@ -1692,7 +1692,8 @@ manifest: null
         // a configuration that never saw them, as after a binding round trip
         let mut config = RepositoryConfig::default();
         config.clear_virtual_chunk_containers();
-        let saved = stored_as_json(&config, Some(&current));
+        let saved =
+            stored_as_json(&config, &UndecodableConfig::default(), Some(&current));
         let containers = saved["virtual_chunk_containers"].as_object().unwrap();
         assert_eq!(containers.keys().collect::<Vec<_>>(), vec!["future://bucket/"]);
         assert_eq!(
@@ -1705,17 +1706,19 @@ manifest: null
     fn setting_a_container_replaces_an_undecodable_one_of_the_same_name() {
         let later = later_config();
         let current = stored(&later);
-        let mut config = RepositoryConfig::from_stored(&current);
+        let (read, undecodable) = RepositoryConfig::from_stored(&current);
         let replacement = VirtualChunkContainer::new_named(
             "future".to_string(),
             "s3://other/".to_string(),
             ObjectStoreConfig::S3(S3Options::default()),
         )
         .unwrap();
+        let mut config = read.clone();
         config.set_virtual_chunk_container(replacement.clone()).unwrap();
-        assert_eq!(config.undecodable_virtual_chunk_containers().count(), 0);
+        let undecodable = undecodable.after_merge(&read, &config);
+        assert_eq!(undecodable.virtual_chunk_containers().count(), 0);
 
-        let saved = stored_as_json(&config, Some(&current));
+        let saved = stored_as_json(&config, &undecodable, Some(&current));
         let containers = saved["virtual_chunk_containers"].as_object().unwrap();
         let mut keys: Vec<_> = containers.keys().collect();
         keys.sort();
@@ -1728,15 +1731,23 @@ manifest: null
 
     #[icechunk_macros::test]
     fn merge_keeps_undecodable_containers_unless_replaced() {
-        let config = RepositoryConfig::from_stored(&stored(&later_config()));
+        let (config, undecodable) =
+            RepositoryConfig::from_stored(&stored(&later_config()));
+        let after = |merged: &RepositoryConfig| {
+            undecodable
+                .clone()
+                .after_merge(&config, merged)
+                .virtual_chunk_containers()
+                .count()
+        };
         let kept = config.merge(RepositoryConfig {
             virtual_chunk_containers: Some(Default::default()),
             ..Default::default()
         });
-        assert_eq!(kept.undecodable_virtual_chunk_containers().count(), 1);
+        assert_eq!(after(&kept), 1);
         let mut cleared = config.clone();
         cleared.clear_virtual_chunk_containers();
-        assert_eq!(cleared.undecodable_virtual_chunk_containers().count(), 1);
+        assert_eq!(after(&cleared), 1);
 
         let mut replacing = RepositoryConfig::default();
         replacing
@@ -1749,18 +1760,17 @@ manifest: null
                 .unwrap(),
             )
             .unwrap();
-        let replaced = config.merge(replacing);
-        assert_eq!(replaced.undecodable_virtual_chunk_containers().count(), 0);
+        assert_eq!(after(&config.merge(replacing)), 0);
     }
 
-    /// Repositories and sessions are serialized with `rmp_serde`, e.g. to
+    /// Repositories, which hold it, are serialized with `rmp_serde`, e.g. to
     /// send them to other processes.
     #[icechunk_macros::test]
-    fn undecodable_containers_survive_rmp_serialization() {
-        let config = RepositoryConfig::from_stored(&stored(&later_config()));
-        let bytes = rmp_serde::to_vec(&config).unwrap();
-        let roundtrip: RepositoryConfig = rmp_serde::from_slice(&bytes).unwrap();
-        assert_eq!(roundtrip, config);
-        assert_eq!(roundtrip.undecodable_virtual_chunk_containers().count(), 1);
+    fn undecodable_config_survives_rmp_serialization() {
+        let (_, undecodable) = RepositoryConfig::from_stored(&stored(&later_config()));
+        let bytes = rmp_serde::to_vec(&undecodable).unwrap();
+        let roundtrip: UndecodableConfig = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(roundtrip, undecodable);
+        assert_eq!(roundtrip.virtual_chunk_containers().count(), 1);
     }
 }

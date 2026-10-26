@@ -382,13 +382,19 @@ pub async fn find_retained(
     Ok((retained, result.manifests, result.snapshots))
 }
 
-/// Collects the garbage `config` selects.
+/// Collects the garbage selected by `config` in this order:
 ///
-/// Order: the checks before a modification, roots and retention, GC's change
-/// (on a repository that lists `filesystem-layout-v1` even when it drops
-/// nothing), the storage's hook before the deletes, the sweep of the
-/// storage's leftovers, the deletes, the hook after them. A dry run makes no
-/// change and calls no hook.
+/// 1. Checks that the repository can be modified, and returns early if
+///    `config` selects nothing.
+/// 2. Finds what to keep: roots, reachability and retention.
+/// 3. Writes GC's change to the repo info, which drops the snapshots it
+///    doesn't keep.
+/// 4. Calls the storage's hook before the deletes.
+/// 5. Sweeps the storage's leftovers.
+/// 6. Deletes the garbage.
+/// 7. Calls the storage's hook after the deletes, even when they failed.
+///
+/// A dry run only reports what steps 5 and 6 would delete.
 pub async fn garbage_collect(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
@@ -516,6 +522,8 @@ async fn garbage_collect_one_attempt(
         Some(info) => info.writer_features()?.contains(&layout),
         None => false,
     };
+    // A repository in the filesystem layout gets the change even when it
+    // drops nothing, so the storage's hooks get a version.
     if !config.dry_run
         && plan.repo_info.is_some()
         && (config.deletes_snapshots() || lists_layout)

@@ -958,16 +958,16 @@ impl AssetManager {
     /// The checks before a modification, against the repo info it replaces:
     /// the storage implements every listed writer feature, every feature the
     /// storage requires is listed, the shape is well formed and, unless the
-    /// modification only changes the status, the status is `Online`. `op`
-    /// prefixes the error of a status that isn't `Online`.
+    /// modification only changes the status, the status is `Online`.
+    /// `error_prefix` starts the error message when the status isn't `Online`.
     pub async fn ensure_modifiable(
         &self,
         repo_info: &RepoInfo,
         modification: Modification,
-        op: Option<&str>,
+        error_prefix: Option<&str>,
     ) -> RepositoryResult<()> {
         let features = self.storage.writer_features().await.inject()?;
-        check_modifiable(repo_info, &features, modification, op)
+        check_modifiable(repo_info, &features, modification, error_prefix)
     }
 
     #[instrument(skip(self, info))]
@@ -1902,7 +1902,7 @@ pub fn check_modifiable(
     repo_info: &RepoInfo,
     storage_features: &StorageWriterFeatures,
     modification: Modification,
-    op: Option<&str>,
+    error_prefix: Option<&str>,
 ) -> RepositoryResult<()> {
     let listed = repo_info.writer_features().inject()?;
     let missing = missing_features(&listed, storage_features.iter().copied());
@@ -1934,8 +1934,8 @@ pub fn check_modifiable(
     if modification == Modification::Any {
         let status = repo_info.status().inject()?;
         if status.availability != RepoAvailability::Online {
-            let reason = match op {
-                Some(op) => format!("{op}; {}", status.error_msg()),
+            let reason = match error_prefix {
+                Some(prefix) => format!("{prefix}; {}", status.error_msg()),
                 None => status.error_msg(),
             };
             return Err(RepositoryError::capture(

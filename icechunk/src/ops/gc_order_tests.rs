@@ -1,6 +1,8 @@
 //! The order of GC's change, its storage hooks, the sweep and the deletes,
 //! through real repositories on in-memory storage and a wrapper that records
 //! those calls and can report the filesystem layout's writer feature.
+//!
+//! Compiled only for tests, and not with the `shuttle` feature.
 
 use std::{
     num::{NonZeroU16, NonZeroUsize},
