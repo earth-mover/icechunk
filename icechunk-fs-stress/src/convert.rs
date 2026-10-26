@@ -997,6 +997,12 @@ impl Scenario<'_> {
         let log = start_worker_log(&phase, &who)?;
         let fork = write_fork(&phase.storage(), announce_backup(&log)?)?;
         log_fork(&log, &fork, None);
+        // The rerun's fork check comes after the plant, on this host: F4
+        // counts a read in the millisecond the write ended as possibly
+        // before it, which would excuse the erasure.
+        while now_ms() <= fork.t_after_ms {
+            std::thread::sleep(Duration::from_millis(1));
+        }
         eprintln!("  planted a standard write in repo");
         Ok(fork.fork_hash)
     }
