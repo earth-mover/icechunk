@@ -14,6 +14,7 @@ from icechunk._icechunk_python import (
     ObjectStoreConfig,
     RepositoryConfig,
     initialize_logs,
+    set_logs_destination,
     set_logs_filter,
     shutdown_telemetry,
 )
@@ -34,6 +35,7 @@ __all__ = [
     "ObjectStoreConfig",
     "RepositoryConfig",
     "initialize_logs",
+    "set_logs_destination",
     "set_logs_filter",
     "shutdown_telemetry",
 ]
