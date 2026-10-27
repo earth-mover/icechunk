@@ -21,7 +21,7 @@ permissions:
 jobs:
   publish:
     name: Check and publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu24-8-core-amd64
     permissions:
        id-token: write  # needed to publish to crates.io
 
