@@ -1,5 +1,16 @@
 # Changelog
 
+## Python Icechunk Library [unreleased]
+
+### Features
+
+- `StorageTimeoutSettings` now applies to the `object_store` backends (`gcs_storage`, `azure_storage`, `http_storage` and `s3_object_store_storage`). They honor `connect_timeout_ms` and `operation_attempt_timeout_ms`, which take precedence over the same options in the backend `config`. `read_timeout_ms` and `operation_timeout_ms` still apply only to the S3 client.
+- A timeout of 0 in `StorageTimeoutSettings` disables that timeout, including the client default.
+
+### Fixes
+
+- The S3 client (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) has a default per-attempt timeout of 10 minutes. A server that accepted a request and never answered used to make the request wait forever. Now the attempt fails and is retried. Set `operation_attempt_timeout_ms` to change the limit, or to 0 to disable it.
+
 ## Python Icechunk Library 2.3.1
 
 ### Features
