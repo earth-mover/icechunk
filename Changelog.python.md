@@ -1,14 +1,23 @@
 # Changelog
 
-## Python Icechunk Library [unreleased]
+## Python Icechunk Library 2.3.1
 
 ### Features
 
-- `set_logs_destination("python")` sends Icechunk logs to the Python `logging` module instead of the console. Each event goes to the logger for its Rust module, for example `icechunk.repository.builder`. `set_logs_filter` and `ICECHUNK_LOG` apply to the active destination. To set the destination at import, use `ICECHUNK_LOG_DESTINATION`. `ICECHUNK_PYTHON_LOG_QUEUE_SIZE` sets how many records can wait for slow handlers.
+- `set_logs_destination("python")` sends Icechunk logs to the Python `logging` module instead of the console. Each event goes to the logger for its Rust module, for example `icechunk.repository.builder`. `set_logs_filter` and `ICECHUNK_LOG` apply to the active destination. To set the destination at import, use `ICECHUNK_LOG_DESTINATION`. `ICECHUNK_PYTHON_LOG_QUEUE_SIZE` sets how many records can wait for slow handlers ([#2513](https://github.com/earth-mover/icechunk/pull/2513)).
+- The `icechunk` command line tool has two new subcommands. `icechunk inspect <repo> [<ref>]` prints a snapshot as JSON. `icechunk diff <repo> <from> <to>` prints one line per change between two refs ([#2467](https://github.com/earth-mover/icechunk/pull/2467)).
+- Wheels are published for free threaded Python 3.15, with the `abi3t` stable ABI ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
 
 ### Fixes
 
 - `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
+- Repo info updates honor the `max_tries` setting in `RepoUpdateRetryConfig` and no longer add 5 extra retries. Unset fields use the repo update defaults instead of the storage retry defaults ([#2475](https://github.com/earth-mover/icechunk/pull/2475)).
+- The type stubs declare `AzureRefreshableCredential.BearerToken`, `.SasToken` and `.AccessKey` as subclasses of `AzureRefreshableCredential`, as they are at runtime ([#2137](https://github.com/earth-mover/icechunk/issues/2137), [#2461](https://github.com/earth-mover/icechunk/pull/2461)).
+- `SpecVersion` and `ConflictType` use the default enum `repr()` ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
+
+### Security
+
+- Updated `rustls`, `rustls-webpki` and `webpki-root-certs` for RUSTSEC-2026-0346, -0347, -0348, -0349, -0382 and -0383. The S3 client no longer includes the old `rustls` 0.21 TLS stack ([#2489](https://github.com/earth-mover/icechunk/pull/2489), [#2497](https://github.com/earth-mover/icechunk/pull/2497)).
 
 ## Python Icechunk Library 2.3.0
 
