@@ -16,6 +16,7 @@ All internal crates are versioned in lockstep with the JS package: bump every wo
 
 ## (Optional) Issuing a icechunk rust library release
 
+1. Confirm that the `Rust CI`, `Code Quality Checks` and `Dependency Check` workflows passed on the commit you release. The publish workflow does not run these checks.
 1. (Optional: Iff changes to core icechunk rust crate) Go to the [`publish rust library` github action](https://github.com/earth-mover/icechunk/actions/workflows/publish-rust-library.yml). Click `Run workflow`, select the branch (`main` for a normal release, `support/v1.x` for a V1 support release), and click the green `Run workflow` button to launch.
 
 ## Issuing an icechunk python release
