@@ -880,9 +880,7 @@ class Repository:
         Returns
         -------
         RepoStatus
-            The current status of the repository. For a repository that lists
-            writer features, this is its own status, not the read-only status
-            that Icechunk versions which don't implement those features read.
+            The current status of the repository.
         """
         return self._repository.get_status()
 
@@ -894,9 +892,7 @@ class Repository:
         Returns
         -------
         RepoStatus
-            The current status of the repository. For a repository that lists
-            writer features, this is its own status, not the read-only status
-            that Icechunk versions which don't implement those features read.
+            The current status of the repository.
         """
         return self._repository.get_status()
 
@@ -907,9 +903,7 @@ class Repository:
         Returns
         -------
         RepoStatus
-            The current status of the repository. For a repository that lists
-            writer features, this is its own status, not the read-only status
-            that Icechunk versions which don't implement those features read.
+            The current status of the repository.
         """
         return await self._repository.get_status_async()
 
@@ -921,9 +915,7 @@ class Repository:
         the repository is refused, garbage collection and expiration included,
         except status changes and the layout conversions of
         `filesystem_storage`. Setting it is the way to stop every writer, for
-        example before copying a repository. On `filesystem_storage` it also
-        makes the mirror `repo` current once every process that changed the
-        repository earlier has finished.
+        example before copying a repository.
 
         Parameters
         ----------
@@ -940,9 +932,7 @@ class Repository:
         the repository is refused, garbage collection and expiration included,
         except status changes and the layout conversions of
         `filesystem_storage`. Setting it is the way to stop every writer, for
-        example before copying a repository. On `filesystem_storage` it also
-        makes the mirror `repo` current once every process that changed the
-        repository earlier has finished.
+        example before copying a repository.
 
         Parameters
         ----------
@@ -1021,11 +1011,6 @@ class Repository:
         """
         Set a feature flag.
 
-        Icechunk before 2.4.0 ignores every flag except `move_node`,
-        `create_tag` and `delete_tag`, so disabling another flag doesn't stop
-        writers using an older Icechunk. To stop every writer, set the status
-        to `RepoAvailability.read_only` instead.
-
         Parameters
         ----------
         name : str
@@ -1038,11 +1023,6 @@ class Repository:
     async def set_feature_flag_async(self, name: str, setting: bool | None) -> None:
         """
         Set a feature flag (async version).
-
-        Icechunk before 2.4.0 ignores every flag except `move_node`,
-        `create_tag` and `delete_tag`, so disabling another flag doesn't stop
-        writers using an older Icechunk. To stop every writer, set the status
-        to `RepoAvailability.read_only` instead.
 
         Parameters
         ----------

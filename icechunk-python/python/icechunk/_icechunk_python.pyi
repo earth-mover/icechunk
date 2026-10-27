@@ -1931,12 +1931,10 @@ class RepositoryConfig:
         """
     def clear_virtual_chunk_containers(self) -> None:
         """
-        Clear the virtual chunk containers this library can decode.
+        Clear the virtual chunk containers.
 
         Containers whose store settings this library can't decode, such as
-        ones written by a newer Icechunk, stay: a library never removes them,
-        it can only replace one with a container of the same name or
-        `url_prefix`.
+        ones written by a newer Icechunk, stay.
         """
     @property
     def repo_update_retries(self) -> RepoUpdateRetryConfig | None:
@@ -3298,11 +3296,7 @@ class FilesystemStorage(Storage):
         filesystem layout of `filesystem_storage`.
 
         `filesystem_storage` refuses to open such a repository until it is
-        converted. The conversion backs `repo` up to `overwritten/`, builds
-        `repo.d/`, whose first version is the same repo info with the writer
-        feature `filesystem-layout-v1` added, and publishes it as the mirror
-        `repo`. It changes only the writer features and the update log, and
-        keeps the repository's status, whatever it is.
+        converted.
 
         This is an administrative operation: run it with nothing else using
         the repository, no writer in any process, no process still publishing
@@ -3353,12 +3347,6 @@ class FilesystemStorage(Storage):
         """Convert a repository in the filesystem layout of `filesystem_storage`
         back to the standard layout that `local_filesystem_storage`, other
         storage backends and Icechunk before 2.4.0 write.
-
-        The conversion backs the current version up to `overwritten/`, changes
-        the repository to that version with the writer feature
-        `filesystem-layout-v1` removed, publishes it as `repo`, then deletes
-        `repo.d/`. It changes only the writer features and the update log, and
-        keeps the repository's status, whatever it is.
 
         This is an administrative operation: run it with nothing else using
         the repository, no writer in any process, no process still publishing
@@ -3420,7 +3408,7 @@ class FilesystemStorage(Storage):
         gives up under contention, leaves it behind. This repairs it without
         changing the repository, and is safe while writers run.
 
-        It is best effort: it publishes the version it lists, which a change
+        It is best effort: it publishes the version it finds, which a change
         landing meanwhile or a lagging listing can make older than the current
         one. A change, such as `Repository.set_status` with
         `RepoAvailability.read_only`, makes the mirror current once every process

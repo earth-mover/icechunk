@@ -106,9 +106,7 @@ def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
     Never let anything else write `repo`: Icechunk before 2.4.0 changing the
     status, or other tools, fork the repository.
 
-    Repositories in the standard layout, as `local_filesystem_storage` and
-    Icechunk before 2.4.0 write them, are refused until converted, once, with
-    nothing else using the repository, with
+    Repositories in the standard layout are refused until converted, with
     `FilesystemStorage.convert_to_filesystem_layout`.
     `FilesystemStorage.convert_to_standard_layout` converts back.
 
