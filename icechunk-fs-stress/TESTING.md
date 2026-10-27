@@ -37,7 +37,7 @@ Icechunk 2.4.0 on, and to the test builds we publish as pre-releases tagged
 `tag` to the release we asked you to test:
 
 ```sh
-tag=fs-stress-2.4.0-rc1
+tag=fs-stress-2.4.0-rc2
 asset=fs-stress-${tag#fs-stress-}-$(uname -m)-linux-musl
 base=https://github.com/earth-mover/icechunk/releases/download/$tag
 curl -fL -o fs-stress "$base/$asset"
