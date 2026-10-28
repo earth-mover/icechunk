@@ -715,7 +715,14 @@ async fn non_utf8_names_are_skipped() {
     let st = storage(dir.path());
     let chunks = dir.path().join("chunks");
     write(dir.path(), "chunks/ABC", CONTENT);
-    std::fs::write(chunks.join(OsStr::from_bytes(b"\xff")), CONTENT).unwrap();
+    match std::fs::write(chunks.join(OsStr::from_bytes(b"\xff")), CONTENT) {
+        // some filesystems reject non-UTF-8 names
+        Err(err) if err.raw_os_error() == Some(libc::EILSEQ) => {
+            eprintln!("skipped: the filesystem rejects non-UTF-8 names");
+            return;
+        }
+        res => res.unwrap(),
+    }
     let bad_dir = chunks.join(OsStr::from_bytes(b"\xfe"));
     std::fs::create_dir_all(&bad_dir).unwrap();
     std::fs::write(bad_dir.join("XYZ"), CONTENT).unwrap();

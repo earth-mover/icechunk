@@ -436,10 +436,16 @@ mod tests {
     fn non_utf8_names_are_kept() {
         use std::{ffi::OsStr, os::unix::ffi::OsStrExt as _};
         let root = tempfile::tempdir().unwrap();
-        let file = old(
-            root.path().join(OsStr::from_bytes(b"repo.staging.\xff")),
-            &repo_info(14),
-        );
+        let file = root.path().join(OsStr::from_bytes(b"repo.staging.\xff"));
+        match fs::write(&file, repo_info(14)) {
+            // some filesystems reject non-UTF-8 names
+            Err(err) if err.raw_os_error() == Some(libc::EILSEQ) => {
+                eprintln!("skipped: the filesystem rejects non-UTF-8 names");
+                return;
+            }
+            res => res.unwrap(),
+        }
+        age(&file);
         let res = sweep(root.path(), cutoff(), false, &NoHooks).unwrap();
         assert!(file.exists());
         assert_eq!(res, DeleteObjectsResult::default());
