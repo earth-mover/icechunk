@@ -6,7 +6,7 @@ title: Frequently Asked Questions
 
 ## Why was Icechunk created?
 
-Icechunk is an open-source (Apache 2.0) storage format with a public, versioned [specification](../reference/spec-v2-1.md). The project started at [Earthmover](https://earthmover.io/). It is developed in the open on GitHub and accepts outside contributions. Icechunk does not need Earthmover's products or services: a repository is a set of plain objects in your own bucket, and any implementation that follows the spec can read it.
+Icechunk is an open-source (Apache 2.0) storage format with a public, versioned [specification](../reference/spec-v2-1.md). The project started at [Earthmover](https://earthmover.io/).
 
 Icechunk builds on the successful [Zarr](https://zarr.dev) project.
 Zarr is a great foundation for storing and querying large multidimensional array data in a flexible, scalable way.
@@ -111,12 +111,15 @@ You can. The specification is written so that independent implementations are po
 
 For most languages, binding to the Rust library is less work than a full re-implementation, and you get new spec versions as soon as they ship. We welcome both new bindings and new independent implementations.
 
+## What is Icechunk's development model?
+
+Icechunk is developed in the open on GitHub and accepts outside contributions. Icechunk does not need Earthmover's products or services: a repository is a set of plain objects in your own bucket, and any implementation that follows the spec can read it.
+
 ## What happens to my data if Earthmover stops working on Icechunk?
 
 Your data stays readable. Icechunk does not depend on any Earthmover service, and you keep full control of the data in your own bucket.
 
 - The on-disk format has a public [specification](../reference/spec-v2-1.md) written in RFC 2119 language, with a [version policy](../reference/version-policy.md) that keeps data from Icechunk 1.0 and later readable by future versions.
-- Three independent implementations read the format without Earthmover code: the [GDAL Icechunk driver](https://gdal.org/en/latest/drivers/raster/icechunk.html) (C++), [EarthyScience/icechunk-js](https://github.com/EarthyScience/icechunk-js) (TypeScript), and Google's [Neuroglancer](https://neuroglancer-docs.web.app/datasource/icechunk/index.html).
 - The reference library is Apache 2.0, so anyone can fork and maintain it.
 - Public agencies run it in production, for example NOAA's National Weather Service in its CIRRUS platform.
 
