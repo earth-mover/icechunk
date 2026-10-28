@@ -1,12 +1,6 @@
 # Changelog
 
-## Python Icechunk Library 2.3.1
-
-### Features
-
-- `set_logs_destination("python")` sends Icechunk logs to the Python `logging` module instead of the console. Each event goes to the logger for its Rust module, for example `icechunk.repository.builder`. `set_logs_filter` and `ICECHUNK_LOG` apply to the active destination. To set the destination at import, use `ICECHUNK_LOG_DESTINATION`. `ICECHUNK_PYTHON_LOG_QUEUE_SIZE` sets how many records can wait for slow handlers ([#2513](https://github.com/earth-mover/icechunk/pull/2513)).
-- The `icechunk` command line tool has two new subcommands. `icechunk inspect <repo> [<ref>]` prints a snapshot as JSON. `icechunk diff <repo> <from> <to>` prints one line per change between two refs ([#2467](https://github.com/earth-mover/icechunk/pull/2467)).
-- Wheels are published for free threaded Python 3.15, with the `abi3t` stable ABI ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
+## Unreleased
 
 ### Features
 
@@ -17,6 +11,15 @@
   - An expiration that deletes expired branches or tags also needs the `delete_branch` or `delete_tag` flag.
   - An array resize that removes chunks needs `update_chunks`. Chunk writes to a new array need only `create_new_nodes`.
   - Each flag guards one operation. To freeze a branch, also disable `reset_branch`, `delete_branch`, `create_branch` and `move_node`. The design doc 013 lists the flag interactions.
+- New environment variable `ICECHUNK_TLS_CA_FILE`: when set to a PEM file of CA certificates, Icechunk trusts only those certificates for all storage types. Use it in processes that cannot use the system trust store, such as a sandboxed macOS process. TLS certificate errors now include a hint that mentions the variable ([#2517](https://github.com/earth-mover/icechunk/pull/2517)).
+
+## Python Icechunk Library 2.3.1
+
+### Features
+
+- `set_logs_destination("python")` sends Icechunk logs to the Python `logging` module instead of the console. Each event goes to the logger for its Rust module, for example `icechunk.repository.builder`. `set_logs_filter` and `ICECHUNK_LOG` apply to the active destination. To set the destination at import, use `ICECHUNK_LOG_DESTINATION`. `ICECHUNK_PYTHON_LOG_QUEUE_SIZE` sets how many records can wait for slow handlers ([#2513](https://github.com/earth-mover/icechunk/pull/2513)).
+- The `icechunk` command line tool has two new subcommands. `icechunk inspect <repo> [<ref>]` prints a snapshot as JSON. `icechunk diff <repo> <from> <to>` prints one line per change between two refs ([#2467](https://github.com/earth-mover/icechunk/pull/2467)).
+- Wheels are published for free threaded Python 3.15, with the `abi3t` stable ABI ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
 
 ### Fixes
 
