@@ -8,6 +8,16 @@
 - The `icechunk` command line tool has two new subcommands. `icechunk inspect <repo> [<ref>]` prints a snapshot as JSON. `icechunk diff <repo> <from> <to>` prints one line per change between two refs ([#2467](https://github.com/earth-mover/icechunk/pull/2467)).
 - Wheels are published for free threaded Python 3.15, with the `abi3t` stable ABI ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
 
+### Features
+
+- Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
+  - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.
+  - A commit or flush checks the flags for its session content before it uploads data.
+  - With `commit` disabled, `Repository.writable_session` and `Repository.rearrange_session` raise `IcechunkError`.
+  - An expiration that deletes expired branches or tags also needs the `delete_branch` or `delete_tag` flag.
+  - An array resize that removes chunks needs `update_chunks`. Chunk writes to a new array need only `create_new_nodes`.
+  - Each flag guards one operation. To freeze a branch, also disable `reset_branch`, `delete_branch`, `create_branch` and `move_node`. The design doc 013 lists the flag interactions.
+
 ### Fixes
 
 - `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
