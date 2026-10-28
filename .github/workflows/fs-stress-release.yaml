@@ -109,7 +109,7 @@ jobs:
           persist-credentials: false
 
       - name: Install just
-        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -147,7 +147,7 @@ jobs:
           "$bin" --help > /dev/null
 
       - name: Upload binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: fs-stress-${{ matrix.arch }}
           path: target/${{ matrix.target }}/fs-stress-dist/fs-stress
@@ -171,7 +171,7 @@ jobs:
       SHA: ${{ needs.resolve.outputs.sha }}
     steps:
       - name: Download binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: fs-stress-*
           path: downloaded
