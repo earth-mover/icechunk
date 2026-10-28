@@ -175,6 +175,14 @@ mod private {
 }
 
 #[cfg(feature = "logs")]
+type BaseSubscriber = tracing_subscriber::layer::Layered<
+    Option<
+        Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>,
+    >,
+    tracing_subscriber::Registry,
+>;
+
+#[cfg(feature = "logs")]
 #[expect(clippy::type_complexity)]
 static LOG_FILTER: std::sync::LazyLock<
     std::sync::Mutex<
@@ -182,8 +190,8 @@ static LOG_FILTER: std::sync::LazyLock<
             tracing_subscriber::reload::Handle<
                 tracing_subscriber::EnvFilter,
                 tracing_subscriber::layer::Layered<
-                    tracing_error::ErrorLayer<tracing_subscriber::Registry>,
-                    tracing_subscriber::Registry,
+                    tracing_error::ErrorLayer<BaseSubscriber>,
+                    BaseSubscriber,
                 >,
             >,
         >,
@@ -275,22 +283,43 @@ pub fn shutdown_telemetry() {
 #[cfg(not(feature = "otel"))]
 pub fn shutdown_telemetry() {}
 
+/// Parses `log_filter_directive`.
+/// If it is `None`, reads `ICECHUNK_LOG` with a `warn` default.
+#[cfg(feature = "logs")]
+pub fn log_filter(log_filter_directive: Option<&str>) -> tracing_subscriber::EnvFilter {
+    use tracing::Level;
+    use tracing_subscriber::EnvFilter;
+
+    log_filter_directive.map(EnvFilter::new).unwrap_or_else(|| {
+        EnvFilter::from_env("ICECHUNK_LOG").add_directive(Level::WARN.into())
+    })
+}
+
 #[cfg(feature = "logs")]
 pub fn initialize_tracing(log_filter_directive: Option<&str>) {
-    use tracing::Level;
+    initialize_tracing_with_layer(log_filter_directive, None);
+}
+
+/// Does [`initialize_tracing`]. The first call also puts `layer` at the stack bottom.
+/// Later calls only reload the console filter and drop `layer`.
+#[cfg(feature = "logs")]
+pub fn initialize_tracing_with_layer(
+    log_filter_directive: Option<&str>,
+    layer: Option<
+        Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>,
+    >,
+) {
     use tracing_error::ErrorLayer;
     use tracing_subscriber::{
-        EnvFilter, Layer as _, Registry, fmt::writer::BoxMakeWriter,
-        layer::SubscriberExt as _, reload, util::SubscriberInitExt as _,
+        Layer as _, Registry, fmt::writer::BoxMakeWriter, layer::SubscriberExt as _,
+        reload, util::SubscriberInitExt as _,
     };
 
     // We have two Layers. One keeps track of the spans to feed the ICError instances.
     // The other writes human-readable logs to the console (stderr by default, or
     // stdout if ICECHUNK_LOG_TO_STDOUT is set). Filtering only applies to the second Layer.
 
-    let filter = log_filter_directive.map(EnvFilter::new).unwrap_or_else(|| {
-        EnvFilter::from_env("ICECHUNK_LOG").add_directive(Level::WARN.into())
-    });
+    let filter = log_filter(log_filter_directive);
     match LOG_FILTER.lock() {
         Ok(mut guard) => match guard.as_ref() {
             Some(handle) => {
@@ -328,6 +357,7 @@ pub fn initialize_tracing(log_filter_directive: Option<&str>) {
                 > = None;
 
                 if let Err(err) = Registry::default()
+                    .with(layer)
                     .with(error_span_layer)
                     .with(console_layer)
                     .with(otel_layer)

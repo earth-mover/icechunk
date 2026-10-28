@@ -1,0 +1,212 @@
+name: fs-stress release binaries
+
+# Static Linux binaries of the filesystem stress test (icechunk-fs-stress), attached to every
+# published release. A manual run builds a ref and publishes it as a new pre-release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch or commit to build'
+        required: true
+        default: main
+        type: string
+      tag:
+        description: 'New pre-release tag, e.g. fs-stress-2.4.0-rc1 (must not exist yet)'
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTUP_MAX_RETRIES: 10
+
+jobs:
+  resolve:
+    name: Resolve tag and commit
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - name: Validate the tag and resolve the commit
+        id: resolve
+        env:
+          EVENT: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT" = workflow_dispatch ]; then
+            tag="$INPUT_TAG"
+            if ! [[ "$tag" =~ ^fs-stress-[0-9A-Za-z][0-9A-Za-z.-]*$ ]]; then
+              echo "::error::tag must look like fs-stress-2.4.0-rc1, got: $tag"
+              exit 1
+            fi
+            # exit code 2: no such tag
+            rc=0
+            git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null || rc=$?
+            if [ "$rc" -ne 2 ]; then
+              [ "$rc" -eq 0 ] && echo "::error::tag $tag already exists (to retry a failed run, use Re-run failed jobs)"
+              exit 1
+            fi
+          else
+            tag="$RELEASE_TAG"
+            # the tag becomes part of the asset file names
+            if ! [[ "$tag" =~ ^[0-9A-Za-z][0-9A-Za-z._-]*$ ]]; then
+              echo "::error::unsupported release tag for asset names: $tag"
+              exit 1
+            fi
+          fi
+          sha="$(git rev-parse HEAD)"
+          echo "building $sha for $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: resolve
+    timeout-minutes: 60
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            arch: aarch64
+    env:
+      TARGET: ${{ matrix.target }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Install just
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: just
+
+      - name: Install musl C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update stable
+          rustup default stable
+          rustup target add "$TARGET"
+
+      - name: Build
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$SHA" ]; then
+            echo "::error::checked out $(git rev-parse HEAD), expected $SHA"
+            exit 1
+          fi
+          # the C dependencies (zstd, ring, aws-lc) must build against musl, not glibc
+          target_env="${TARGET//-/_}"
+          export "CC_${target_env}=musl-gcc"
+          FS_STRESS_COMMIT="$SHA" just fs-stress-static "$TARGET"
+
+      - name: Smoke test
+        run: |
+          bin="target/$TARGET/fs-stress-dist/fs-stress"
+          file "$bin"
+          file "$bin" | grep -q 'static.*linked'
+          "$bin" --version
+          "$bin" --version | grep -qF ", commit $SHA)"
+          "$bin" --help > /dev/null
+
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fs-stress-${{ matrix.arch }}
+          path: target/${{ matrix.target }}/fs-stress-dist/fs-stress
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish to the release
+    needs: [resolve, build]
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # create the pre-release and upload the assets
+      id-token: write  # sign the provenance attestation
+      attestations: write  # store the provenance attestation
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      EVENT: ${{ github.event_name }}
+      TAG: ${{ needs.resolve.outputs.tag }}
+      SHA: ${{ needs.resolve.outputs.sha }}
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: fs-stress-*
+          path: downloaded
+
+      - name: Name the assets
+        run: |
+          # fs-stress-2.4.0-rc1 rather than fs-stress-fs-stress-2.4.0-rc1
+          version="${TAG#fs-stress-}"
+          mkdir dist
+          for arch in x86_64 aarch64; do
+            install -m 755 "downloaded/fs-stress-$arch/fs-stress" "dist/fs-stress-$version-$arch-linux-musl"
+          done
+          cd dist
+          sha256sum fs-stress-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/fs-stress-*
+
+      - name: Create the pre-release
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          # On a re-run the release already exists from an earlier attempt
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --prerelease --target "$SHA" --title "$TAG" \
+              --notes "Pre-release of the fs-stress filesystem test, built from $SHA."
+          fi
+          # create ignores --target for a tag that appeared since resolve checked it
+          tagged="$(gh api "repos/$GH_REPO/git/ref/tags/$TAG" --jq .object.sha)"
+          if [ "$tagged" != "$SHA" ]; then
+            echo "::error::release $TAG is at $tagged, not at $SHA"
+            exit 1
+          fi
+
+      - name: Upload to the release
+        run: gh release upload "$TAG" dist/* --clobber
