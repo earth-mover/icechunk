@@ -9,7 +9,7 @@ use rustls_pki_types::{CertificateDer, pem::PemObject as _};
 
 use crate::{StorageError, other_error};
 
-/// When set, names a PEM bundle that replaces the system trust roots of every client.
+/// When set, points to a PEM bundle that replaces the system trust roots of every client.
 pub const TLS_CA_FILE_ENV: &str = "ICECHUNK_TLS_CA_FILE";
 
 pub const TLS_HINT: &str = "TLS certificate verification failed. If this process cannot use the \
@@ -37,7 +37,7 @@ pub fn load_tls_ca_file(path: &Path) -> Result<Vec<u8>, StorageError> {
     Ok(pem)
 }
 
-/// The PEM bundle named by `ICECHUNK_TLS_CA_FILE`, or `None` when it is unset or empty.
+/// The PEM bundle at the path in `ICECHUNK_TLS_CA_FILE`, or `None` when it is unset or empty.
 pub fn tls_ca_bundle() -> Result<Option<Vec<u8>>, StorageError> {
     ca_file_path(std::env::var_os(TLS_CA_FILE_ENV))
         .map(|path| load_tls_ca_file(&path))
@@ -53,7 +53,7 @@ fn ca_file_path(value: Option<OsString>) -> Option<PathBuf> {
 pub fn tls_hint(err: &(dyn std::error::Error + 'static)) -> Option<String> {
     let mut current = Some(err);
     while let Some(e) = current {
-        if e.to_string().contains("invalid peer certificate") {
+        if e.to_string().to_ascii_lowercase().contains("invalid peer certificate") {
             return Some(hint_for(tls_ca_bundle()));
         }
         current = e.source();
@@ -141,6 +141,12 @@ mod tests {
         let err = std::io::Error::other(
             "client error (Connect): invalid peer certificate: UnknownIssuer",
         );
+        assert!(tls_hint(&err).is_some());
+    }
+
+    #[test]
+    fn hint_matches_tls_error_in_any_case() {
+        let err = std::io::Error::other("Invalid Peer Certificate: UnknownIssuer");
         assert!(tls_hint(&err).is_some());
     }
 

@@ -333,7 +333,8 @@ pub async fn mk_client(
         Ok(Some(pem)) => {
             aws_config = aws_config.http_client(https_client_with_roots(Some(pem)));
         }
-        // S3Storage::new rejects a bad file; this path is a client built after deserialization
+        // S3Storage::new rejects a bad file, so only a deserialized storage gets here.
+        // An empty trust store fails every request instead of a silent fallback to system roots.
         Err(err) => {
             tracing::error!("{err}");
             aws_config = aws_config.http_client(https_client_with_roots(None));

@@ -385,4 +385,4 @@ import certifi
 os.environ["ICECHUNK_TLS_CA_FILE"] = certifi.where()
 ```
 
-When the variable is not set or is empty, Icechunk uses the operating system trust store. If Icechunk cannot read the file, or the file contains no valid certificate, storage creation or the first request fails with an error that names the variable.
+When the variable is not set or is empty, Icechunk uses the operating system trust store. If Icechunk cannot read the file, or the file contains no valid certificate, storage creation or the first request fails with an error that mentions the variable. Icechunk reads the variable each time it creates a storage. A storage created earlier keeps its trust roots.
