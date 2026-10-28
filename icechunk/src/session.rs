@@ -39,7 +39,13 @@ use crate::{
     conflicts::{Conflict, ConflictResolution, ConflictSolver},
     diff::{Diff, DiffBuilder},
     error::ICError,
-    feature_flags::{MOVE_NODE_FLAG, raise_if_feature_flag_disabled},
+    feature_flags::{
+        AMEND_FLAG, COMMIT_FLAG, CREATE_NEW_NODES_FLAG, CommitFlag, DELETE_NODES_FLAG,
+        MOVE_NODE_FLAG, REBASE_FLAG, REWRITE_MANIFESTS_FLAG,
+        SET_DEFAULT_COMMIT_METADATA_FLAG, UPDATE_ARRAY_METADATA_FLAG, UPDATE_CHUNKS_FLAG,
+        UPDATE_GROUP_METADATA_FLAG, raise_if_commit_flags_disabled,
+        raise_if_feature_flag_disabled,
+    },
     format::{
         ByteRange, ChunkIndices, ChunkOffset, IcechunkFormatError,
         IcechunkFormatErrorKind, ManifestId, NodeId, ObjectId, Path, SnapshotId,
@@ -1636,20 +1642,17 @@ impl Session {
         CommitBuilder::new(self, message.into())
     }
 
-    async fn flush_v2(&mut self, new_snap: Arc<Snapshot>) -> SessionResult<()> {
+    async fn flush_v2(
+        &mut self,
+        new_snap: Arc<Snapshot>,
+        required_flags: &[CommitFlag],
+    ) -> SessionResult<()> {
         let update_type =
             UpdateType::NewDetachedSnapshotUpdate { new_snap_id: new_snap.id().clone() };
         let num_updates = self.config.num_updates_per_repo_info_file();
-        let is_rearrange = self.mode() == SessionMode::Rearrange;
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            if is_rearrange {
-                raise_if_feature_flag_disabled(
-                    repo_info.as_ref(),
-                    MOVE_NODE_FLAG,
-                    "flush rearrange session",
-                )
+            raise_if_commit_flags_disabled(repo_info.as_ref(), "flush", required_flags)
                 .inject()?;
-            }
             let new_snapshot_info = SnapshotInfo {
                 parent_id: Some(self.snapshot_id().clone()),
                 ..SnapshotInfo::from_snapshot_file(new_snap.as_ref()).inject()?
@@ -1681,21 +1684,29 @@ impl Session {
         Ok(())
     }
 
-    async fn raise_if_rearrange_disabled(&self) -> SessionResult<()> {
-        if self.mode() == SessionMode::Rearrange {
-            let (repo_info, _) = self.asset_manager.fetch_repo_info().await.inject()?;
-            raise_if_feature_flag_disabled(
-                repo_info.as_ref(),
-                MOVE_NODE_FLAG,
-                "flush rearrange session",
-            )
-            .inject()?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn spec_version(&self) -> SpecVersionBin {
         self.asset_manager.spec_version()
+    }
+
+    /// Whether an update to an existing array drops chunk coordinates: a dimension
+    /// loses chunks, or the number of dimensions changes.
+    async fn shrinks_existing_array(&self) -> SessionResult<bool> {
+        if self.change_set.updated_arrays().next().is_none() {
+            return Ok(false);
+        }
+        let snapshot =
+            self.asset_manager.fetch_snapshot(&self.snapshot_id).await.inject()?;
+        for node in snapshot.iter() {
+            let node = node.inject()?;
+            if let NodeData::Array { shape: old, .. } = &node.node_data
+                && let Some(new) = self.change_set.get_updated_array(&node.id)
+                && (old.len() != new.shape.len()
+                    || old.num_chunks().zip(new.shape.num_chunks()).any(|(o, n)| n < o))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn resolve_properties(
@@ -1725,6 +1736,20 @@ impl Session {
 
         let properties = self.resolve_properties(properties);
 
+        let required_flags = commit_required_flags(
+            &self.change_set,
+            CommitMethod::NewCommit,
+            false,
+            !self.default_commit_metadata.is_empty(),
+            self.shrinks_existing_array().await?,
+        );
+        raise_if_flags_disabled_before_upload(
+            &self.asset_manager,
+            "flush",
+            &required_flags,
+        )
+        .await?;
+
         let flush_data = FlushProcess::new(
             Arc::clone(&self.asset_manager),
             &self.change_set,
@@ -1744,10 +1769,11 @@ impl Session {
 
         let res = match (self.spec_version(), register) {
             (SpecVersionBin::V1, _) => self.flush_v1(Arc::clone(&new_snap)).await,
-            (SpecVersionBin::V2, true) => self.flush_v2(Arc::clone(&new_snap)).await,
-            // unregistered snapshots don't touch the repo info, but the feature flag
-            // guard `flush_v2` applies to rearrange sessions still has to run
-            (SpecVersionBin::V2, false) => self.raise_if_rearrange_disabled().await,
+            (SpecVersionBin::V2, true) => {
+                self.flush_v2(Arc::clone(&new_snap), &required_flags).await
+            }
+            // unregistered snapshots don't touch the repo info
+            (SpecVersionBin::V2, false) => Ok(()),
         };
         if let Err(err) = res {
             self.mark_if_durable(&err);
@@ -1838,8 +1864,16 @@ impl Session {
             // without referencing self, only the field
             let _ = self.change_set_mut()?;
         }
+        let has_default_commit_metadata = !self.default_commit_metadata.is_empty();
+        let shrinks_array = self.shrinks_existing_array().await?;
         let change_set = &mut self.change_set;
-        let is_rearrange = matches!(change_set, ChangeSet::Rearrange(_));
+        let required_flags = commit_required_flags(
+            change_set,
+            commit_method,
+            rewrite_manifests,
+            has_default_commit_metadata,
+            shrinks_array,
+        );
 
         let res = do_commit(
             Arc::clone(&self.asset_manager),
@@ -1853,7 +1887,7 @@ impl Session {
             commit_method,
             self.config.manifest(),
             allow_empty,
-            is_rearrange,
+            &required_flags,
             self.config.repo_update_retries(),
             num_updates,
         )
@@ -2202,6 +2236,12 @@ impl Session {
     ) -> SessionResult<(Vec<SnapshotId>, Arc<RepoInfo>)> {
         let (latest_repo_info, _) =
             self.asset_manager.fetch_repo_info().await.inject()?;
+        raise_if_feature_flag_disabled(
+            latest_repo_info.as_ref(),
+            REBASE_FLAG,
+            "rebase session",
+        )
+        .inject()?;
 
         let commits = match latest_repo_info.resolve_branch(branch_name) {
             Err(IcechunkFormatError {
@@ -3350,6 +3390,75 @@ async fn do_flush(
     Ok(new_snapshot)
 }
 
+/// Flags a commit or flush must honor, in check order.
+pub(crate) fn commit_required_flags(
+    change_set: &ChangeSet,
+    commit_method: CommitMethod,
+    rewrite_manifests: bool,
+    has_default_commit_metadata: bool,
+    shrinks_array: bool,
+) -> Vec<CommitFlag> {
+    let has_deleted_nodes = change_set.deleted_groups().next().is_some()
+        || change_set.deleted_arrays().next().is_some();
+    // chunks written to a new array are part of creating it
+    let new_arrays: HashSet<_> = change_set.new_arrays().map(|(_, id, _)| id).collect();
+    let has_chunk_changes = shrinks_array
+        || change_set
+            .arrays_with_chunk_changes()
+            .any(|node| !new_arrays.contains(node) && change_set.has_chunk_changes(node));
+    [
+        (true, COMMIT_FLAG, None),
+        (commit_method == CommitMethod::Amend, AMEND_FLAG, Some("amend")),
+        (rewrite_manifests, REWRITE_MANIFESTS_FLAG, Some("manifest rewrite")),
+        (
+            matches!(change_set, ChangeSet::Rearrange(_)),
+            MOVE_NODE_FLAG,
+            Some("rearrange session"),
+        ),
+        (
+            has_default_commit_metadata,
+            SET_DEFAULT_COMMIT_METADATA_FLAG,
+            Some("default commit metadata"),
+        ),
+        (
+            change_set.new_nodes().next().is_some(),
+            CREATE_NEW_NODES_FLAG,
+            Some("new nodes"),
+        ),
+        (has_deleted_nodes, DELETE_NODES_FLAG, Some("node delete")),
+        (has_chunk_changes, UPDATE_CHUNKS_FLAG, Some("chunk update")),
+        (
+            change_set.updated_arrays().next().is_some(),
+            UPDATE_ARRAY_METADATA_FLAG,
+            Some("array metadata update"),
+        ),
+        (
+            change_set.updated_groups().next().is_some(),
+            UPDATE_GROUP_METADATA_FLAG,
+            Some("group metadata update"),
+        ),
+    ]
+    .into_iter()
+    .filter(|(required, ..)| *required)
+    .map(|(_, id, noun)| CommitFlag { id, noun })
+    .collect()
+}
+
+/// Checks `required_flags` against the latest repo info, so a disabled flag fails
+/// before the flush uploads anything. The repo info update checks them again.
+async fn raise_if_flags_disabled_before_upload(
+    asset_manager: &AssetManager,
+    verb: &str,
+    required_flags: &[CommitFlag],
+) -> SessionResult<()> {
+    if asset_manager.spec_version() >= SpecVersionBin::V2 {
+        let (repo_info, _) = asset_manager.fetch_repo_info().await.inject()?;
+        raise_if_commit_flags_disabled(repo_info.as_ref(), verb, required_flags)
+            .inject()?;
+    }
+    Ok(())
+}
+
 #[expect(clippy::too_many_arguments)]
 async fn do_commit(
     asset_manager: Arc<AssetManager>,
@@ -3363,7 +3472,7 @@ async fn do_commit(
     commit_method: CommitMethod,
     manifest_config: &ManifestConfig,
     allow_empty: bool,
-    is_rearrange: bool,
+    required_flags: &[CommitFlag],
     repo_update_retries: &RepoUpdateRetryConfig,
     num_updates_per_repo_info_file: u16,
 ) -> SessionResult<SnapshotId> {
@@ -3377,6 +3486,9 @@ async fn do_commit(
     if commit_method == CommitMethod::Amend && snapshot_id.is_initial() {
         return Err(SessionError::capture(SessionErrorKind::NoAmendForInitialCommit));
     }
+
+    raise_if_flags_disabled_before_upload(&asset_manager, "commit", required_flags)
+        .await?;
 
     let properties = properties.unwrap_or_default();
     let flush_data = FlushProcess::new(
@@ -3415,7 +3527,7 @@ async fn do_commit(
                 snapshot_id,
                 new_snapshot,
                 commit_method,
-                is_rearrange,
+                required_flags,
                 repo_update_retries,
                 num_updates_per_repo_info_file,
             )
@@ -3506,21 +3618,15 @@ async fn do_commit_v2(
     parent_snapshot_id: &SnapshotId,
     new_snapshot: Arc<Snapshot>,
     commit_method: CommitMethod,
-    is_rearrange: bool,
+    required_flags: &[CommitFlag],
     repo_update_retries: &RepoUpdateRetryConfig,
     num_updates_per_repo_info_file: u16,
 ) -> RepositoryResult<storage::VersionInfo> {
     let mut attempt = 0;
     let new_snapshot_id = new_snapshot.id();
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-        if is_rearrange {
-            raise_if_feature_flag_disabled(
-                repo_info.as_ref(),
-                MOVE_NODE_FLAG,
-                "commit rearrange session",
-            )
+        raise_if_commit_flags_disabled(repo_info.as_ref(), "commit", required_flags)
             .inject()?;
-        }
         attempt += 1;
         let actual_parent = repo_info.resolve_branch(branch_name).inject()?;
         if &actual_parent != parent_snapshot_id {

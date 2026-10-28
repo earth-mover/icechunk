@@ -39,8 +39,10 @@ use crate::{
     display::AncestryGraph,
     error::ICError,
     feature_flags::{
-        CREATE_TAG_FLAG, DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG,
-        find_feature_flag_id, raise_if_feature_flag_disabled,
+        COMMIT_FLAG, CREATE_BRANCH_FLAG, CREATE_TAG_FLAG, DELETE_BRANCH_FLAG,
+        DELETE_TAG_FLAG, FEATURE_FLAGS, FeatureFlag, MOVE_NODE_FLAG, RESET_BRANCH_FLAG,
+        UPDATE_CONFIG_FLAG, UPDATE_REPOSITORY_METADATA_FLAG, find_feature_flag_id,
+        raise_if_feature_flag_disabled,
     },
     format::{
         IcechunkFormatError, IcechunkFormatErrorKind, ManifestId, NodeId, Path,
@@ -460,6 +462,12 @@ impl Repository {
             let num_updates = self.config.num_updates_per_repo_info_file();
             let spec_version = self.spec_version();
             let do_update = move |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+                raise_if_feature_flag_disabled(
+                    repo_info.as_ref(),
+                    UPDATE_CONFIG_FLAG,
+                    "config update",
+                )
+                .inject()?;
                 let current = repo_info.config_bytes_raw().inject()?;
                 let stored =
                     config.to_stored(&undecodable_config, current.as_deref()).inject()?;
@@ -514,6 +522,12 @@ impl Repository {
         let mut final_metadata = Default::default();
         let num_updates = self.config().num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                UPDATE_REPOSITORY_METADATA_FLAG,
+                "repository metadata update",
+            )
+            .inject()?;
             final_metadata = repo_info.metadata().inject()?;
             final_metadata.extend(metadata.clone());
             Ok(Arc::new(
@@ -544,6 +558,12 @@ impl Repository {
 
         let num_updates = self.config().num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                UPDATE_REPOSITORY_METADATA_FLAG,
+                "repository metadata update",
+            )
+            .inject()?;
             Ok(Arc::new(
                 repo_info
                     .set_metadata(self.spec_version(), metadata, backup_path, num_updates)
@@ -954,6 +974,12 @@ impl Repository {
     ) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                CREATE_BRANCH_FLAG,
+                "branch creation",
+            )
+            .inject()?;
             raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             Ok(Arc::new(
                 repo_info
@@ -1167,6 +1193,12 @@ impl Repository {
         from_snapshot_id: Option<&SnapshotId>,
     ) -> RepositoryResult<()> {
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                RESET_BRANCH_FLAG,
+                "branch reset",
+            )
+            .inject()?;
             if let Some(from_snapshot_id) = from_snapshot_id {
                 let actual_parent = repo_info.resolve_branch(branch).inject()?;
                 if &actual_parent != from_snapshot_id {
@@ -1238,6 +1270,12 @@ impl Repository {
     async fn delete_branch_v2(&self, branch: &str) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+            raise_if_feature_flag_disabled(
+                repo_info.as_ref(),
+                DELETE_BRANCH_FLAG,
+                "branch delete",
+            )
+            .inject()?;
             let new_repo = repo_info
                 .delete_branch(self.spec_version(), branch, backup_path, num_updates)
                 .map_err(|err| match err {
@@ -1356,13 +1394,13 @@ impl Repository {
     ) -> RepositoryResult<()> {
         let num_updates = self.config.num_updates_per_repo_info_file();
         let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
-            raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             raise_if_feature_flag_disabled(
                 repo_info.as_ref(),
                 CREATE_TAG_FLAG,
                 "tag creation",
             )
             .inject()?;
+            raise_if_invalid_snapshot_id_v2(repo_info.as_ref(), snapshot_id)?;
             let new_repo = repo_info
                 .add_tag(
                     self.spec_version(),
@@ -1774,7 +1812,19 @@ impl Repository {
 
         self.fail_unless_modifiable("Cannot create writable session").await?;
 
-        let snapshot_id = self.lookup_branch(branch).await?;
+        let snapshot_id = match self.spec_version() {
+            SpecVersionBin::V1 => self.lookup_branch(branch).await?,
+            SpecVersionBin::V2 => {
+                let (ri, _) = self.asset_manager().fetch_repo_info().await?;
+                raise_if_feature_flag_disabled(
+                    ri.as_ref(),
+                    COMMIT_FLAG,
+                    "create writable session",
+                )
+                .inject()?;
+                self.lookup_branch_v2(branch, Some(&ri)).await?
+            }
+        };
 
         let session = Session::create_writable_session(
             self.config.clone(),
@@ -1802,14 +1852,21 @@ impl Repository {
         self.fail_unless_modifiable("Cannot create rearrange session").await?;
 
         let (ri, _) = self.asset_manager().fetch_repo_info().await?;
-        let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
 
+        raise_if_feature_flag_disabled(
+            ri.as_ref(),
+            COMMIT_FLAG,
+            "create rearrange session",
+        )
+        .inject()?;
         raise_if_feature_flag_disabled(
             ri.as_ref(),
             MOVE_NODE_FLAG,
             "create rearrange session",
         )
         .inject()?;
+
+        let snapshot_id = self.lookup_branch_v2(branch, Some(&ri)).await?;
 
         let session = Session::create_rearrange_session(
             self.config.clone(),

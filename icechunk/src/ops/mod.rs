@@ -14,6 +14,7 @@ use crate::{
     StorageError,
     asset_manager::{AssetManager, Modification},
     config::RepoUpdateRetryConfig,
+    feature_flags::raise_if_feature_flag_disabled,
     format::{
         IcechunkFormatError, IcechunkResult, SnapshotId,
         format_constants::SpecVersionBin,
@@ -42,12 +43,14 @@ pub enum GCError {
 
 pub type GCResult<A> = Result<A, GCError>;
 
-/// Refuse to run a maintenance operation on read-only storage, or on a repo
-/// that can't be modified (see [`AssetManager::ensure_modifiable`]). `op_name`
-/// names the operation in the error message.
+/// Refuse to run a maintenance operation on read-only storage, on a repo that
+/// can't be modified (see [`AssetManager::ensure_modifiable`]), or when its
+/// feature flag is disabled. `op_name` names the operation in the error message.
 pub(crate) async fn ensure_repo_writable(
     asset_manager: &AssetManager,
     op_name: &str,
+    flag: u16,
+    flag_description: &str,
 ) -> GCResult<()> {
     if !asset_manager.can_write_to_storage().await? {
         return Err(RepositoryErrorKind::ReadonlyStorage(format!("Cannot {op_name}")))
@@ -64,6 +67,9 @@ pub(crate) async fn ensure_repo_writable(
                 Some(&format!("Cannot {op_name}")),
             )
             .await?;
+        raise_if_feature_flag_disabled(repo_info.as_ref(), flag, flag_description)
+            .inject()
+            .map_err(GCError::Repository)?;
     }
     Ok(())
 }

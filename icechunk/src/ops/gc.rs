@@ -14,6 +14,7 @@ use tracing::{debug, info, instrument, trace, warn};
 use crate::{
     asset_manager::AssetManager,
     config::RepoUpdateRetryConfig,
+    feature_flags::{GARBAGE_COLLECTION_FLAG, raise_if_feature_flag_disabled},
     format::{
         CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, ManifestId, SNAPSHOTS_FILE_PATH,
         SnapshotId, TRANSACTION_LOGS_FILE_PATH,
@@ -401,7 +402,13 @@ pub async fn garbage_collect(
     repo_update_retries: Option<&RepoUpdateRetryConfig>,
     num_updates_per_repo_info_file: u16,
 ) -> GCResult<GCSummary> {
-    ensure_repo_writable(asset_manager.as_ref(), "garbage collect").await?;
+    ensure_repo_writable(
+        asset_manager.as_ref(),
+        "garbage collect",
+        GARBAGE_COLLECTION_FLAG,
+        "garbage collection",
+    )
+    .await?;
     if !config.action_needed() {
         info!("No action requested");
         return Ok(GCSummary::default());
@@ -773,6 +780,12 @@ async fn delete_snapshots_from_repo_info(
     trace!("deleting snapshots from repo info");
     let mut written_repo_info: Option<Arc<RepoInfo>> = None;
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
+        raise_if_feature_flag_disabled(
+            repo_info.as_ref(),
+            GARBAGE_COLLECTION_FLAG,
+            "garbage collection",
+        )
+        .inject()?;
         let mut final_snaps = HashSet::with_capacity(2 * keep_snapshots.len());
         for si in repo_info.all_snapshots().inject()? {
             let si = si.inject()?;

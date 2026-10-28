@@ -9,10 +9,38 @@
 
 ### Fixes
 
-- `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
 - Icechunk opens repositories whose configuration holds settings it doesn't know or can't decode, such as keys added by later versions or virtual chunk containers for storage it doesn't support, ignores them, and keeps them unchanged when it changes the configuration.
 - Garbage collection deletes only files whose names are exactly the encoding of an object id of the right size; other files in `snapshots/`, `manifests/`, `transactions/` and `chunks/` are kept.
 - Reading a malformed repo info file, such as one whose snapshot parents are out of range or form a cycle, raises an error instead of crashing or hanging.
+
+## Python Icechunk Library 2.3.1
+
+### Features
+
+- `set_logs_destination("python")` sends Icechunk logs to the Python `logging` module instead of the console. Each event goes to the logger for its Rust module, for example `icechunk.repository.builder`. `set_logs_filter` and `ICECHUNK_LOG` apply to the active destination. To set the destination at import, use `ICECHUNK_LOG_DESTINATION`. `ICECHUNK_PYTHON_LOG_QUEUE_SIZE` sets how many records can wait for slow handlers ([#2513](https://github.com/earth-mover/icechunk/pull/2513)).
+- The `icechunk` command line tool has two new subcommands. `icechunk inspect <repo> [<ref>]` prints a snapshot as JSON. `icechunk diff <repo> <from> <to>` prints one line per change between two refs ([#2467](https://github.com/earth-mover/icechunk/pull/2467)).
+- Wheels are published for free threaded Python 3.15, with the `abi3t` stable ABI ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
+
+### Features
+
+- Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
+  - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.
+  - A commit or flush checks the flags for its session content before it uploads data.
+  - With `commit` disabled, `Repository.writable_session` and `Repository.rearrange_session` raise `IcechunkError`.
+  - An expiration that deletes expired branches or tags also needs the `delete_branch` or `delete_tag` flag.
+  - An array resize that removes chunks needs `update_chunks`. Chunk writes to a new array need only `create_new_nodes`.
+  - Each flag guards one operation. To freeze a branch, also disable `reset_branch`, `delete_branch`, `create_branch` and `move_node`. The design doc 013 lists the flag interactions.
+
+### Fixes
+
+- `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
+- Repo info updates honor the `max_tries` setting in `RepoUpdateRetryConfig` and no longer add 5 extra retries. Unset fields use the repo update defaults instead of the storage retry defaults ([#2475](https://github.com/earth-mover/icechunk/pull/2475)).
+- The type stubs declare `AzureRefreshableCredential.BearerToken`, `.SasToken` and `.AccessKey` as subclasses of `AzureRefreshableCredential`, as they are at runtime ([#2137](https://github.com/earth-mover/icechunk/issues/2137), [#2461](https://github.com/earth-mover/icechunk/pull/2461)).
+- `SpecVersion` and `ConflictType` use the default enum `repr()` ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
+
+### Security
+
+- Updated `rustls`, `rustls-webpki` and `webpki-root-certs` for RUSTSEC-2026-0346, -0347, -0348, -0349, -0382 and -0383. The S3 client no longer includes the old `rustls` 0.21 TLS stack ([#2489](https://github.com/earth-mover/icechunk/pull/2489), [#2497](https://github.com/earth-mover/icechunk/pull/2497)).
 
 ## Python Icechunk Library 2.3.0
 

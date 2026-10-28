@@ -59,10 +59,28 @@ impl FeatureFlag {
 }
 
 // Feature flag ID constants.
-// IDs 1-2 are reserved for future commit/amend flags.
+pub const COMMIT_FLAG: u16 = 1;
+pub const AMEND_FLAG: u16 = 2;
 pub const MOVE_NODE_FLAG: u16 = 3;
 pub const CREATE_TAG_FLAG: u16 = 4;
 pub const DELETE_TAG_FLAG: u16 = 5;
+pub const REBASE_FLAG: u16 = 6;
+pub const CREATE_NEW_NODES_FLAG: u16 = 7;
+pub const DELETE_NODES_FLAG: u16 = 8;
+pub const UPDATE_CHUNKS_FLAG: u16 = 9;
+pub const UPDATE_ARRAY_METADATA_FLAG: u16 = 10;
+pub const UPDATE_GROUP_METADATA_FLAG: u16 = 11;
+pub const CREATE_BRANCH_FLAG: u16 = 12;
+pub const DELETE_BRANCH_FLAG: u16 = 13;
+pub const RESET_BRANCH_FLAG: u16 = 14;
+pub const GARBAGE_COLLECTION_FLAG: u16 = 15;
+pub const EXPIRATION_FLAG: u16 = 16;
+// ID 17 is reserved for upgrade_spec_version. No upgrade path starts from a
+// repo that has repo info, so nothing can check it yet.
+pub const UPDATE_CONFIG_FLAG: u16 = 18;
+pub const SET_DEFAULT_COMMIT_METADATA_FLAG: u16 = 19;
+pub const UPDATE_REPOSITORY_METADATA_FLAG: u16 = 20;
+pub const REWRITE_MANIFESTS_FLAG: u16 = 21;
 
 /// Query the repo info object and determine if the feature flag is enabled or not.
 /// This function takes into account user settings in repo info object and the
@@ -94,6 +112,30 @@ pub fn raise_if_feature_flag_disabled(
     }
 }
 
+/// A flag a commit or flush must honor. `noun` extends the verb in the error
+/// description.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommitFlag {
+    pub(crate) id: u16,
+    pub(crate) noun: Option<&'static str>,
+}
+
+/// Checks every entry of `required_flags`. `verb` is `commit` or `flush`.
+pub(crate) fn raise_if_commit_flags_disabled(
+    repo_info: &RepoInfo,
+    verb: &str,
+    required_flags: &[CommitFlag],
+) -> IcechunkResult<()> {
+    for CommitFlag { id, noun } in required_flags {
+        let description = match noun {
+            Some(noun) => format!("{verb} {noun}"),
+            None => verb.to_string(),
+        };
+        raise_if_feature_flag_disabled(repo_info, *id, &description)?;
+    }
+    Ok(())
+}
+
 pub fn find_feature_flag_id(flag: &str) -> IcechunkResult<u16> {
     FEATURE_FLAGS
         .get(flag)
@@ -117,9 +159,26 @@ pub(crate) static FEATURE_FLAGS: LazyLock<HashMap<&str, (u16, bool)>> =
     LazyLock::new(|| {
         let res = HashMap::from([
             // (name, (id, default_enabled))
+            ("commit", (COMMIT_FLAG, true)),
+            ("amend", (AMEND_FLAG, true)),
             ("move_node", (MOVE_NODE_FLAG, true)),
             ("create_tag", (CREATE_TAG_FLAG, true)),
             ("delete_tag", (DELETE_TAG_FLAG, true)),
+            ("rebase", (REBASE_FLAG, true)),
+            ("create_new_nodes", (CREATE_NEW_NODES_FLAG, true)),
+            ("delete_nodes", (DELETE_NODES_FLAG, true)),
+            ("update_chunks", (UPDATE_CHUNKS_FLAG, true)),
+            ("update_array_metadata", (UPDATE_ARRAY_METADATA_FLAG, true)),
+            ("update_group_metadata", (UPDATE_GROUP_METADATA_FLAG, true)),
+            ("create_branch", (CREATE_BRANCH_FLAG, true)),
+            ("delete_branch", (DELETE_BRANCH_FLAG, true)),
+            ("reset_branch", (RESET_BRANCH_FLAG, true)),
+            ("garbage_collection", (GARBAGE_COLLECTION_FLAG, true)),
+            ("expiration", (EXPIRATION_FLAG, true)),
+            ("update_config", (UPDATE_CONFIG_FLAG, true)),
+            ("set_default_commit_metadata", (SET_DEFAULT_COMMIT_METADATA_FLAG, true)),
+            ("update_repository_metadata", (UPDATE_REPOSITORY_METADATA_FLAG, true)),
+            ("rewrite_manifests", (REWRITE_MANIFESTS_FLAG, true)),
         ]);
         //  check we didn't duplicate ids
         debug_assert_eq!(
@@ -140,18 +199,140 @@ mod tests {
 
     use crate::{
         Repository, Storage,
+        change_set::ChangeSet,
         format::{
-            IcechunkFormatError,
+            ChunkIndices, IcechunkFormatError, SnapshotId,
             format_constants::SpecVersionBin,
+            manifest::ChunkPayload,
             repo_info::UpdateType,
-            snapshot::{Snapshot, SnapshotInfo},
+            snapshot::{ArrayShape, Snapshot, SnapshotInfo, SnapshotProperties},
         },
         new_in_memory_storage,
         repository::{RepositoryError, RepositoryErrorKind},
-        session::{SessionError, SessionErrorKind},
+        session::{CommitMethod, SessionError, SessionErrorKind},
     };
 
     use super::*;
+
+    async fn new_repo() -> Repository {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_in_memory_storage().await.unwrap();
+        Repository::create(storage).execute().await.unwrap()
+    }
+
+    /// Commits a root group and an array at `/array`. Returns the snapshot id.
+    async fn commit_root_and_array(repo: &Repository) -> SnapshotId {
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+        session
+            .add_array(
+                "/array".try_into().unwrap(),
+                ArrayShape::new(vec![(4, 4)]).unwrap(),
+                Some(vec!["t".into()]),
+                Bytes::from_static(br#"{"this":"array"}"#),
+            )
+            .await
+            .unwrap();
+        session.commit("root and array").execute().await.unwrap()
+    }
+
+    async fn count_snapshots(repo: &Repository) -> usize {
+        repo.storage()
+            .list_objects(&repo.storage_context(), crate::format::SNAPSHOTS_FILE_PATH)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .len()
+    }
+
+    /// Asserts that the commit fails while `flag` is disabled and succeeds once it is reset.
+    async fn assert_commit_gated(
+        repo: &Repository,
+        mut session: crate::session::Session,
+        flag: &str,
+        description: &str,
+    ) {
+        repo.set_feature_flag(flag, Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            flag,
+            description,
+        );
+        repo.set_feature_flag(flag, None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    fn assert_flag_disabled_gc<T: std::fmt::Debug>(
+        res: Result<T, crate::ops::gc::GCError>,
+        flag: &str,
+        description: &str,
+    ) {
+        match res {
+            Err(crate::ops::gc::GCError::Repository(err)) => {
+                assert_flag_disabled_repo(Err::<T, _>(err), flag, description);
+            }
+            other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
+        }
+    }
+
+    fn assert_flag_disabled_repo<T: std::fmt::Debug>(
+        res: Result<T, RepositoryError>,
+        flag: &str,
+        description: &str,
+    ) {
+        match res {
+            Err(RepositoryError {
+                kind:
+                    RepositoryErrorKind::FormatError(
+                        IcechunkFormatErrorKind::FeatureFlagDisabled {
+                            feature_description,
+                            feature_flag,
+                        },
+                    ),
+                ..
+            }) => {
+                assert_eq!(feature_flag, flag);
+                assert_eq!(feature_description, description);
+            }
+            other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
+        }
+    }
+
+    /// Accepts both the commit path shape (wrapped in `RepositoryError`) and the
+    /// direct session shape.
+    fn assert_flag_disabled_session<T: std::fmt::Debug>(
+        res: Result<T, SessionError>,
+        flag: &str,
+        description: &str,
+    ) {
+        let (feature_flag, feature_description) = match res {
+            Err(SessionError {
+                kind:
+                    SessionErrorKind::RepositoryError(RepositoryErrorKind::FormatError(
+                        IcechunkFormatErrorKind::FeatureFlagDisabled {
+                            feature_description,
+                            feature_flag,
+                        },
+                    )),
+                ..
+            })
+            | Err(SessionError {
+                kind:
+                    SessionErrorKind::FormatError(
+                        IcechunkFormatErrorKind::FeatureFlagDisabled {
+                            feature_description,
+                            feature_flag,
+                        },
+                    ),
+                ..
+            }) => (feature_flag, feature_description),
+            other => panic!("expected FeatureFlagDisabled({flag}), got {other:?}"),
+        };
+        assert_eq!(feature_flag, flag);
+        assert_eq!(feature_description, description);
+    }
 
     #[tokio::test]
     async fn all_flags_on_new_repo() {
@@ -424,20 +605,11 @@ mod tests {
         repo.set_feature_flag("move_node", Some(false)).await.unwrap();
 
         // commit should fail
-        assert!(matches!(
+        assert_flag_disabled_session(
             session.commit("should fail").max_concurrent_nodes(8).execute().await,
-            Err(SessionError {
-                kind: SessionErrorKind::RepositoryError(
-                    RepositoryErrorKind::FormatError(
-                        IcechunkFormatErrorKind::FeatureFlagDisabled {
-                            feature_description,
-                            feature_flag,
-                        },
-                    ),
-                ),
-                ..
-            }) if feature_flag == "move_node" && feature_description == "commit rearrange session"
-        ));
+            "move_node",
+            "commit rearrange session",
+        );
     }
 
     #[tokio::test]
@@ -467,19 +639,626 @@ mod tests {
         repo.set_feature_flag("move_node", Some(false)).await.unwrap();
 
         // flush should fail
-        assert!(matches!(
-            session.commit("should fail").max_concurrent_nodes(8).anonymous().execute().await,
-            Err(SessionError {
-                kind: SessionErrorKind::RepositoryError(
-                    RepositoryErrorKind::FormatError(
-                        IcechunkFormatErrorKind::FeatureFlagDisabled {
-                            feature_description,
-                            feature_flag,
-                        },
-                    ),
-                ),
-                ..
-            }) if feature_flag == "move_node" && feature_description == "flush rearrange session"
-        ));
+        assert_flag_disabled_session(
+            session
+                .commit("should fail")
+                .max_concurrent_nodes(8)
+                .anonymous()
+                .execute()
+                .await,
+            "move_node",
+            "flush rearrange session",
+        );
+    }
+
+    #[tokio::test]
+    async fn try_fork_session_with_changes_after_flag_disabled() {
+        let repo = new_repo().await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        // forking a session with changes flushes an unregistered snapshot
+        repo.set_feature_flag("create_new_nodes", Some(false)).await.unwrap();
+        let snapshots = count_snapshots(&repo).await;
+        assert_flag_disabled_session(
+            session.fork().await,
+            "create_new_nodes",
+            "flush new nodes",
+        );
+        assert_eq!(count_snapshots(&repo).await, snapshots);
+
+        repo.set_feature_flag("create_new_nodes", None).await.unwrap();
+        session.fork().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_commit_without_commit_flag() {
+        let repo = new_repo().await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        repo.set_feature_flag("commit", Some(false)).await.unwrap();
+        let snapshots = count_snapshots(&repo).await;
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "commit",
+            "commit",
+        );
+        assert_eq!(count_snapshots(&repo).await, snapshots);
+
+        repo.set_feature_flag("commit", None).await.unwrap();
+        session.commit("allowed").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_flush_without_commit_flag() {
+        let repo = new_repo().await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        repo.set_feature_flag("commit", Some(false)).await.unwrap();
+        let snapshots = count_snapshots(&repo).await;
+        assert_flag_disabled_session(
+            session.commit("blocked").anonymous().execute().await,
+            "commit",
+            "flush",
+        );
+        assert_eq!(count_snapshots(&repo).await, snapshots);
+
+        repo.set_feature_flag("commit", None).await.unwrap();
+        session.commit("allowed").anonymous().execute().await.unwrap();
+    }
+
+    #[test]
+    fn commit_required_flags_by_change_set() {
+        use crate::session::commit_required_flags;
+
+        let ids = |flags: Vec<CommitFlag>| {
+            flags.into_iter().map(|flag| flag.id).collect::<Vec<_>>()
+        };
+
+        // empty edit change set: only the commit flag
+        let empty = ChangeSet::for_edits();
+        assert_eq!(
+            ids(commit_required_flags(
+                &empty,
+                CommitMethod::NewCommit,
+                false,
+                false,
+                false
+            )),
+            vec![COMMIT_FLAG]
+        );
+        // amend, rewrite and default metadata add their flags in order
+        assert_eq!(
+            ids(commit_required_flags(&empty, CommitMethod::Amend, true, true, false)),
+            vec![
+                COMMIT_FLAG,
+                AMEND_FLAG,
+                REWRITE_MANIFESTS_FLAG,
+                SET_DEFAULT_COMMIT_METADATA_FLAG
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn try_amend_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .add_group("/g1".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await
+            .unwrap();
+        session.commit("amend ok").amend().execute().await.unwrap();
+
+        repo.set_feature_flag("amend", Some(false)).await.unwrap();
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .add_group("/g2".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await
+            .unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").amend().execute().await,
+            "amend",
+            "commit amend",
+        );
+
+        repo.set_feature_flag("amend", None).await.unwrap();
+        session.commit("amend ok again").amend().execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_rewrite_manifests_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.commit("rewrite ok").rewrite_manifests().execute().await.unwrap();
+
+        repo.set_feature_flag("rewrite_manifests", Some(false)).await.unwrap();
+        let mut session = repo.writable_session("main").await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").rewrite_manifests().execute().await,
+            "rewrite_manifests",
+            "commit manifest rewrite",
+        );
+
+        repo.set_feature_flag("rewrite_manifests", None).await.unwrap();
+        session.commit("rewrite ok again").rewrite_manifests().execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_default_commit_metadata_without_feature_flag() {
+        let mut repo = new_repo().await;
+        repo.set_default_commit_metadata(SnapshotProperties::from([(
+            "author".to_string(),
+            serde_json::Value::from("test"),
+        )]));
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        assert_commit_gated(
+            &repo,
+            session,
+            "set_default_commit_metadata",
+            "commit default commit metadata",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn try_create_new_nodes_without_feature_flag() {
+        let repo = new_repo().await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+
+        assert_commit_gated(&repo, session, "create_new_nodes", "commit new nodes").await;
+    }
+
+    #[tokio::test]
+    async fn try_delete_nodes_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.delete_array("/array".try_into().unwrap()).await.unwrap();
+
+        assert_commit_gated(&repo, session, "delete_nodes", "commit node delete").await;
+    }
+
+    #[tokio::test]
+    async fn try_update_chunks_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .set_chunk_ref(
+                "/array".try_into().unwrap(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
+            )
+            .await
+            .unwrap();
+
+        assert_commit_gated(&repo, session, "update_chunks", "commit chunk update").await;
+    }
+
+    #[tokio::test]
+    async fn try_shrink_array_without_update_chunks() {
+        async fn resize(repo: &Repository, num_chunks: u32) -> crate::session::Session {
+            let mut session = repo.writable_session("main").await.unwrap();
+            session
+                .update_array(
+                    &"/array".try_into().unwrap(),
+                    ArrayShape::new(vec![(num_chunks.into(), num_chunks)]).unwrap(),
+                    Some(vec!["t".into()]),
+                    Bytes::from_static(br#"{"this":"array"}"#),
+                )
+                .await
+                .unwrap();
+            session
+        }
+
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        repo.set_feature_flag("update_chunks", Some(false)).await.unwrap();
+        // growing keeps every chunk
+        resize(&repo, 8).await.commit("grow").execute().await.unwrap();
+        // shrinking drops the chunks outside the new shape
+        assert_commit_gated(
+            &repo,
+            resize(&repo, 2).await,
+            "update_chunks",
+            "commit chunk update",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn try_new_array_chunks_without_update_chunks() {
+        let repo = new_repo().await;
+        repo.set_feature_flag("update_chunks", Some(false)).await.unwrap();
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::copy_from_slice(b"")).await.unwrap();
+        session
+            .add_array(
+                "/array".try_into().unwrap(),
+                ArrayShape::new(vec![(4, 4)]).unwrap(),
+                None,
+                Bytes::from_static(br#"{"this":"array"}"#),
+            )
+            .await
+            .unwrap();
+        session
+            .set_chunk_ref(
+                "/array".try_into().unwrap(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
+            )
+            .await
+            .unwrap();
+        session.commit("new array with data").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_update_array_metadata_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .update_array(
+                &"/array".try_into().unwrap(),
+                ArrayShape::new(vec![(8, 4)]).unwrap(),
+                Some(vec!["t".into()]),
+                Bytes::from_static(br#"{"this":"array2"}"#),
+            )
+            .await
+            .unwrap();
+
+        assert_commit_gated(
+            &repo,
+            session,
+            "update_array_metadata",
+            "commit array metadata update",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn try_update_group_metadata_without_feature_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .update_group(&Path::root(), Bytes::from_static(br#"{"attr":1}"#))
+            .await
+            .unwrap();
+
+        assert_commit_gated(
+            &repo,
+            session,
+            "update_group_metadata",
+            "commit group metadata update",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn mixed_change_set_reports_first_disabled_flag() {
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        // new array plus a chunk write to an existing array: create_new_nodes
+        // comes before update_chunks in the required flag list
+        let mut session = repo.writable_session("main").await.unwrap();
+        session
+            .add_array(
+                "/array2".try_into().unwrap(),
+                ArrayShape::new(vec![(4, 4)]).unwrap(),
+                Some(vec!["t".into()]),
+                Bytes::from_static(br#"{"this":"array2"}"#),
+            )
+            .await
+            .unwrap();
+        session
+            .set_chunk_ref(
+                "/array".try_into().unwrap(),
+                ChunkIndices(vec![0]),
+                Some(ChunkPayload::Inline(Bytes::from_static(b"1234"))),
+            )
+            .await
+            .unwrap();
+
+        repo.set_feature_flag("create_new_nodes", Some(false)).await.unwrap();
+        repo.set_feature_flag("update_chunks", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "create_new_nodes",
+            "commit new nodes",
+        );
+
+        // with create_new_nodes back on, the next flag in the list is reported
+        repo.set_feature_flag("create_new_nodes", None).await.unwrap();
+        assert_flag_disabled_session(
+            session.commit("blocked").execute().await,
+            "update_chunks",
+            "commit chunk update",
+        );
+    }
+
+    #[tokio::test]
+    async fn try_create_sessions_without_commit_flag() {
+        let repo = new_repo().await;
+
+        let _ = repo.writable_session("main").await.unwrap();
+        let _ = repo.rearrange_session("main").await.unwrap();
+
+        repo.set_feature_flag("commit", Some(false)).await.unwrap();
+        assert_flag_disabled_repo(
+            repo.writable_session("main").await,
+            "commit",
+            "create writable session",
+        );
+        assert_flag_disabled_repo(
+            repo.rearrange_session("main").await,
+            "commit",
+            "create rearrange session",
+        );
+
+        repo.set_feature_flag("commit", None).await.unwrap();
+        let _ = repo.writable_session("main").await.unwrap();
+        let _ = repo.rearrange_session("main").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_rebase_without_feature_flag() {
+        use crate::conflicts::detector::ConflictDetector;
+
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        // session B starts behind the commit session A makes
+        let mut session_b = repo.writable_session("main").await.unwrap();
+        session_b
+            .add_group("/b".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await
+            .unwrap();
+        let mut session_a = repo.writable_session("main").await.unwrap();
+        session_a
+            .add_group("/a".try_into().unwrap(), Bytes::copy_from_slice(b""))
+            .await
+            .unwrap();
+        session_a.commit("a").execute().await.unwrap();
+
+        repo.set_feature_flag("rebase", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session_b.rebase(&ConflictDetector).await,
+            "rebase",
+            "rebase session",
+        );
+
+        repo.set_feature_flag("rebase", None).await.unwrap();
+        session_b.rebase(&ConflictDetector).await.unwrap();
+        session_b.commit("b").execute().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_rebase_on_deleted_branch_without_feature_flag() {
+        use crate::conflicts::detector::ConflictDetector;
+
+        let repo = new_repo().await;
+        let snap = commit_root_and_array(&repo).await;
+        repo.create_branch("other", &snap).await.unwrap();
+
+        let mut session = repo.writable_session("other").await.unwrap();
+        repo.delete_branch("other").await.unwrap();
+
+        repo.set_feature_flag("rebase", Some(false)).await.unwrap();
+        assert_flag_disabled_session(
+            session.rebase(&ConflictDetector).await,
+            "rebase",
+            "rebase session",
+        );
+
+        repo.set_feature_flag("rebase", None).await.unwrap();
+        session.rebase(&ConflictDetector).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_create_tag_on_missing_snapshot_without_feature_flag() {
+        let repo = new_repo().await;
+
+        repo.set_feature_flag("create_tag", Some(false)).await.unwrap();
+        assert_flag_disabled_repo(
+            repo.create_tag("foo", &SnapshotId::random()).await,
+            "create_tag",
+            "tag creation",
+        );
+    }
+
+    #[tokio::test]
+    async fn try_branch_ops_without_feature_flags() {
+        let repo = new_repo().await;
+        let snap = commit_root_and_array(&repo).await;
+
+        repo.create_branch("exists", &Snapshot::INITIAL_SNAPSHOT_ID).await.unwrap();
+        repo.reset_branch("exists", &snap, None).await.unwrap();
+
+        repo.set_feature_flag("create_branch", Some(false)).await.unwrap();
+        repo.set_feature_flag("delete_branch", Some(false)).await.unwrap();
+        repo.set_feature_flag("reset_branch", Some(false)).await.unwrap();
+
+        assert_flag_disabled_repo(
+            repo.create_branch("blocked", &Snapshot::INITIAL_SNAPSHOT_ID).await,
+            "create_branch",
+            "branch creation",
+        );
+        assert_flag_disabled_repo(
+            repo.reset_branch("exists", &Snapshot::INITIAL_SNAPSHOT_ID, None).await,
+            "reset_branch",
+            "branch reset",
+        );
+        assert_flag_disabled_repo(
+            repo.delete_branch("exists").await,
+            "delete_branch",
+            "branch delete",
+        );
+
+        repo.set_feature_flag("create_branch", None).await.unwrap();
+        repo.set_feature_flag("delete_branch", None).await.unwrap();
+        repo.set_feature_flag("reset_branch", None).await.unwrap();
+
+        repo.create_branch("allowed", &Snapshot::INITIAL_SNAPSHOT_ID).await.unwrap();
+        repo.reset_branch("exists", &Snapshot::INITIAL_SNAPSHOT_ID, None).await.unwrap();
+        repo.delete_branch("exists").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_config_and_metadata_ops_without_feature_flags() {
+        let repo = new_repo().await;
+        let metadata = SnapshotProperties::from([(
+            "owner".to_string(),
+            serde_json::Value::from("test"),
+        )]);
+
+        repo.save_config().await.unwrap();
+        repo.set_metadata(&metadata).await.unwrap();
+        repo.update_metadata(&metadata).await.unwrap();
+
+        repo.set_feature_flag("update_config", Some(false)).await.unwrap();
+        repo.set_feature_flag("update_repository_metadata", Some(false)).await.unwrap();
+
+        assert_flag_disabled_repo(
+            repo.save_config().await,
+            "update_config",
+            "config update",
+        );
+        assert_flag_disabled_repo(
+            repo.set_metadata(&metadata).await,
+            "update_repository_metadata",
+            "repository metadata update",
+        );
+        assert_flag_disabled_repo(
+            repo.update_metadata(&metadata).await,
+            "update_repository_metadata",
+            "repository metadata update",
+        );
+
+        repo.set_feature_flag("update_config", None).await.unwrap();
+        repo.set_feature_flag("update_repository_metadata", None).await.unwrap();
+
+        repo.save_config().await.unwrap();
+        repo.set_metadata(&metadata).await.unwrap();
+        repo.update_metadata(&metadata).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_gc_and_expire_without_feature_flags() {
+        use std::num::{NonZeroU16, NonZeroUsize};
+
+        use chrono::Utc;
+
+        use crate::ops::gc::{ExpiredRefAction, GCConfig, expire, garbage_collect};
+
+        let repo = new_repo().await;
+        commit_root_and_array(&repo).await;
+
+        let gc_config = GCConfig::clean_all(
+            Utc::now(),
+            Utc::now(),
+            None,
+            NonZeroU16::new(50).unwrap(),
+            NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+            NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+            NonZeroU16::new(500).unwrap(),
+            NonZeroU16::new(10).unwrap(),
+            NonZeroU16::new(50).unwrap(),
+            None,
+            false,
+        );
+        let run_gc =
+            || garbage_collect(Arc::clone(repo.asset_manager()), &gc_config, None, 100);
+        let run_expire = || {
+            expire(
+                Arc::clone(repo.asset_manager()),
+                Utc::now(),
+                ExpiredRefAction::Ignore,
+                ExpiredRefAction::Ignore,
+                None,
+                100,
+            )
+        };
+
+        run_gc().await.unwrap();
+        run_expire().await.unwrap();
+
+        repo.set_feature_flag("garbage_collection", Some(false)).await.unwrap();
+        repo.set_feature_flag("expiration", Some(false)).await.unwrap();
+
+        assert_flag_disabled_gc(
+            run_gc().await,
+            "garbage_collection",
+            "garbage collection",
+        );
+        assert_flag_disabled_gc(run_expire().await, "expiration", "expiration");
+
+        repo.set_feature_flag("garbage_collection", None).await.unwrap();
+        repo.set_feature_flag("expiration", None).await.unwrap();
+
+        run_gc().await.unwrap();
+        run_expire().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn try_expire_deleting_refs_without_delete_flags() {
+        use chrono::Utc;
+
+        use crate::ops::gc::{ExpiredRefAction, expire};
+
+        let repo = new_repo().await;
+        let snap = commit_root_and_array(&repo).await;
+        repo.create_branch("expired", &snap).await.unwrap();
+        repo.create_tag("expired", &snap).await.unwrap();
+
+        let run_expire = |branches, tags| {
+            expire(
+                Arc::clone(repo.asset_manager()),
+                Utc::now(),
+                branches,
+                tags,
+                None,
+                100,
+            )
+        };
+
+        repo.set_feature_flag("delete_branch", Some(false)).await.unwrap();
+        repo.set_feature_flag("delete_tag", Some(false)).await.unwrap();
+
+        assert_flag_disabled_gc(
+            run_expire(ExpiredRefAction::Delete, ExpiredRefAction::Ignore).await,
+            "delete_branch",
+            "branch delete",
+        );
+        assert_flag_disabled_gc(
+            run_expire(ExpiredRefAction::Ignore, ExpiredRefAction::Delete).await,
+            "delete_tag",
+            "tag delete",
+        );
+        run_expire(ExpiredRefAction::Ignore, ExpiredRefAction::Ignore).await.unwrap();
+
+        assert!(repo.list_branches().await.unwrap().contains("expired"));
+        assert!(repo.list_tags().await.unwrap().contains("expired"));
     }
 }

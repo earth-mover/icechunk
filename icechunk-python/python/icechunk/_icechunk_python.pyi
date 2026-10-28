@@ -8,7 +8,7 @@ from collections.abc import (
 )
 from enum import Enum, IntEnum
 from functools import total_ordering
-from typing import Any, Self, TypeVar, final
+from typing import Any, Literal, Self, TypeVar, final
 
 import numpy as np
 
@@ -3921,11 +3921,16 @@ def initialize_logs() -> None:
 
     Logs are written to stderr by default. Set ICECHUNK_LOG_TO_STDOUT (to any value)
     before importing icechunk to write them to stdout instead.
+
+    To send logs to the Python `logging` module instead, set ICECHUNK_LOG_DESTINATION
+    to "python" before you import icechunk. See `set_logs_destination`.
     """
 
 def set_logs_filter(log_filter_directive: str | None) -> None:
     """
     Set filters and log levels for the different modules.
+
+    The filter applies to the active destination. See `set_logs_destination`.
 
     Examples:
       - set_logs_filter("trace")  # trace level for all modules
@@ -3941,6 +3946,40 @@ def set_logs_filter(log_filter_directive: str | None) -> None:
         The comma separated list of directives for modules and log levels.
         If None, the directive will be read from the environment variable
         ICECHUNK_LOG
+    """
+
+def set_logs_destination(destination: Literal["console", "python"]) -> None:
+    """
+    Choose where Icechunk sends its logs. The default is "console".
+
+    With "console", Icechunk writes logs to stderr, or to stdout if
+    ICECHUNK_LOG_TO_STDOUT is set. With "python", each log event becomes a
+    `logging.LogRecord` on the logger that matches its Rust module, for example
+    `icechunk.repository.builder`. Configure handlers and levels with the standard
+    `logging` API. The Rust `trace` level maps to level 5, with the name "TRACE".
+
+    Logs go to one destination only. `set_logs_filter` controls which events go there.
+    To set the destination at import, set ICECHUNK_LOG_DESTINATION.
+
+    For "python", a background thread delivers the records. Thus a record can arrive
+    after the call that made it returns. If the handlers are too slow, up to 10,000
+    records wait in a queue. Set ICECHUNK_PYTHON_LOG_QUEUE_SIZE before the first log
+    event to change this size. Icechunk drops the records that do not fit. Later, it logs a
+    warning with the count on the `icechunk` logger. At interpreter exit, Icechunk
+    waits at most 2 seconds for the queued records. A child process from `os.fork`
+    does not send logs to Python.
+
+    Parameters
+    ----------
+    destination: "console" | "python"
+        Where the logs go.
+    """
+
+def _flush_python_logs(timeout: float | None = None) -> None:
+    """
+    Wait until all log records sent so far reach the Python `logging` module.
+
+    If you give a `timeout`, it stops after that many seconds. Ctrl+C stops the wait.
     """
 
 def shutdown_telemetry() -> None:
