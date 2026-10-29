@@ -31,15 +31,22 @@ They bind to the Rust implementation but are not officially supported yet, and t
 ## Community
 
 Built and maintained by the community.
+Projects that implement the spec themselves, rather than using the `icechunk` crate, can lag behind new spec versions, so check which versions each one reads.
 
-| Language | Project | Access | Notes |
-|---|---|---|---|
-| C++ | [GDAL Icechunk driver](https://gdal.org/en/latest/drivers/raster/icechunk.html) | Read only | Independent implementation of the spec. |
-| TypeScript | [EarthyScience/icechunk-js](https://github.com/EarthyScience/icechunk-js) | Read only | Independent implementation, designed for zarrita. |
-| JavaScript | [Neuroglancer](https://neuroglancer-docs.web.app/datasource/icechunk/index.html) | Read only | Independent implementation in Google's volumetric viewer. |
-| Rust (zarrs) | [zarrs_icechunk](https://github.com/zarrs/zarrs_icechunk) | Read and write | Connects the [zarrs](https://zarrs.dev/) crate to Icechunk repositories through the `icechunk` crate. Reads virtual datasets built with VirtualiZarr. |
+### Read and write
 
-Independent readers can lag behind new spec versions, so check which versions each one reads.
+| Language | Project | Notes |
+|---|---|---|
+| Go | [solomonsealed/icechunk-go](https://github.com/solomonsealed/icechunk-go) | Independent implementation in pure Go. Also compiles to WebAssembly and runs in Cloudflare Workers. |
+| Rust (zarrs) | [zarrs_icechunk](https://github.com/zarrs/zarrs_icechunk) | Lets the [zarrs](https://zarrs.dev/) crate read and write Zarr arrays in Icechunk repositories, through the `icechunk` crate. |
+
+### Read only
+
+| Language | Project | Notes |
+|---|---|---|
+| C++ | [GDAL Icechunk driver](https://gdal.org/en/latest/drivers/raster/icechunk.html) | Independent implementation of the spec. |
+| TypeScript | [EarthyScience/icechunk-js](https://github.com/EarthyScience/icechunk-js) | Independent implementation, designed for zarrita. |
+| JavaScript | [Neuroglancer](https://neuroglancer-docs.web.app/datasource/icechunk/index.html) | Independent implementation in Google's volumetric viewer. |
 
 ## R
 
