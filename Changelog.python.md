@@ -1,9 +1,17 @@
 # Changelog
 
-## Python Icechunk Library [unreleased]
+## Unreleased
 
 ### Features
 
+- Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
+  - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.
+  - A commit or flush checks the flags for its session content before it uploads data.
+  - With `commit` disabled, `Repository.writable_session` and `Repository.rearrange_session` raise `IcechunkError`.
+  - An expiration that deletes expired branches or tags also needs the `delete_branch` or `delete_tag` flag.
+  - An array resize that removes chunks needs `update_chunks`. Chunk writes to a new array need only `create_new_nodes`.
+  - Each flag guards one operation. To freeze a branch, also disable `reset_branch`, `delete_branch`, `create_branch` and `move_node`. The design doc 013 lists the flag interactions.
+- New environment variable `ICECHUNK_TLS_CA_FILE`: when set to a PEM file of CA certificates, Icechunk trusts only those certificates for all storage types. Use it in processes that cannot use the system trust store, such as a sandboxed macOS process. TLS certificate errors now include a hint that mentions the variable ([#2517](https://github.com/earth-mover/icechunk/pull/2517)).
 - `StorageTimeoutSettings` now applies to the `object_store` backends (`gcs_storage`, `azure_storage`, `http_storage` and `s3_object_store_storage`). They honor `connect_timeout_ms` and `operation_attempt_timeout_ms`, which take precedence over the same options in the backend `config`. `read_timeout_ms` and `operation_timeout_ms` still apply only to the S3 client.
 - A timeout of 0 in `StorageTimeoutSettings` disables that timeout, including the client default.
 
