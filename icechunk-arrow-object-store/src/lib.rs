@@ -15,6 +15,8 @@ use futures::{
     stream::{self, BoxStream},
 };
 use http::header::{HeaderName, HeaderValue};
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+use icechunk_storage::Timeout;
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
@@ -52,7 +54,7 @@ use object_store::{
 };
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
 use object_store::{BackoffConfig, RetryConfig};
-#[cfg(any(feature = "s3", feature = "gcs", feature = "http"))]
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
 use object_store::{ClientOptions, HeaderMap};
 #[cfg(any(feature = "gcs", feature = "azure"))]
 use object_store::{CredentialProvider, StaticCredentialProvider};
@@ -113,11 +115,13 @@ pub fn validate_extra_headers(headers: &[(String, String)]) -> Result<(), Storag
 
 /// All [`ClientConfigKey`]s. The enum has no iterator, so this must be
 /// kept in sync with `object_store`; a missing entry only means a newly-added
-/// client option wouldn't be preserved when custom headers are set, so, not terrible
-#[cfg(any(feature = "s3", feature = "gcs"))]
+/// client option wouldn't be preserved when custom headers or timeouts are
+/// set, so, not terrible
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
 const CLIENT_CONFIG_KEYS: &[ClientConfigKey] = &[
     ClientConfigKey::AllowHttp,
     ClientConfigKey::AllowInvalidCertificates,
+    ClientConfigKey::NoSystemCertificates,
     ClientConfigKey::ConnectTimeout,
     ClientConfigKey::DefaultContentType,
     ClientConfigKey::Http1Only,
@@ -132,13 +136,39 @@ const CLIENT_CONFIG_KEYS: &[ClientConfigKey] = &[
     ClientConfigKey::ProxyCaCertificate,
     ClientConfigKey::ProxyExcludes,
     ClientConfigKey::RandomizeAddresses,
+    ClientConfigKey::ReadTimeout,
     ClientConfigKey::Timeout,
     ClientConfigKey::UserAgent,
 ];
 
+/// Apply [`Settings::timeouts`] to `opts`. Only the connect and per-attempt
+/// timeouts have `object_store` equivalents; unset fields keep `opts` as is.
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+fn with_timeouts(opts: ClientOptions, settings: &Settings) -> ClientOptions {
+    let timeouts = settings.timeouts().copied().unwrap_or_default();
+    let opts = match timeouts.connect_timeout() {
+        Timeout::Unset => opts,
+        Timeout::Disabled => opts.with_connect_timeout_disabled(),
+        Timeout::After(duration) => opts.with_connect_timeout(duration),
+    };
+    match timeouts.operation_attempt_timeout() {
+        Timeout::Unset => opts,
+        Timeout::Disabled => opts.with_timeout_disabled(),
+        Timeout::After(duration) => opts.with_timeout(duration),
+    }
+}
+
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+fn sets_client_timeouts(settings: &Settings) -> bool {
+    settings.timeouts().is_some_and(|timeouts| {
+        timeouts.connect_timeout() != Timeout::Unset
+            || timeouts.operation_attempt_timeout() != Timeout::Unset
+    })
+}
+
 /// Build a [`HeaderMap`] from name/value pairs, failing on invalid input so
 /// the error surfaces at construction rather than mid-request.
-#[cfg(any(feature = "s3", feature = "gcs", feature = "http"))]
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
 fn headers_to_header_map(
     headers: &[(String, String)],
 ) -> Result<HeaderMap, StorageError> {
@@ -150,27 +180,39 @@ fn headers_to_header_map(
     Ok(map)
 }
 
-/// Build a [`ClientOptions`] carrying `header_map` as default headers, while
-/// preserving the client options already resolved on a builder.
+/// The builder's [`ClientOptions`] with `headers` as default headers and
+/// [`Settings::timeouts`] applied, or `None` if there is nothing to apply.
 ///
-/// `object_store`'s only way to set default headers is
-/// [`ClientOptions::with_default_headers`], and applying it via
-/// `with_client_options` *replaces* the builder's whole [`ClientOptions`] (no
-/// merge, no getter). To avoid dropping env- or config-derived client options
-/// (e.g. a proxy set through `AWS_*`), we read each known [`ClientConfigKey`]
-/// back through `read_config` and re-apply it alongside the headers.
-#[cfg(any(feature = "s3", feature = "gcs"))]
-fn client_options_with_headers<F>(header_map: HeaderMap, read_config: F) -> ClientOptions
+/// `object_store` takes default headers and disabled timeouts only through
+/// [`ClientOptions`], and applying it via `with_client_options` *replaces* the
+/// builder's whole [`ClientOptions`] (no merge, no getter). To avoid dropping
+/// env- or config-derived client options (e.g. a proxy set through `AWS_*`), we
+/// read each known [`ClientConfigKey`] back through `read_config` and re-apply
+/// it. The timeouts go last, so they win over the backend `config`.
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure"))]
+fn rebuilt_client_options<F>(
+    headers: &[(String, String)],
+    settings: &Settings,
+    read_config: F,
+) -> Result<Option<ClientOptions>, StorageError>
 where
     F: Fn(ClientConfigKey) -> Option<String>,
 {
-    let mut opts = ClientOptions::new().with_default_headers(header_map);
-    for &key in CLIENT_CONFIG_KEYS {
-        if let Some(value) = read_config(key) {
-            opts = opts.with_config(key, value);
-        }
+    if headers.is_empty() && !sets_client_timeouts(settings) {
+        return Ok(None);
     }
-    opts
+    let opts = CLIENT_CONFIG_KEYS.iter().fold(ClientOptions::new(), |opts, &key| {
+        match read_config(key) {
+            Some(value) => opts.with_config(key, value),
+            None => opts,
+        }
+    });
+    let opts = if headers.is_empty() {
+        opts
+    } else {
+        opts.with_default_headers(headers_to_header_map(headers)?)
+    };
+    Ok(Some(with_timeouts(opts, settings)))
 }
 
 /// Sort headers so equal sets compare equal regardless of order (see
@@ -1348,6 +1390,7 @@ impl ObjectStoreBackend for HttpObjectStoreBackend {
             }
             client_opts = client_opts.with_default_headers(header_map);
         }
+        let client_opts = with_timeouts(client_opts, settings);
 
         let builder = HttpBuilder::new()
             .with_url(&self.url)
@@ -1491,22 +1534,19 @@ impl ObjectStoreBackend for S3ObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
-        // Apply custom headers last: read every resolved client option back out
-        // and re-pack it with the headers, so the replacing `with_client_options`
-        // doesn't drop env/config-derived options.
+        // Apply custom headers and timeouts last: read every resolved client
+        // option back out and re-pack it with them, so the replacing
+        // `with_client_options` doesn't drop env/config-derived options.
         let headers = match role {
             Role::Read => &self.extra_read_headers,
             Role::Write => &self.extra_write_headers,
         };
-        let builder = if headers.is_empty() {
-            builder
-        } else {
-            let header_map = headers_to_header_map(headers)?;
-            let opts = client_options_with_headers(header_map, |key| {
-                builder
-                    .get_config_value(&object_store::aws::AmazonS3ConfigKey::Client(key))
-            });
-            builder.with_client_options(opts)
+        let opts = rebuilt_client_options(headers, settings, |key| {
+            builder.get_config_value(&object_store::aws::AmazonS3ConfigKey::Client(key))
+        })?;
+        let builder = match opts {
+            Some(opts) => builder.with_client_options(opts),
+            None => builder,
         };
 
         let builder =
@@ -1612,6 +1652,15 @@ impl ObjectStoreBackend for AzureObjectStoreBackend {
             .unwrap_or(&HashMap::new())
             .iter()
             .fold(builder, |builder, (key, value)| builder.with_config(*key, value));
+        // Apply timeouts last, preserving resolved client options. See the
+        // matching block in `S3ObjectStoreBackend::mk_object_store` for rationale.
+        let opts = rebuilt_client_options(&[], settings, |key| {
+            builder.get_config_value(&AzureConfigKey::Client(key))
+        })?;
+        let builder = match opts {
+            Some(opts) => builder.with_client_options(opts),
+            None => builder,
+        };
 
         let builder = builder.with_retry(RetryConfig {
             backoff: BackoffConfig {
@@ -1749,20 +1798,19 @@ impl ObjectStoreBackend for GcsObjectStoreBackend {
             retry_timeout: core::time::Duration::from_secs(5 * 60),
         });
 
-        // Apply custom headers last, preserving resolved client options. See the
-        // matching block in `S3ObjectStoreBackend::mk_object_store` for rationale.
+        // Apply custom headers and timeouts last, preserving resolved client
+        // options. See the matching block in
+        // `S3ObjectStoreBackend::mk_object_store` for rationale.
         let headers = match role {
             Role::Read => &self.extra_read_headers,
             Role::Write => &self.extra_write_headers,
         };
-        let builder = if headers.is_empty() {
-            builder
-        } else {
-            let header_map = headers_to_header_map(headers)?;
-            let opts = client_options_with_headers(header_map, |key| {
-                builder.get_config_value(&GoogleConfigKey::Client(key))
-            });
-            builder.with_client_options(opts)
+        let opts = rebuilt_client_options(headers, settings, |key| {
+            builder.get_config_value(&GoogleConfigKey::Client(key))
+        })?;
+        let builder = match opts {
+            Some(opts) => builder.with_client_options(opts),
+            None => builder,
         };
 
         let builder =
@@ -2637,5 +2685,83 @@ mod http_tests {
     fn test_mk_object_store_invalid_header_value() {
         let b = backend(&[], &[("X-Custom", "val\nue")]);
         assert!(b.mk_object_store(&Settings::default(), super::Role::Read).is_err());
+    }
+}
+
+#[cfg(all(test, any(feature = "s3", feature = "gcs", feature = "azure")))]
+mod timeout_tests {
+    use icechunk_storage::{Settings, TimeoutSettings};
+    use object_store::{ClientConfigKey, ClientOptions};
+
+    use super::{rebuilt_client_options, with_timeouts};
+
+    fn settings(connect_ms: Option<u32>, attempt_ms: Option<u32>) -> Settings {
+        Settings {
+            timeouts: Some(TimeoutSettings {
+                connect_timeout_ms: connect_ms,
+                operation_attempt_timeout_ms: attempt_ms,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn timeouts(opts: &ClientOptions) -> (Option<String>, Option<String>) {
+        (
+            opts.get_config_value(&ClientConfigKey::ConnectTimeout),
+            opts.get_config_value(&ClientConfigKey::Timeout),
+        )
+    }
+
+    #[test]
+    fn settings_override_disable_or_keep_client_timeouts() {
+        let config = ClientOptions::new()
+            .with_config(ClientConfigKey::ConnectTimeout, "7s")
+            .with_config(ClientConfigKey::Timeout, "5s");
+        let kept = (Some("7s".to_string()), Some("5s".to_string()));
+
+        assert_eq!(timeouts(&with_timeouts(config.clone(), &Settings::default())), kept);
+        assert_eq!(timeouts(&with_timeouts(config.clone(), &settings(None, None))), kept);
+        assert_eq!(
+            timeouts(&with_timeouts(config.clone(), &settings(Some(2_000), Some(3_000)))),
+            (Some("2s".to_string()), Some("3s".to_string()))
+        );
+        assert_eq!(
+            timeouts(&with_timeouts(config, &settings(Some(0), Some(0)))),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn rebuild_only_when_needed_and_keeps_other_options() {
+        let read_config = |key| match key {
+            ClientConfigKey::ProxyUrl => Some("http://proxy:3128".to_string()),
+            ClientConfigKey::Timeout => Some("5s".to_string()),
+            _ => None,
+        };
+        // Read and operation timeouts don't map to `object_store`, so they don't
+        // need a rebuild either.
+        let unmapped = Settings {
+            timeouts: Some(TimeoutSettings {
+                read_timeout_ms: Some(1_000),
+                operation_timeout_ms: Some(1_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        for no_rebuild in [Settings::default(), settings(None, None), unmapped] {
+            assert!(
+                rebuilt_client_options(&[], &no_rebuild, read_config).unwrap().is_none()
+            );
+        }
+
+        let opts = rebuilt_client_options(&[], &settings(None, Some(0)), read_config)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            opts.get_config_value(&ClientConfigKey::ProxyUrl).as_deref(),
+            Some("http://proxy:3128")
+        );
+        assert_eq!(opts.get_config_value(&ClientConfigKey::Timeout), None);
     }
 }

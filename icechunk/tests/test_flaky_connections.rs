@@ -545,6 +545,109 @@ async fn conditional_put_object_store_long_blip() -> Result<(), Box<dyn std::err
     .await
 }
 
+// ── Hung response tests ─────────────────────────────────────────────────────
+//
+// Model a server that accepts a request and never answers (seen on R2 PUTs):
+// the per-attempt timeout must turn the hang into a retryable error.
+
+/// PUT to a server that never answers. Returns the outcome, or `None` if the
+/// PUT was still waiting after `wait`.
+async fn put_to_hung_server(
+    backend: ConditionalPutBackend,
+    proxy_label: &str,
+    port: u16,
+    attempt_timeout_ms: u32,
+    wait: Duration,
+) -> Result<Option<icechunk::storage::StorageResult<()>>, Box<dyn std::error::Error>> {
+    let (client, proxy_name) = setup_toxiproxy(proxy_label, port).await?;
+    let storage = build_proxied_storage(backend, proxy_label, port).await?;
+    let settings = icechunk::storage::Settings {
+        retries: Some(RetriesSettings {
+            #[expect(clippy::unwrap_used)]
+            max_tries: Some(NonZeroU16::new(2).unwrap()),
+            initial_backoff_ms: Some(50),
+            max_backoff_ms: Some(100),
+        }),
+        timeouts: Some(TimeoutSettings {
+            operation_attempt_timeout_ms: Some(attempt_timeout_ms),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let ctx = StorageContext::unattributed(&settings);
+    // Clients lock in the settings of their first request.
+    let _: Vec<_> = storage.list_objects(&ctx, "").await?.try_collect().await?;
+
+    let hang = Toxic {
+        kind: ToxicKind::Timeout { timeout: 0 },
+        name: "hang".into(),
+        toxicity: 1.0,
+        direction: StreamDirection::Downstream,
+    };
+    client.proxy(&proxy_name).await?.add_toxic(&hang).await?;
+
+    let result = tokio::time::timeout(
+        wait,
+        storage.put_object(
+            &ctx,
+            "hung",
+            Bytes::from_static(b"data"),
+            None,
+            Default::default(),
+            icechunk::storage::WriteHint::Atomic,
+        ),
+    )
+    .await;
+    client.proxy(&proxy_name).await?.delete().await?;
+    Ok(result.ok())
+}
+
+async fn hung_put_times_out(
+    backend: ConditionalPutBackend,
+    proxy_label: &str,
+    port: u16,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Shorter than one attempt at object_store's default 30s timeout, so this
+    // only passes if our setting reached the client.
+    let outcome =
+        put_to_hung_server(backend, proxy_label, port, 1000, Duration::from_secs(10))
+            .await?;
+    let result = outcome.expect("put_object should time out instead of hanging");
+    assert!(result.is_err(), "put_object should fail while the server hangs");
+    Ok(())
+}
+
+#[icechunk_macros::tokio_test]
+async fn hung_put_times_out_s3() -> Result<(), Box<dyn std::error::Error>> {
+    hung_put_times_out(ConditionalPutBackend::IcechunkS3, "hung-put-s3", 9008).await
+}
+
+#[icechunk_macros::tokio_test]
+async fn hung_put_times_out_object_store() -> Result<(), Box<dyn std::error::Error>> {
+    hung_put_times_out(
+        ConditionalPutBackend::ArrowObjectStore,
+        "hung-put-object-store",
+        9009,
+    )
+    .await
+}
+
+/// `Some(0)` disables the timeout instead of failing every attempt at once.
+#[icechunk_macros::tokio_test]
+async fn hung_put_waits_with_disabled_timeout_s3()
+-> Result<(), Box<dyn std::error::Error>> {
+    let outcome = put_to_hung_server(
+        ConditionalPutBackend::IcechunkS3,
+        "hung-put-disabled-s3",
+        9010,
+        0,
+        Duration::from_secs(5),
+    )
+    .await?;
+    assert!(outcome.is_none(), "put_object should keep waiting, got {outcome:?}");
+    Ok(())
+}
+
 /// Regression for the 0-byte readback: `refs::delete_tag` PUTs
 /// `Bytes::new()` conditionally, so the readback must not use a 1-byte
 /// range (which 416s on empty objects). Exercises `put_object` directly
