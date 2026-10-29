@@ -370,3 +370,19 @@ No code changes are required. Icechunk checks proxy sources in this order:
 3. `ALL_PROXY` / `all_proxy`
 
 Note that you must set the environment variable at the OS level, not via the python interpreter.
+
+## TLS trust roots
+
+By default, Icechunk checks TLS certificates with the trust store of the operating system. Some processes cannot use that trust store, for example a sandboxed macOS process. In such a process, every HTTPS request fails with `invalid peer certificate`.
+
+Set `ICECHUNK_TLS_CA_FILE` to the path of a PEM file of CA certificates. Icechunk then trusts only the certificates in that file, for all storage types and virtual chunk containers. You can set the variable from Python, before you create the storage:
+
+```python
+import os
+
+import certifi
+
+os.environ["ICECHUNK_TLS_CA_FILE"] = certifi.where()
+```
+
+When the variable is not set or is empty, Icechunk uses the operating system trust store. If Icechunk cannot read the file, or the file contains no valid certificate, storage creation or the first request fails with an error that mentions the variable. Icechunk reads the variable each time it creates a storage. A storage created earlier keeps its trust roots.

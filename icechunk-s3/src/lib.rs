@@ -262,6 +262,31 @@ fn endpoint_with_bucket_separator(endpoint_url: &str) -> Cow<'_, str> {
     }
 }
 
+/// The SDK default HTTPS client, with `pem` as the only trust roots. `None` trusts nothing.
+fn https_client_with_roots(pem: Option<Vec<u8>>) -> aws_sdk_s3::config::SharedHttpClient {
+    use aws_smithy_http_client::{Builder, ConnectorBuilder, proxy::ProxyConfig, tls};
+    let mut trust_store = tls::TrustStore::empty();
+    if let Some(pem) = pem {
+        trust_store = trust_store.with_pem_certificate(pem);
+    }
+    #[expect(clippy::expect_used)]
+    let ctx = tls::TlsContext::builder()
+        .with_trust_store(trust_store)
+        .build()
+        .expect("TlsContextBuilder::build is infallible");
+    Builder::new().build_with_connector_fn(move |settings, components| {
+        let mut conn = ConnectorBuilder::default()
+            .tls_provider(tls::Provider::Rustls(tls::rustls_provider::CryptoMode::AwsLc))
+            .tls_context(ctx.clone());
+        conn.set_connector_settings(settings.cloned());
+        if let Some(components) = components {
+            conn.set_sleep_impl(components.sleep_impl());
+        }
+        conn.set_proxy_config(Some(ProxyConfig::from_env()));
+        conn.build()
+    })
+}
+
 #[instrument(skip(credentials))]
 pub async fn mk_client(
     config: &S3Options,
@@ -304,6 +329,19 @@ pub async fn mk_client(
             .build()
     };
     aws_config = aws_config.stalled_stream_protection(stalled_stream);
+
+    match icechunk_storage::tls::tls_ca_bundle() {
+        Ok(None) => {}
+        Ok(Some(pem)) => {
+            aws_config = aws_config.http_client(https_client_with_roots(Some(pem)));
+        }
+        // S3Storage::new rejects a bad file, so only a deserialized storage gets here.
+        // An empty trust store fails every request instead of a silent fallback to system roots.
+        Err(err) => {
+            tracing::error!("{err}");
+            aws_config = aws_config.http_client(https_client_with_roots(None));
+        }
+    }
 
     match credentials {
         S3Credentials::FromEnv => {}
@@ -553,6 +591,7 @@ impl S3Storage {
         extra_write_headers: Vec<(String, String)>,
         legacy_rooted_keys: Option<bool>,
     ) -> Result<S3Storage, StorageError> {
+        icechunk_storage::tls::tls_ca_bundle()?;
         let client = OnceCell::new();
         let prefix = prefix.unwrap_or_default();
         let prefix = prefix.strip_suffix("/").unwrap_or(prefix.as_str()).to_string();
@@ -2022,6 +2061,13 @@ mod tests {
     use super::*;
 
     // Readback classification is unit-tested in `icechunk_storage::readback`.
+
+    const TEST_CA: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/ca.pem");
+
+    #[test]
+    fn https_client_with_roots_builds() {
+        https_client_with_roots(Some(TEST_CA.to_vec()));
+    }
 
     #[test]
     fn transient_delete_errors_are_throttles() {

@@ -680,6 +680,10 @@ fn chain_message(error: &(dyn std::error::Error + 'static)) -> String {
         current = err.source();
     }
     let mut out = parts.join(": ");
+    if let Some(hint) = icechunk::storage::tls::tls_hint(error) {
+        out.push_str("\n\nhint: ");
+        out.push_str(&hint);
+    }
     for ctx in contexts {
         out.push_str(CTX_MARKER);
         out.push_str(&ctx);
