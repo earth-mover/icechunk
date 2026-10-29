@@ -784,6 +784,10 @@ update. Notes on some cases:
 - `delete-above-marker`: the self-test exercises only the tidy-up half, since
   no sweep runs while writers are live; a unit test in icechunk-fs
   `repo_d/sweep.rs` covers the sweep half.
+- `unlink-base-before-rename`: a writer killed after unlinking its base
+  leaves the marker without bytes only until another writer that read that
+  base renames past it. Under eight writers one almost always does, so the
+  case runs at most two and kills before the rename with probability 0.3.
 - `publish-non-current`: a version above the marker that never becomes
   current is one a writer killed after linking leaves, until the next commit's
   tidy-up deletes it. A publication right after its commit lists `repo.d/`

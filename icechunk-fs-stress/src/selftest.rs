@@ -281,8 +281,10 @@ pub fn selftest_config(mode: Mode, sabotage: Sabotage, duration: Duration) -> Ru
         _ => (0.05, Duration::from_secs(2)),
     };
     let (points, kill_probability) = match sabotage {
-        // Unlinked the base, not yet renamed.
-        Sabotage::UnlinkBaseBeforeRename => (vec![PointName::BeforeRename], 0.05),
+        // Unlinked the base, not yet renamed. Often, because a kill only
+        // breaks the repository when no other writer on that base survives
+        // to rename past it; see `case_workers`.
+        Sabotage::UnlinkBaseBeforeRename => (vec![PointName::BeforeRename], 0.3),
         // Renamed, not yet linked.
         Sabotage::LinkAfterRename => {
             (vec![PointName::BeforeRename, PointName::Renamed], 0.05)
@@ -430,12 +432,16 @@ fn retain(root: &Path, outcome: &CaseOutcome) -> Option<PathBuf> {
 }
 
 /// The writers of a case: one for the GC sabotages, whose GC updates the
-/// repo info once per attempt and so conflicts under many writers.
+/// repo info once per attempt and so conflicts under many writers. At most
+/// two for `UnlinkBaseBeforeRename`: a writer killed after unlinking its base
+/// leaves the marker without bytes only until another writer that read that
+/// base renames past it, which under many writers one almost always does.
 pub fn case_workers(kind: CaseKind, workers: u32) -> u32 {
     match kind {
         CaseKind::Sabotage(
             Sabotage::GcWithoutForkCheck | Sabotage::GcPublishesListed,
         ) => 1,
+        CaseKind::Sabotage(Sabotage::UnlinkBaseBeforeRename) => workers.min(2),
         _ => workers,
     }
 }
@@ -841,10 +847,11 @@ mod tests {
     }
 
     #[test]
-    fn gc_cases_run_one_writer() {
+    fn gc_and_unlink_base_cases_run_few_writers() {
         for sabotage in SABOTAGES {
             let expected = match sabotage {
                 Sabotage::GcWithoutForkCheck | Sabotage::GcPublishesListed => 1,
+                Sabotage::UnlinkBaseBeforeRename => 2,
                 _ => 8,
             };
             assert_eq!(
@@ -853,6 +860,10 @@ mod tests {
                 "{sabotage:?}"
             );
         }
+        assert_eq!(
+            case_workers(CaseKind::Sabotage(Sabotage::UnlinkBaseBeforeRename), 1),
+            1
+        );
         assert_eq!(case_workers(CaseKind::LegacyBackend, 8), 8);
     }
 
