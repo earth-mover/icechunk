@@ -8,7 +8,19 @@ The major version increments only on an on-disk incompatible change, one that ol
 
 Every metadata file records a single-byte on-disk format version in its header. This byte equals the spec major version only, and is `2` for every spec 2.x. Minor spec versions are not recorded on disk. A library learns what a repository requires from its contents: optional fields it finds, and, from spec 2.2, the repository's list of [writer features](./spec-v2-2.md#writer-features).
 
-The current spec is [version 2.2](./spec-v2-2.md), introduced in Icechunk 2.4.0. Earlier formats are documented in [version 2.1](./spec-v2-1.md) (introduced in Icechunk 2.1.0), [version 2](./spec-v2.md) (introduced in Icechunk 2.0.0) and [version 1](./spec-v1.md) (used by Icechunk 1.x).
+### Spec versions
+
+The reference implementation of the spec is the [Icechunk library](https://github.com/earth-mover/icechunk), written in Rust with Python and JavaScript bindings, which share version numbers.
+
+| Spec | Implemented by | Also read by |
+|---|---|---|
+| [2.2](./spec-v2-2.md) (current) | Icechunk 2.4.0 and later | Icechunk 2.0.0 to 2.3.x |
+| [Filesystem layout v1](./spec-filesystem-layout-v1.md) (experimental) | Icechunk 2.4.0 and later | |
+| [2.1](./spec-v2-1.md) | Icechunk 2.1.0 and later | Icechunk 2.0.x |
+| [2](./spec-v2.md) | Icechunk 2.0.0 and later | |
+| [1](./spec-v1.md) | Icechunk 1.x and 2.x | |
+
+Releases that "also read" a spec version can sometimes modify its repositories too; otherwise they refuse with an error. See [Compatibility across minor versions](#compatibility-across-minor-versions) and its [exceptions](./library-compatibility.md).
 
 ## Library Versions
 
@@ -52,16 +64,16 @@ We maintain a documented and tested upgrade path from all major versions startin
 
 ### Compatibility across major versions
 
-An Icechunk library of major version N can read and write Icechunk Spec major versions N and N-1. We make best effort to support reading older spec versions, but do not guarantee it. For example, Icechunk 3.x can read and write Spec versions 2.x and 3.x, and will make best effort to read Spec version 1 data. Icechunk libraries do **not** support forward compatibility across major versions. For example, Icechunk 1.x.y cannot read or write Icechunk format version 2 or later. Users must upgrade to a library version whose major version matches or exceeds the desired format.
+An Icechunk library of major version N can read and write Icechunk Spec major versions N and N-1. We make best effort to support reading older spec versions, but do not guarantee it. For example, Icechunk 3.x will read and write spec versions 2.x and 3.x, and will make best effort to read spec version 1 data. Icechunk libraries do **not** support forward compatibility across major versions. For example, Icechunk 1.x.y cannot read or write Icechunk format version 2 or later. Users must upgrade to a library version whose major version matches or exceeds the desired format.
 
 ### Compatibility across minor versions
 
-Within a single major version N:
+Within a single major version N, the Icechunk libraries promise the following. Known deviations of particular releases are listed in [Compatibility Notes for Icechunk Libraries](./library-compatibility.md).
 
 - **Any N.x library can read any spec N.y repository.** For example, Icechunk 2.0.6 can read a spec 2.2 repository. A library ignores the features it does not know when reading, and behaves as it did before they existed.
 - **Any N.x library either writes a spec N.y repository safely or refuses to write it**, with an error that says what it is missing. A library never silently drops information that a newer library wrote.
 
-Each major version documents below how it keeps these promises. Known deviations of particular Icechunk releases are listed in [Compatibility Notes for Icechunk Libraries](./library-compatibility.md).
+Each major version documents below how it keeps these promises.
 
 ### Major version 2
 
@@ -73,7 +85,7 @@ Libraries older than 2.4.0 do not know about writer features, so a repository th
 
 #### Experimental writer features
 
-A writer feature that the specification marks experimental, such as `filesystem-layout-v1`, may be superseded in a minor release by a new version under a new name. Every 2.x library keeps reading repositories that list an experimental feature. A later 2.x library may stop writing a superseded version: before such a library can modify the repository, it must be converted, to the newer version or to the standard layout. For the filesystem layout, every 2.x release that can write a version of the layout can also convert it back to the standard layout.
+A writer feature that the specification marks experimental, such as `filesystem-layout-v1`, may be superseded in a minor release by a new version under a new name. Every 2.x library keeps reading repositories that list an experimental feature. A later 2.x library may stop writing a superseded version: before such a library can modify the repository, it must be converted, to the newer version or to the object store layout. For the filesystem layout, every 2.x release that can write a version of the layout can also convert it back to the object store layout.
 
 #### Storage layouts
 

@@ -59,7 +59,7 @@ pub(crate) enum ProtocolError {
     /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
     MirrorUnreadable(String),
     /// The current version doesn't list `filesystem-layout-v1`: a conversion
-    /// to the standard layout was interrupted.
+    /// to the object store layout was interrupted.
     ConversionInProgress(String),
     Io(io::Error),
     /// Any other failure: what happened, and the remedy where there is one.
@@ -78,11 +78,11 @@ impl ProtocolError {
     }
 
     /// `$ROOT/repo` doesn't list `filesystem-layout-v1` and `repo.d` doesn't
-    /// exist: a repository in the standard layout, to convert.
-    pub(crate) fn standard_layout(root: &Path) -> Self {
+    /// exist: a repository in the object store layout, to convert.
+    pub(crate) fn object_store_layout(root: &Path) -> Self {
         let root = root.display();
         Self::Other(format!(
-            "the repository in {root} is in the standard layout: {root}/repo doesn't \
+            "the repository in {root} is in the object store layout: {root}/repo doesn't \
              list the writer feature {feature} and {root}/repo.d doesn't exist. Stop \
              every writer, then run convert_to_filesystem_layout() once",
             feature = layout_v1::FEATURE
@@ -113,7 +113,7 @@ impl ProtocolError {
         ))
     }
 
-    /// A rerun of the conversion from the standard layout can't attribute the
+    /// A rerun of the conversion from the object store layout can't attribute the
     /// `repo.d` it found to its own earlier run; `msg` says what it found and
     /// the remedy.
     pub(crate) fn manual_recovery(root: &Path, msg: &str) -> Self {

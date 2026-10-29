@@ -3291,7 +3291,7 @@ class FilesystemStorage(Storage):
     """
 
     def convert_to_filesystem_layout(self) -> bool:
-        """Convert a repository in the standard layout, as
+        """Convert a repository in the object store layout, as
         `local_filesystem_storage` and Icechunk before 2.4.0 write it, to the
         filesystem layout of `filesystem_storage`.
 
@@ -3329,10 +3329,10 @@ class FilesystemStorage(Storage):
             fork, run `convert_to_filesystem_layout` again.
         SessionStateError
             With kind `layout-conversion-in-progress` if a conversion to the
-            standard layout was interrupted: rerun `convert_to_standard_layout`.
+            object store layout was interrupted: rerun `convert_to_object_store_layout`.
         """
     async def convert_to_filesystem_layout_async(self) -> bool:
-        """Convert a repository in the standard layout to the filesystem layout
+        """Convert a repository in the object store layout to the filesystem layout
         of `filesystem_storage` (async version).
 
         See `convert_to_filesystem_layout`.
@@ -3343,9 +3343,9 @@ class FilesystemStorage(Storage):
             True if this call converted the repository, False if it was in the
             filesystem layout already.
         """
-    def convert_to_standard_layout(self) -> bool:
+    def convert_to_object_store_layout(self) -> bool:
         """Convert a repository in the filesystem layout of `filesystem_storage`
-        back to the standard layout that `local_filesystem_storage`, other
+        back to the object store layout that `local_filesystem_storage`, other
         storage backends and Icechunk before 2.4.0 write.
 
         This is an administrative operation: run it with nothing else using
@@ -3355,13 +3355,13 @@ class FilesystemStorage(Storage):
         condition: the rerun completes the conversion. Until then, every write
         and garbage collection through `filesystem_storage` fails with a
         `SessionStateError` of kind `layout-conversion-in-progress` saying
-        that a conversion to the standard layout is in progress and to rerun
+        that a conversion to the object store layout is in progress and to rerun
         it.
 
         A copy of a repository in the filesystem layout on other storage is
         read-only. To get a copy that can be written elsewhere: set the
         status of the source to `RepoAvailability.read_only`, convert it to the
-        standard layout, copy it, convert the source back with
+        object store layout, copy it, convert the source back with
         `convert_to_filesystem_layout` if it should stay in this layout, and
         set the statuses to `RepoAvailability.online`.
 
@@ -3369,7 +3369,7 @@ class FilesystemStorage(Storage):
         -------
         bool
             True if this call converted the repository, False if it was in the
-            standard layout already, including when this call only cleaned up
+            object store layout already, including when this call only cleaned up
             after an interrupted conversion.
 
         Raises
@@ -3383,22 +3383,22 @@ class FilesystemStorage(Storage):
             With kind `missing-writer-features` if the repository lists writer
             features this library doesn't implement.
         RepositoryForkedError
-            If a conversion from the standard layout was interrupted: rerun
+            If a conversion from the object store layout was interrupted: rerun
             `convert_to_filesystem_layout`. If the repository is forked, this
             conversion's change may already have landed: after recovering the
-            fork, run `convert_to_standard_layout` again.
+            fork, run `convert_to_object_store_layout` again.
         """
-    async def convert_to_standard_layout_async(self) -> bool:
+    async def convert_to_object_store_layout_async(self) -> bool:
         """Convert a repository in the filesystem layout of `filesystem_storage`
-        back to the standard layout (async version).
+        back to the object store layout (async version).
 
-        See `convert_to_standard_layout`.
+        See `convert_to_object_store_layout`.
 
         Returns
         -------
         bool
             True if this call converted the repository, False if it was in the
-            standard layout already.
+            object store layout already.
         """
     def publish_mirror(self) -> PublishOutcome:
         """Publish the current version of the repository as the mirror `repo`.
@@ -3430,7 +3430,7 @@ class FilesystemStorage(Storage):
             If `repo` holds a repo info that is no version of the repository.
         SessionStateError
             With kind `layout-conversion-in-progress` if a conversion to the
-            standard layout was interrupted: rerun `convert_to_standard_layout`.
+            object store layout was interrupted: rerun `convert_to_object_store_layout`.
         """
     async def publish_mirror_async(self) -> PublishOutcome:
         """Publish the current version of the repository as the mirror `repo`

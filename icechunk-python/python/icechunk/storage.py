@@ -106,9 +106,9 @@ def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
     Never let anything else write `repo`: Icechunk before 2.4.0 changing the
     status, or other tools, fork the repository.
 
-    Repositories in the standard layout are refused until converted, with
+    Repositories in the object store layout are refused until converted, with
     `FilesystemStorage.convert_to_filesystem_layout`.
-    `FilesystemStorage.convert_to_standard_layout` converts back.
+    `FilesystemStorage.convert_to_object_store_layout` converts back.
 
     It is only available on Unix platforms; elsewhere it raises an error.
     Icechunk 1 repositories are refused: migrate them to Icechunk 2 with

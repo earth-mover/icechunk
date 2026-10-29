@@ -207,15 +207,15 @@ fn point_name(point: PointName) -> &'static str {
         PointName::MirrorStaged => "mirror_staged",
         PointName::BeforeMirrorRename => "before_mirror_rename",
         PointName::MirrorRenamed => "mirror_renamed",
-        PointName::FromStandardBackup => "from_standard_backup",
-        PointName::FromStandardBuild => "from_standard_build",
-        PointName::FromStandardRenameDir => "from_standard_rename_dir",
-        PointName::FromStandardPublish => "from_standard_publish",
-        PointName::ToStandardForkCheck => "to_standard_fork_check",
-        PointName::ToStandardChange => "to_standard_change",
-        PointName::ToStandardPublish => "to_standard_publish",
-        PointName::ToStandardRenameDir => "to_standard_rename_dir",
-        PointName::ToStandardDeleteDir => "to_standard_delete_dir",
+        PointName::FromObjectStoreBackup => "from_object_store_backup",
+        PointName::FromObjectStoreBuild => "from_object_store_build",
+        PointName::FromObjectStoreRenameDir => "from_object_store_rename_dir",
+        PointName::FromObjectStorePublish => "from_object_store_publish",
+        PointName::ToObjectStoreForkCheck => "to_object_store_fork_check",
+        PointName::ToObjectStoreChange => "to_object_store_change",
+        PointName::ToObjectStorePublish => "to_object_store_publish",
+        PointName::ToObjectStoreRenameDir => "to_object_store_rename_dir",
+        PointName::ToObjectStoreDeleteDir => "to_object_store_delete_dir",
     }
 }
 
@@ -423,8 +423,8 @@ mod tests {
         let mut logs = enough();
         logs[0].1 = faults(Kill, &[Linked, BeforeRename]);
         logs.push((
-            worker("scenario", "to-standard"),
-            faults(Kill, &[PointName::ToStandardChange]),
+            worker("scenario", "to-object-store"),
+            faults(Kill, &[PointName::ToObjectStoreChange]),
         ));
         let verdict = check(&busy(logs), &faulty_config(), false);
         assert_eq!(

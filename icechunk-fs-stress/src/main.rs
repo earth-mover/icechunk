@@ -85,10 +85,10 @@ mod cli {
         /// Run with sabotaged protocol steps, and on the unsafe legacy local
         /// backend, and expect verify to fail.
         Selftest(SelftestArgs),
-        /// Convert a repository between the standard and the filesystem
-        /// layout in rounds, killing and rerunning the conversions, with a
-        /// stress phase in the filesystem layout and commits in the standard
-        /// one in every round, and check every conversion.
+        /// Convert a repository between the object store layout and the
+        /// filesystem layout in rounds, killing and rerunning the conversions,
+        /// with a stress phase in the filesystem layout and commits in the
+        /// object store layout in every round, and check every conversion.
         ConvertScenario(ScenarioArgs),
         /// Run one conversion of the scenario; spawned by `convert-scenario`.
         #[command(hide = true)]
@@ -401,9 +401,9 @@ mod cli {
         /// steps, chosen at random.
         #[arg(long, default_value_t = 0.3)]
         conversion_kill_p: f64,
-        /// Commits in the standard layout in each round.
+        /// Commits in the object store layout in each round.
         #[arg(long, default_value_t = 3)]
-        standard_commits: u32,
+        object_store_commits: u32,
         /// Don't fsync storage writes.
         #[arg(long)]
         no_fsync: bool,
@@ -696,16 +696,17 @@ mod cli {
             stress,
             workers: args.workers,
             kill_probability: args.conversion_kill_p,
-            standard_commits: args.standard_commits,
+            object_store_commits: args.object_store_commits,
             fsync: !args.no_fsync,
             sabotage: None,
-            plant_standard_write: false,
+            plant_object_store_write: false,
             late_commit: false,
             guaranteed_kills: true,
         }
     }
 
-    /// A value as `serde` names it, e.g. `to_standard` or `to_standard_change`.
+    /// A value as `serde` names it, e.g. `to_object_store` or
+    /// `to_object_store_change`.
     fn parse_serde<T: serde::de::DeserializeOwned>(s: &str) -> anyhow::Result<T> {
         serde_json::from_value(serde_json::Value::String(s.to_owned()))
             .with_context(|| format!("unknown value {s:?}"))
@@ -1294,7 +1295,7 @@ mod cli {
             };
             let config = scenario_config(&args);
             config.validate().unwrap();
-            assert_eq!((config.rounds, config.standard_commits), (2, 3));
+            assert_eq!((config.rounds, config.object_store_commits), (2, 3));
             assert_eq!(config.kill_probability, 0.3);
             assert!(config.guaranteed_kills);
             let stress = config.stress.unwrap();
@@ -1315,16 +1316,16 @@ mod cli {
                 "--round",
                 "2",
                 "--direction",
-                "to_standard",
+                "to_object_store",
                 "--attempt",
                 "3",
                 "--kill-at",
-                "to_standard_change",
+                "to_object_store_change",
             ]) else {
                 panic!("not conversion");
             };
-            assert_eq!(args.direction, Direction::ToStandard);
-            assert_eq!(args.kill_at, Some(PointName::ToStandardChange));
+            assert_eq!(args.direction, Direction::ToObjectStore);
+            assert_eq!(args.kill_at, Some(PointName::ToObjectStoreChange));
             let bad = [
                 "fs-stress",
                 "conversion",

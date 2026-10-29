@@ -11,8 +11,8 @@ use std::{
 use icechunk_fs::{
     ConversionOutcome, FilesystemStorage,
     fault_injection::{
-        ConversionStep, CreationStep, FromStandardStep, Point, ProtocolHooks, Sabotage,
-        ToStandardStep,
+        ConversionStep, CreationStep, FromObjectStoreStep, Point, ProtocolHooks,
+        Sabotage, ToObjectStoreStep,
     },
 };
 use icechunk_macros::tokio_test;
@@ -252,7 +252,7 @@ async fn renaming_from_the_listed_marker_commits_a_stale_base() {
 }
 
 #[tokio_test]
-async fn hooks_see_every_point_of_a_conversion_from_the_standard_layout() {
+async fn hooks_see_every_point_of_a_conversion_from_the_object_store_layout() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("repo"), featureless_repo_info(0)).unwrap();
     let hooks = Arc::new(Recorder::default());
@@ -262,30 +262,30 @@ async fn hooks_see_every_point_of_a_conversion_from_the_standard_layout() {
         st.convert_to_filesystem_layout().await.unwrap(),
         ConversionOutcome::Converted
     );
-    let step = |step| Point::Conversion(ConversionStep::FromStandard(step));
+    let step = |step| Point::Conversion(ConversionStep::FromObjectStore(step));
     assert_eq!(
         hooks.take(),
         [
-            step(FromStandardStep::Backup),
-            step(FromStandardStep::Build),
-            step(FromStandardStep::RenameDir),
+            step(FromObjectStoreStep::Backup),
+            step(FromObjectStoreStep::Build),
+            step(FromObjectStoreStep::RenameDir),
             Point::BeforePublish,
             Point::MirrorStaged,
             Point::BeforeMirrorRead,
             Point::BeforeMirrorRename,
             Point::MirrorRenamed,
-            step(FromStandardStep::Publish),
+            step(FromObjectStoreStep::Publish),
         ]
     );
     assert_eq!(read(&st).await, std::fs::read(dir.path().join("repo")).unwrap());
 }
 
-fn to_standard(step: ToStandardStep) -> Point {
-    Point::Conversion(ConversionStep::ToStandard(step))
+fn to_object_store(step: ToObjectStoreStep) -> Point {
+    Point::Conversion(ConversionStep::ToObjectStore(step))
 }
 
 #[tokio_test]
-async fn hooks_see_every_point_of_a_conversion_to_the_standard_layout() {
+async fn hooks_see_every_point_of_a_conversion_to_the_object_store_layout() {
     let dir = tempfile::tempdir().unwrap();
     let st = FilesystemStorage::new(dir.path()).unwrap();
     assert_updated(&put(&st, &repo_info(1), PutCondition::Create).await);
@@ -293,64 +293,65 @@ async fn hooks_see_every_point_of_a_conversion_to_the_standard_layout() {
     let st = with_hooks(dir.path(), &hooks);
 
     assert_eq!(
-        st.convert_to_standard_layout().await.unwrap(),
+        st.convert_to_object_store_layout().await.unwrap(),
         ConversionOutcome::Converted
     );
     assert_eq!(
         hooks.take(),
         [
-            to_standard(ToStandardStep::ForkCheck),
+            to_object_store(ToObjectStoreStep::ForkCheck),
             Point::BeforeMirrorRead,
             Point::Staged,
             Point::Linked,
             Point::BeforeRename,
             Point::Renamed,
             Point::BeforeTidyUp,
-            to_standard(ToStandardStep::Change),
+            to_object_store(ToObjectStoreStep::Change),
             Point::BeforePublish,
             Point::MirrorStaged,
             Point::BeforeMirrorRead,
             Point::BeforeMirrorRename,
             Point::MirrorRenamed,
-            to_standard(ToStandardStep::Publish),
-            to_standard(ToStandardStep::RenameDir),
-            to_standard(ToStandardStep::DeleteDir),
+            to_object_store(ToObjectStoreStep::Publish),
+            to_object_store(ToObjectStoreStep::RenameDir),
+            to_object_store(ToObjectStoreStep::DeleteDir),
         ]
     );
     assert!(!dir.path().join("repo.d").exists());
 }
 
-/// A conversion to the standard layout that crashes at every step in turn:
+/// A conversion to the object store layout that crashes at every step in turn:
 /// from its change until the rerun, writes and GC through another
 /// `FilesystemStorage` refuse, naming the conversion to rerun; the rerun
 /// reaches the same end state.
 #[tokio_test]
-async fn a_crash_at_every_step_of_the_conversion_to_the_standard_layout_then_a_rerun() {
+async fn a_crash_at_every_step_of_the_conversion_to_the_object_store_layout_then_a_rerun()
+{
     for step in [
-        ToStandardStep::ForkCheck,
-        ToStandardStep::Change,
-        ToStandardStep::Publish,
-        ToStandardStep::RenameDir,
-        ToStandardStep::DeleteDir,
+        ToObjectStoreStep::ForkCheck,
+        ToObjectStoreStep::Change,
+        ToObjectStoreStep::Publish,
+        ToObjectStoreStep::RenameDir,
+        ToObjectStoreStep::DeleteDir,
     ] {
         let dir = tempfile::tempdir().unwrap();
         let st = FilesystemStorage::new(dir.path()).unwrap();
         assert_updated(&put(&st, &repo_info(1), PutCondition::Create).await);
         let v1 = latest(&st).await;
         assert_updated(&put(&st, &repo_info(2), PutCondition::IfVersion(&v1)).await);
-        let crash = to_standard(step);
+        let crash = to_object_store(step);
         let hooks = Arc::new(Recorder {
             at: Some(Box::new(move |point| assert_ne!(point, crash, "crash"))),
             ..Recorder::default()
         });
         let err = with_hooks(dir.path(), &hooks)
-            .convert_to_standard_layout()
+            .convert_to_object_store_layout()
             .await
             .unwrap_err();
         assert!(matches!(err.kind, StorageErrorKind::Other(_)), "{step:?}: {err}");
 
         let other = FilesystemStorage::new(dir.path()).unwrap();
-        if matches!(step, ToStandardStep::Change | ToStandardStep::Publish) {
+        if matches!(step, ToObjectStoreStep::Change | ToObjectStoreStep::Publish) {
             let current = latest(&other).await;
             let bytes = read(&other).await;
             assert!(!icechunk_format::layout_v1::lists_feature(&bytes).unwrap());
@@ -367,20 +368,20 @@ async fn a_crash_at_every_step_of_the_conversion_to_the_standard_layout_then_a_r
                     "{step:?}: {err}"
                 );
                 assert!(
-                    err.to_string().contains("rerun convert_to_standard_layout()"),
+                    err.to_string().contains("rerun convert_to_object_store_layout()"),
                     "{err}"
                 );
             }
         }
 
         let expected = match step {
-            ToStandardStep::RenameDir | ToStandardStep::DeleteDir => {
+            ToObjectStoreStep::RenameDir | ToObjectStoreStep::DeleteDir => {
                 ConversionOutcome::NothingToConvert
             }
             _ => ConversionOutcome::Converted,
         };
         assert_eq!(
-            other.convert_to_standard_layout().await.unwrap(),
+            other.convert_to_object_store_layout().await.unwrap(),
             expected,
             "{step:?}"
         );
@@ -392,8 +393,8 @@ async fn a_crash_at_every_step_of_the_conversion_to_the_standard_layout_then_a_r
             !names.iter().any(|name| name.starts_with("repo.d")),
             "{step:?}: {names:?}"
         );
-        let standard = mirror(dir.path());
-        let info = icechunk_format::layout_v1::change_info(&standard).unwrap();
+        let object_store_info = mirror(dir.path());
+        let info = icechunk_format::layout_v1::change_info(&object_store_info).unwrap();
         assert!(!info.lists_feature);
         let attempt = info.attempt.unwrap().id;
         assert_eq!(

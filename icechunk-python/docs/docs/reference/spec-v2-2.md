@@ -5,7 +5,7 @@ title: Specification
 
 !!! Note
 
-    This is the current Icechunk specification (spec version 2.2), used by Icechunk 2.4.0 and higher. For the previous on-disk formats, see [spec version 2.1](./spec-v2-1.md), [spec version 2](./spec-v2.md), and [spec version 1](./spec-v1.md). See [Changes from spec version 2.1 to 2.2](#changes-from-spec-version-21-to-22) for a summary of what changed.
+    This is the Icechunk specification, spec version 2.2. See [Spec versions](./version-policy.md#spec-versions) for the current version and the releases of the reference implementation that implement each. See [Changes from spec version 2.1 to 2.2](#changes-from-spec-version-21-to-22) for a summary of what changed.
 
 !!! Note
 
@@ -48,25 +48,30 @@ The spec is not designed to enable fine-grained access restrictions (e.g. only r
 
 ### Storage Operations
 
-Icechunk requires that the storage system support the following operations:
+Every storage system used by Icechunk MUST support:
 
-- **In-place write** — the storage system MUST provide strong read-after-write consistency. Files are not moved or altered once written.
-- **Conditional create** — the storage system MUST support atomically creating a file only if it does not exist, required to initialize a repository.
-- **Conditional update** — the storage system MUST support atomically updating a file only if the current version is known to the writer.
-- **Conditional copy** — the storage system MUST support copying a file only if its current version is known to the writer, required to back up the repo info before each update.
-- **Range reads** — the storage system SHOULD support reading a byte range within a file, required for reading chunks stored at an offset within a larger file.
-- **Deletes** — the storage system SHOULD support deleting files, required for garbage collection.
-- **Listing** — the storage system SHOULD support listing the files under a prefix together with their creation times, required for garbage collection.
+- **Read-after-write consistent writes** — once a write of a file completes, every read of it returns the complete content. Files are not moved or altered once written.
 
-These requirements are compatible with object stores, like S3, as well as with filesystems.
+A storage system SHOULD support:
 
-The storage system is not required to support random-access writes. Once written, all files are immutable until deleted, with one exception: the repo info file at `$ROOT/repo`, which is updated via conditional writes.
+- **Range reads** — reading a byte range within a file, required for reading chunks stored at an offset within a larger file.
+- **Deletes** — deleting files, required for garbage collection.
+- **Listing** — listing the files under a prefix together with their creation times, required for garbage collection.
 
-Filesystems generally lack a conditional update. Repositories that use the [filesystem layout](./spec-filesystem-layout-v1.md) store the repo info differently and update it with filesystem operations instead; see [Writer features](#writer-features).
+The storage system is not required to support random-access writes. Once written, all files are immutable until deleted, except for the repo info. How the repo info is created and updated depends on the repository's layout:
+
+- In the **object store layout**, the repo info is the single file `$ROOT/repo`, and the storage system MUST also support:
+    - **Conditional create** — atomically creating a file only if it does not exist, required to initialize a repository.
+    - **Conditional update** — atomically updating a file only if the current version is known to the writer.
+    - **Conditional copy** — copying a file only if its current version is known to the writer, required to back up the repo info before each update.
+
+    Object stores like S3 provide these operations.
+
+- Filesystems generally lack a conditional update. Repositories on them use the **[filesystem layout](./spec-filesystem-layout-v1.md)**, which keeps each version of the repo info as an immutable file in a directory and moves from one to the next with `rename`. Its [requirements](./spec-filesystem-layout-v1.md#requirements) replace the ones of the object store layout. The filesystem layout is a [writer feature](#writer-features).
 
 ### Consistency and Optimistic Concurrency
 
-Icechunk achieves transactional consistency using only the limited consistency guarantees offered by object storage.
+Icechunk achieves transactional consistency using only the limited consistency guarantees offered by the storage system.
 Icechunk V2.x does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
 (The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
@@ -184,7 +189,7 @@ Tools that copy, move or archive a repository MUST include every entry under `$R
 
 ### Common Types
 
-The following types are defined in [`common.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/common.fbs) and used throughout all flatbuffers files.
+The following types are defined in [`common.fbs`](https://github.com/earth-mover/icechunk/blob/main/icechunk-format/flatbuffers/common.fbs) and used throughout all flatbuffers files.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/common.fbs:object_id_12"
@@ -229,7 +234,7 @@ The remainder of the file is the flatbuffers payload, compressed with the algori
 - The compression algorithm MUST be `1`. The value `0` (no compression) is reserved: writers MUST NOT write it.
 - The compressed payload MUST be a single zstd frame. Writers SHOULD record the decompressed size in the frame header.
 
-The header values, like every flatbuffers enum and union in this specification, are fixed for all of spec version 2.x. Writers MUST NOT write a value or variant this specification does not define; adding one requires a new major spec version. Readers MUST treat such a value or variant as a format error, except in `RepoAvailability`, where every value other than `Online` MUST be treated as not `Online`.
+Minor spec versions can add fields to flatbuffers tables, but not values or variants to enums and unions. The header values, like every flatbuffers enum and union in this specification, are fixed for all of spec version 2.x. Writers MUST NOT write a value or variant this specification does not define; adding one requires a new major spec version. Readers MUST treat such a value or variant as a format error, except in `RepoAvailability`, where every value other than `Online` MUST be treated as not `Online`.
 
 ### Reserved Fields
 
@@ -237,15 +242,18 @@ The `extra` fields in the flatbuffers tables are reserved for future versions of
 
 ### File Formats
 
-With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers). Chunk files have their encoding defined by the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding). Common type definitions shared across all flatbuffers files are in [`common.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/common.fbs).
+With the exception of chunk files, each type of file is encoded using [flatbuffers](https://github.com/google/flatbuffers). Chunk files have their encoding defined by the [Zarr specification](https://zarr-specs.readthedocs.io/en/latest/v3/core/index.html#chunk-encoding). Common type definitions shared across all flatbuffers files are in [`common.fbs`](https://github.com/earth-mover/icechunk/blob/main/icechunk-format/flatbuffers/common.fbs).
 
 #### Repo Info File
 
-The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. It MUST be stored at `$ROOT/repo`, except in repositories that list the `filesystem-layout-v1` [writer feature](#writer-features). Those store the current repo info as described in the [filesystem layout](./spec-filesystem-layout-v1.md), and `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing, and briefly holds other repo infos as the filesystem layout describes. Every read operation starts by fetching this file. Every update to the repository (commits, tag creation, configuration changes) is a conditional write on this file or, in the filesystem layout, the operation that layout describes.
+The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. Every read operation starts by fetching it, and every update to the repository (commits, tag creation, configuration changes) replaces it. Where it is stored and how it is replaced depends on the repository's [layout](#storage-operations):
 
-The repo info file MUST use the standard [binary file format](#binary-file-format) with file type `RepoInfo`.
+- In the **object store layout**, the repo info MUST be stored at `$ROOT/repo`, and every update is a conditional write on that file.
+- In the **[filesystem layout](./spec-filesystem-layout-v1.md)**, used by repositories that list the `filesystem-layout-v1` [writer feature](#writer-features), the current repo info is a version file in `$ROOT/repo.d/`, and updates are made as that layout describes. `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing, and briefly holds other repo infos as the filesystem layout describes.
 
-The full flatbuffers schema can be found in [`repo.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/repo.fbs).
+The repo info file MUST use the [binary file format](#binary-file-format) with file type `RepoInfo`.
+
+The full flatbuffers schema can be found in [`repo.fbs`](https://github.com/earth-mover/icechunk/blob/main/icechunk-format/flatbuffers/repo.fbs).
 
 The `Repo` table is the root type:
 
@@ -253,7 +261,7 @@ The `Repo` table is the root type:
 --8<-- "icechunk-format/flatbuffers/repo.fbs:repo_table"
 ```
 
-The `spec_version` field of the `Repo` table, inside the flatbuffers payload, is the major spec version of the repository. It is separate from the spec version byte in the [file header](#binary-file-format). In a spec 2.x repository the field MUST be `2`, the same value as the header byte. Readers MUST reject a repo info file whose `spec_version` field has any other value.
+The `spec_version` field of the `Repo` table, inside the flatbuffers payload, is the major spec version of the repository. It is separate from the spec version byte in the [file header](#binary-file-format). In a spec 2.x repository the field MUST be `2`, the same value as the header byte. Readers MUST reject a repo info file whose `spec_version` field has any other value. Spec version 1 has no repo info file; a repository [migrated from spec version 1](#repositories-migrated-from-spec-version-1) has one with `spec_version` `2`.
 
 ##### `Ref`
 
@@ -273,18 +281,18 @@ Each snapshot in the repository has a `SnapshotInfo` entry in the repo info file
 
 The `flushed_at`, `message` and `metadata` fields repeat the values in the snapshot file, so that the history can be read without fetching snapshot files. Writers MUST copy them from the snapshot file when they add the snapshot to the repo info, and MUST NOT change them afterwards. Readers MAY use either copy.
 
-The `pruned_ancestor_tx_logs` field, added in spec version 2.1, keeps the transaction logs of ancestors that were removed from the history. Expiration and garbage collection fill it when they re-parent a snapshot, and a commit that amends a snapshot inherits the amended snapshot's list. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the snapshot.
+The `pruned_ancestor_tx_logs` field, added in spec version 2.1, keeps the transaction logs of ancestors that were removed from the history. Without them, operations that need every change made since an older snapshot, such as `diff` and conflict detection in `rebase`, would miss the changes of the removed ancestors. Expiration and garbage collection fill it when they re-parent a snapshot, and a commit that amends a snapshot inherits the amended snapshot's list. The list is ordered by ancestry, oldest first. Implementations MUST treat the concatenation of all these transaction logs, followed by the snapshot's own transaction log, as the full transaction history for the snapshot.
 
 Some implementations MAY compact these transaction logs to shorten the list, so readers MUST NOT assume that each entry corresponds to a real commit.
 
-The top-level snapshot metadata key `__icechunk` is reserved for implementations. Its value is a map whose contents are implementation-defined and informational: readers MUST NOT require it. Users MUST NOT set it, and implementations SHOULD reject user metadata that contains it.
+The top-level snapshot metadata key `__icechunk` is reserved for implementations to record information about the commit. Its value is a map whose contents are implementation-defined and informational: readers MUST NOT require it. Users SHOULD NOT set it. Implementations MAY reject user metadata with a top-level `__icechunk` key, or replace or merge into its value.
 
 !!! tip "For implementers"
-    Icechunk writes these keys in the `__icechunk` map: `is_root` (`true` in the initial snapshot), `splitting_config` (the manifest splitting configuration, in commits that rewrite manifests) and `rebase_attempts` (the number of rebases a commit needed).
+    The Icechunk reference implementation writes these keys in the `__icechunk` map: `is_root` (`true` in the initial snapshot), `splitting_config` (the manifest splitting configuration, in commits that rewrite manifests) and `rebase_attempts` (the number of rebases a commit needed).
 
 ##### `Update`
 
-The `latest_updates` list is the repository ops log: one entry per update of the repo info, newest first. It summarizes the history of the repository; it is not a complete record of every change. For example, branches and tags deleted by expiration have no entries of their own. When the list exceeds its size limit, older entries are accessible via the `repo_before_updates` linked list of previous repo info files stored under `overwritten/`.
+The `latest_updates` list is the repository ops log: one entry per update of the repo info, newest first. It summarizes the history of the repository; it is not a complete record of every change. For example, branches and tags deleted by expiration have no entries of their own. When the list grows beyond its page size (1,000 entries unless configured; see the rules below), older entries are accessible via the `repo_before_updates` linked list of previous repo info files stored under `overwritten/`.
 
 ```protobuf
 --8<-- "icechunk-format/flatbuffers/repo.fbs:update"
@@ -315,12 +323,12 @@ Every update of the repo info MUST add exactly one entry at the front of `latest
 | Expiration | `ExpirationRanUpdate` |
 | Garbage collection | `GCRanUpdate` |
 
-The rules for the ops log are:
+Writers MUST maintain the ops log as follows:
 
-- Before replacing the repo info, an update backs it up to `overwritten/`, and sets the backup's name as the `backup_path` of the entry that was newest. The new entry has no `backup_path`. See [Updates to the repo info file](#updates-to-the-repo-info-file).
+- Before replacing the repo info, an update MUST back it up to `overwritten/`, and MUST set the backup's name as the `backup_path` of the entry that was newest. The new entry has no `backup_path`. See [Updates to the repo info file](#updates-to-the-repo-info-file).
 - The new entry's `updated_at` MUST be strictly greater than that of the entry that was newest before the update.
-- `backup_path` and `repo_before_updates` are bare names relative to `overwritten/`, such as `repo.30729294865234.S0CHS5WSF158RN937BP0`.
-- Writers choose the number of entries kept in each file, the _page size_. They SHOULD use the configured `num_updates_per_repo_info_file`, see [Configuration](#configuration), or 1,000 when it is not configured. When the list grows beyond the page size, a writer drops the older entries, starting at an entry that has a `backup_path`, and sets `repo_before_updates` to that `backup_path`. Otherwise it MUST copy `repo_before_updates` unchanged.
+- `backup_path` and `repo_before_updates` MUST be bare names relative to `overwritten/`, such as `repo.30729294865234.S0CHS5WSF158RN937BP0`.
+- Writers choose the number of entries kept in each file, the _page size_. They SHOULD use the configured `num_updates_per_repo_info_file`, see [Configuration](#configuration), or 1,000 when it is not configured. Readers don't depend on the page size, so another size only changes how many files the ops log spans. When the list grows beyond the page size, a writer drops the older entries, starting at an entry that has a `backup_path`, and sets `repo_before_updates` to that `backup_path`. Otherwise it MUST copy `repo_before_updates` unchanged.
 - Entries without a `backup_path` cannot start the dropped part, so they stay in the file. The entries synthesized by a migration from spec 1 have no `backup_path` and no backup, so a migrated repo info can hold more entries than the page size.
 
 Readers MUST NOT depend on the page size.
@@ -341,14 +349,16 @@ The status says which operations implementations may perform on the repository:
 - `ReadOnly`: reads only. Implementations MUST NOT modify the repository, except to change its status, or to add or remove writer features keeping the status (see [Modify a Repository](#modify-a-repository)).
 - `Offline`: reserved. Implementations MUST NOT write it. Implementations of spec 2.2 that find it MUST treat it as not `Online`: no modifications, except to change the status, or to add or remove writer features keeping the status (see [Modify a Repository](#modify-a-repository)). Icechunk libraries up to 2.3 read it as `Online`.
 
-When `Repo.writer_features` is non-empty, `status` is a **gate** for implementations that predate writer features, and the repository's own status is in `status.underlying`:
+In this section, `status` is the `Repo.status` field.
 
-- `status.underlying` MUST be present, and MUST NOT itself have an `underlying`.
+When `Repo.writer_features` is non-empty, `status` is a **gate**. It marks the repository `ReadOnly` for implementations that predate writer features, so that they don't modify a repository whose features they don't know. The repository's own status is then in `status.underlying`. Writers MUST maintain the gate as follows:
+
+- `status.underlying` MUST be present when `Repo.writer_features` is non-empty, and absent when it is empty. It MUST NOT itself have an `underlying`.
 - `status.availability` MUST be `ReadOnly`, whatever the underlying availability.
 - `status.limited_availability_reason` MUST be one line without double quotes. It MUST name the writer features and the oldest Icechunk version that implements all of them (the highest "First implemented in" among them in [Writer features](#writer-features)), and MUST tell users not to change the status with Icechunk older than 2.4.0. The underlying reason, if any, follows.
 - `status.set_at` MUST equal `status.underlying.set_at`.
 
-When `Repo.writer_features` is empty, `status.underlying` MUST be absent. Implementations of spec 2.2 or later MUST use `status.underlying`, when present, as the status of the repository, and change the status by changing `status.underlying`.
+Implementations of spec 2.2 or later MUST use `status.underlying`, when present, as the status of the repository, and change the status by changing `status.underlying`.
 
 In a `RepoStatusChangedUpdate` entry, the status the update set is `status.underlying` when present, otherwise `status`. A change of writer features also appends a `RepoStatusChangedUpdate` entry, with the status it kept, or `ReadOnly` where it rewrites an `Offline` or undefined status, as the [filesystem layout conversions](./spec-filesystem-layout-v1.md#conversions) do. The entry alone doesn't tell such a change from a change of the status.
 
@@ -447,9 +457,9 @@ These backups keep every earlier version of the repo info. They hold the ops log
 
 A snapshot file fully describes the state of a repository at a given commit — all arrays, groups, and their metadata. The file name is the Crockford base 32 encoding of the snapshot's 12-byte id, stored under the `snapshots/` prefix. For example, the initial snapshot has id bytes `0b 1c c8 d6 78 75 80 f0 e3 3a 65 34` and is stored at `snapshots/1CECHNKREP0F1RSTCMT0`.
 
-The snapshot file MUST use the standard [binary file format](#binary-file-format) with file type `Snapshot`.
+The snapshot file MUST use the [binary file format](#binary-file-format) with file type `Snapshot`.
 
-The full flatbuffers schema can be found in [`snapshot.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/snapshot.fbs).
+The full flatbuffers schema can be found in [`snapshot.fbs`](https://github.com/earth-mover/icechunk/blob/main/icechunk-format/flatbuffers/snapshot.fbs).
 
 The `Snapshot` table is the root type:
 
@@ -515,9 +525,9 @@ The snapshot's `manifest_files` / `manifest_files_v2` lists provide summary meta
 
 A chunk manifest file stores chunk references — mappings from a chunk's coordinates in an array's chunk grid to the location of the chunk's data. Chunk references from multiple arrays can be stored in the same manifest, and a single array's chunks can be spread across multiple manifests. The file name is the Crockford base 32 encoding of the manifest's 12-byte id, stored under the `manifests/` prefix.
 
-The manifest file MUST use the standard [binary file format](#binary-file-format) with file type `Manifest`.
+The manifest file MUST use the [binary file format](#binary-file-format) with file type `Manifest`.
 
-The full flatbuffers schema can be found in [`manifest.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/manifest.fbs).
+The full flatbuffers schema can be found in [`manifest.fbs`](https://github.com/earth-mover/icechunk/blob/main/icechunk-format/flatbuffers/manifest.fbs).
 
 The `Manifest` table is the root type:
 
@@ -582,14 +592,14 @@ A transaction log listed in a `pruned_ancestor_tx_logs` is stored the same way, 
 
 A transaction log listed in a `pruned_ancestor_tx_logs` can be missing, because garbage collection in implementations of spec version 2.0 did not keep these logs. Readers MUST handle this: operations that need the complete history of a snapshot to be correct, such as rebase, MUST fail; operations that only report it, such as diffs, MAY proceed and SHOULD report that the result is incomplete.
 
-The transaction log file MUST use the standard [binary file format](#binary-file-format) with file type `TransactionLog`.
+The transaction log file MUST use the [binary file format](#binary-file-format) with file type `TransactionLog`.
 
 !!! tip "For implementers"
     Transaction logs are not needed to read data from a repository — they exist to support
     conflict detection during rebase and to compute diffs between commits.
     A read-only implementation can safely omit transaction log support.
 
-The full flatbuffers schema can be found in [`transaction_log.fbs`](https://github.com/earth-mover/icechunk/tree/main/icechunk-format/flatbuffers/transaction_log.fbs).
+The full flatbuffers schema can be found in [`transaction_log.fbs`](https://github.com/earth-mover/icechunk/blob/main/icechunk-format/flatbuffers/transaction_log.fbs).
 
 The `TransactionLog` table is the root type:
 
@@ -729,7 +739,7 @@ A tag can be created from any snapshot.
 - Defined the feature flag ids `1` to `21`, with `17` reserved. Ids `3` to `5` were already used by Icechunk 2.0.0; the others are new.
 - Added normative rules for garbage collection and expiration.
 - Reserved the `extra` fields for this specification.
-- Froze the flatbuffers enums and unions, and the header values, for all of spec 2.x.
+- Froze the flatbuffers enums and unions, and the header values, for all of spec 2.x; tables can still gain fields.
 - Clarified existing behavior: the header values, the repository status, the ops log and its backups, the configuration fields needed to interoperate, feature flags, relative virtual chunk locations and compressed locations, the consistency of `manifest_files_v2` and `SnapshotInfo` with the snapshot file, repository initialization, repositories migrated from spec version 1, and the cases where a transaction log is missing or lists a node more than once. These clarifications describe repositories written under spec versions 2 and 2.1 as well; they do not claim that every older implementation followed the algorithms in [Garbage collection and expiration](#garbage-collection-and-expiration).
 - The change is backwards compatible. Every 2.x library can read a spec 2.2 repository. Libraries before 2.4.0 cannot modify a repository that lists writer features.
 

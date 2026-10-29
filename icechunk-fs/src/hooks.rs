@@ -69,20 +69,20 @@ pub enum CreationStep {
     expect(unreachable_pub, reason = "exported with the fault-injection feature")
 )]
 pub enum ConversionStep {
-    /// A step of the conversion from the standard layout.
-    FromStandard(FromStandardStep),
-    /// A step of the conversion to the standard layout.
-    ToStandard(ToStandardStep),
+    /// A step of the conversion from the object store layout.
+    FromObjectStore(FromObjectStoreStep),
+    /// A step of the conversion to the object store layout.
+    ToObjectStore(ToObjectStoreStep),
 }
 
-/// The steps of the conversion from the standard layout at which
+/// The steps of the conversion from the object store layout at which
 /// [`ProtocolHooks::at`] is called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(
     not(feature = "fault-injection"),
     expect(unreachable_pub, reason = "exported with the fault-injection feature")
 )]
-pub enum FromStandardStep {
+pub enum FromObjectStoreStep {
     /// Our backup of `$ROOT/repo` is written; the next step builds our
     /// `repo.d.tmp.<id>`.
     Backup,
@@ -95,14 +95,14 @@ pub enum FromStandardStep {
     Publish,
 }
 
-/// The steps of the conversion to the standard layout at which
+/// The steps of the conversion to the object store layout at which
 /// [`ProtocolHooks::at`] is called.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(
     not(feature = "fault-injection"),
     expect(unreachable_pub, reason = "exported with the fault-injection feature")
 )]
-pub enum ToStandardStep {
+pub enum ToObjectStoreStep {
     /// The current version is read and lists the feature; the next step is
     /// the fork check. Reached again after every relisting.
     ForkCheck,
@@ -156,18 +156,18 @@ pub enum Sabotage {
     /// instead of the proved version, which can be one that was never
     /// current.
     PublishNonCurrent,
-    /// A rerun of the conversion from the standard layout that finds `repo.d`
-    /// next to a `$ROOT/repo` without the feature publishes without the
-    /// provenance check: a standard write made after the conversion's
-    /// directory rename is overwritten.
-    FromStandardWithoutProvenance,
+    /// A rerun of the conversion from the object store layout that finds
+    /// `repo.d` next to a `$ROOT/repo` without the feature publishes without the
+    /// provenance check: an object-store-layout write made after the
+    /// conversion's directory rename is overwritten.
+    FromObjectStoreWithoutProvenance,
     /// A change returns without publishing the mirror.
     CommitWithoutPublish,
-    /// The conversion to the standard layout publishes the version its
+    /// The conversion to the object store layout publishes the version its
     /// listing showed, converted, without making its change: under a stale
     /// listing a change acknowledged after that version is lost.
-    ToStandardWithoutChange,
-    /// The conversion to the standard layout renames `repo.d` aside and
+    ToObjectStoreWithoutChange,
+    /// The conversion to the object store layout renames `repo.d` aside and
     /// deletes it before publishing its change: a crash after the deletion
     /// leaves the older mirror with the feature and no `repo.d`.
     DeleteDirBeforePublish,
@@ -269,10 +269,10 @@ mod tests {
             Sabotage::DeleteWinnerFile,
             Sabotage::PublishWithoutForkCheck,
             Sabotage::PublishNonCurrent,
-            Sabotage::FromStandardWithoutProvenance,
+            Sabotage::FromObjectStoreWithoutProvenance,
             Sabotage::AckSupersededWithoutProof,
             Sabotage::CommitWithoutPublish,
-            Sabotage::ToStandardWithoutChange,
+            Sabotage::ToObjectStoreWithoutChange,
             Sabotage::DeleteDirBeforePublish,
             Sabotage::GcWithoutForkCheck,
             Sabotage::GcPublishesListed,
@@ -294,15 +294,29 @@ mod tests {
             Point::Creation(CreationStep::Placed),
             Point::Creation(CreationStep::BeforeDirRename),
             Point::Creation(CreationStep::DirRenamed),
-            Point::Conversion(ConversionStep::FromStandard(FromStandardStep::Backup)),
-            Point::Conversion(ConversionStep::FromStandard(FromStandardStep::Build)),
-            Point::Conversion(ConversionStep::FromStandard(FromStandardStep::RenameDir)),
-            Point::Conversion(ConversionStep::FromStandard(FromStandardStep::Publish)),
-            Point::Conversion(ConversionStep::ToStandard(ToStandardStep::ForkCheck)),
-            Point::Conversion(ConversionStep::ToStandard(ToStandardStep::Change)),
-            Point::Conversion(ConversionStep::ToStandard(ToStandardStep::Publish)),
-            Point::Conversion(ConversionStep::ToStandard(ToStandardStep::RenameDir)),
-            Point::Conversion(ConversionStep::ToStandard(ToStandardStep::DeleteDir)),
+            Point::Conversion(ConversionStep::FromObjectStore(
+                FromObjectStoreStep::Backup,
+            )),
+            Point::Conversion(ConversionStep::FromObjectStore(
+                FromObjectStoreStep::Build,
+            )),
+            Point::Conversion(ConversionStep::FromObjectStore(
+                FromObjectStoreStep::RenameDir,
+            )),
+            Point::Conversion(ConversionStep::FromObjectStore(
+                FromObjectStoreStep::Publish,
+            )),
+            Point::Conversion(ConversionStep::ToObjectStore(
+                ToObjectStoreStep::ForkCheck,
+            )),
+            Point::Conversion(ConversionStep::ToObjectStore(ToObjectStoreStep::Change)),
+            Point::Conversion(ConversionStep::ToObjectStore(ToObjectStoreStep::Publish)),
+            Point::Conversion(ConversionStep::ToObjectStore(
+                ToObjectStoreStep::RenameDir,
+            )),
+            Point::Conversion(ConversionStep::ToObjectStore(
+                ToObjectStoreStep::DeleteDir,
+            )),
         ] {
             NoHooks.at(point);
         }

@@ -400,7 +400,7 @@ async fn modifications_refuse_features_the_storage_does_not_implement() -> TestR
 }
 
 /// A storage that requires a feature the repo info doesn't list (through
-/// `FilesystemStorage`: an interrupted conversion to the standard layout)
+/// `FilesystemStorage`: an interrupted conversion to the object store layout)
 /// refuses every modification; reads still work.
 #[tokio_test]
 async fn modifications_refuse_an_unlisted_required_feature() -> TestResult {
@@ -419,7 +419,8 @@ async fn modifications_refuse_an_unlisted_required_feature() -> TestResult {
         };
         let msg = kind.to_string();
         assert!(
-            msg.contains("convert_to_standard_layout()") && msg.contains(LAYOUT.name()),
+            msg.contains("convert_to_object_store_layout()")
+                && msg.contains(LAYOUT.name()),
             "{op:?}: {msg}"
         );
     }

@@ -1017,8 +1017,8 @@ mod tests {
         assert_eq!(fs::read(mirror(root.path())).unwrap(), v0_bytes());
     }
 
-    /// The conversion to the standard layout's change and publication, landing
-    /// while `publish_mirror()` runs from the listing before it.
+    /// The change and publication of the conversion to the object store layout,
+    /// landing while `publish_mirror()` runs from the listing before it.
     #[test]
     fn publish_mirror_never_renames_an_older_version_over_a_featureless_one() {
         let root = tempfile::tempdir().unwrap();

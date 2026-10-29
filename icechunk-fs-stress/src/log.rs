@@ -216,9 +216,9 @@ pub enum Op {
 #[serde(rename_all = "snake_case")]
 pub enum Direction {
     /// `convert_to_filesystem_layout()`.
-    FromStandard,
-    /// `convert_to_standard_layout()`.
-    ToStandard,
+    FromObjectStore,
+    /// `convert_to_object_store_layout()`.
+    ToObjectStore,
 }
 
 /// The repository statuses the status toggler sets.
@@ -254,7 +254,7 @@ pub enum OpResult {
         message: String,
     },
     /// The current version lacks the layout's writer feature: a conversion
-    /// to the standard layout was interrupted.
+    /// to the object store layout was interrupted.
     ConversionInProgress {
         message: String,
     },
@@ -557,8 +557,8 @@ mod tests {
                 fork_hash: "ff".to_owned(),
                 found: Sample::Missing,
             },
-            op(Op::Convert { direction: Direction::FromStandard }),
-            op(Op::Convert { direction: Direction::ToStandard }),
+            op(Op::Convert { direction: Direction::FromObjectStore }),
+            op(Op::Convert { direction: Direction::ToObjectStore }),
             Record::NothingToConvert { t_ms: 18 },
         ]
     }

@@ -72,10 +72,10 @@ use crate::{
 ///   backend, other tools) forks the repository, which is unsupported. The
 ///   fork check before every publication finds forks on a best-effort basis
 ///   and never overwrites one it finds; recovery is manual.
-/// - Repositories in the standard layout, as `new_local_filesystem_storage`
+/// - Repositories in the object store layout, as `new_local_filesystem_storage`
 ///   and older Icechunk versions write them, are refused until converted,
 ///   once, with [`FilesystemStorage::convert_to_filesystem_layout`].
-///   [`FilesystemStorage::convert_to_standard_layout`] converts back.
+///   [`FilesystemStorage::convert_to_object_store_layout`] converts back.
 /// - The filesystem must provide hard links, atomic rename by name and
 ///   exclusive directory rename.
 /// - Repositories in the Icechunk 1 format are refused.
@@ -141,7 +141,7 @@ impl FilesystemStorage {
         &self.root
     }
 
-    /// Converts a repository in the standard layout, as
+    /// Converts a repository in the object store layout, as
     /// `new_local_filesystem_storage` and older Icechunk versions write it, to
     /// the filesystem layout v1. It backs `repo` up to `overwritten/`, builds
     /// `repo.d` whose first version is that repo info with the writer feature
@@ -160,18 +160,18 @@ impl FilesystemStorage {
     ///
     /// Refuses, writing nothing, a repository that lists writer features this
     /// storage doesn't implement ([`StorageErrorKind::MissingWriterFeatures`]),
-    /// a malformed repo info, and an interrupted conversion to the standard
+    /// a malformed repo info, and an interrupted conversion to the object store
     /// layout ([`StorageErrorKind::LayoutConversionInProgress`]). A rerun that
     /// finds `repo.d` next to a `repo` it can't attribute to its earlier run
     /// stops and names the manual recovery.
     pub async fn convert_to_filesystem_layout(&self) -> StorageResult<ConversionOutcome> {
         self.sync_data_dirs().await?;
-        self.on_repo(|repo| repo.convert_from_standard())
+        self.on_repo(|repo| repo.convert_from_object_store())
             .await?
             .ok_or_else(repo_not_found)
     }
 
-    /// Converts a repository in the filesystem layout v1 back to the standard
+    /// Converts a repository in the filesystem layout v1 back to the object store
     /// layout that `new_local_filesystem_storage` and older Icechunk versions
     /// write. It backs the current version up to `overwritten/`, changes the
     /// repo info to that version with the writer feature
@@ -187,20 +187,24 @@ impl FilesystemStorage {
     /// completes the conversion. Until then, every write and GC through this
     /// storage refuses with [`StorageErrorKind::LayoutConversionInProgress`].
     /// It returns [`ConversionOutcome::NothingToConvert`] for a repository in
-    /// the standard layout, and [`StorageErrorKind::ObjectNotFound`] if there
+    /// the object store layout, and [`StorageErrorKind::ObjectNotFound`] if there
     /// is no repository.
     ///
     /// Refuses, changing nothing, a repository that lists writer features this
     /// storage doesn't implement ([`StorageErrorKind::MissingWriterFeatures`]),
     /// a malformed repo info, a fork ([`StorageErrorKind::RepositoryForked`]),
-    /// which includes a conversion from the standard layout interrupted after
+    /// which includes a conversion from the object store layout interrupted after
     /// its directory rename, and a `repo` that can't be read or decoded
     /// ([`StorageErrorKind::MirrorUnreadable`]). A fork its publication finds
     /// after its change landed is also [`StorageErrorKind::RepositoryForked`],
     /// with the change landed: after recovering the fork, run it again.
-    pub async fn convert_to_standard_layout(&self) -> StorageResult<ConversionOutcome> {
+    pub async fn convert_to_object_store_layout(
+        &self,
+    ) -> StorageResult<ConversionOutcome> {
         self.sync_data_dirs().await?;
-        self.on_repo(|repo| repo.convert_to_standard()).await?.ok_or_else(repo_not_found)
+        self.on_repo(|repo| repo.convert_to_object_store())
+            .await?
+            .ok_or_else(repo_not_found)
     }
 
     /// Publishes the current version of the repository as the mirror `repo`,
@@ -477,7 +481,7 @@ impl Storage for FilesystemStorage {
     }
 
     /// `repo` is the current version of the repository, read whole and then
-    /// sliced. A repository in the standard layout is an error naming the
+    /// sliced. A repository in the object store layout is an error naming the
     /// remedy.
     async fn get_object_range(
         &self,
@@ -566,7 +570,7 @@ impl Storage for FilesystemStorage {
     /// in milliseconds, and the mirror `repo`. It is `NotOnLatestVersion` if
     /// the repository exists or `repo` holds anything but an interrupted
     /// creation, and an error naming the remedy if `repo` is a repository in
-    /// the standard layout. `IfVersion` changes the repo info to a new
+    /// the object store layout. `IfVersion` changes the repo info to a new
     /// version on top of the given one, which needs both its etag and its
     /// generation, and publishes it as the mirror `repo` before returning.
     /// Its bytes must list `filesystem-layout-v1`, otherwise it is
@@ -827,7 +831,7 @@ impl Storage for FilesystemStorage {
     /// its number as the generation, and `OnLatestVersion` means the current
     /// version is `previous_version` or an older one than it: a listing can
     /// lag. A `previous_version` without both is never on the latest version.
-    /// A repository in the standard layout is an error naming the remedy.
+    /// A repository in the object store layout is an error naming the remedy.
     ///
     /// On other keys, the version's etag is the sha256 of the content, and
     /// `OnLatestVersion` means the content is `previous_version`'s.

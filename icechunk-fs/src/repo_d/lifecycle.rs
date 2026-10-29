@@ -43,9 +43,9 @@ pub(crate) enum OpenStatus {
     NotFound,
     /// `$ROOT/repo` lists the feature with a longer history, without `repo.d`.
     OrphanMirror,
-    /// `$ROOT/repo` doesn't list the feature: a repository in the standard
+    /// `$ROOT/repo` doesn't list the feature: a repository in the object store
     /// layout.
-    StandardLayout,
+    ObjectStoreLayout,
     /// `$ROOT/repo` can't be read or decoded; why.
     Unreadable(String),
 }
@@ -59,7 +59,7 @@ pub(super) enum RootRepo {
     /// It lists the feature, with a longer history.
     OrphanMirror,
     /// It decodes without the feature, with these bytes.
-    Standard(Bytes),
+    ObjectStore(Bytes),
     /// Not a regular file, or bytes that don't decode; why.
     Undecodable(String),
 }
@@ -85,8 +85,8 @@ enum DirRename {
 impl RepoD<'_> {
     /// Creates the repository with `bytes`, which must list the feature, as
     /// its first version: its `N` is the Unix time in milliseconds. A
-    /// repository, a standard repository or anything but an interrupted
-    /// creation at `$ROOT/repo` is never overwritten.
+    /// repository in either layout or anything but an interrupted creation at
+    /// `$ROOT/repo` is never overwritten.
     pub(crate) fn create(&self, bytes: &[u8]) -> Result<CreateOutcome, ProtocolError> {
         check_in_layout(bytes)?;
         fs::create_dir_all(self.root)?;
@@ -159,7 +159,7 @@ impl RepoD<'_> {
         Ok(match self.root_repo() {
             Ok(RootRepo::Missing | RootRepo::InterruptedCreation) => OpenStatus::NotFound,
             Ok(RootRepo::OrphanMirror) => OpenStatus::OrphanMirror,
-            Ok(RootRepo::Standard(_)) => OpenStatus::StandardLayout,
+            Ok(RootRepo::ObjectStore(_)) => OpenStatus::ObjectStoreLayout,
             Ok(RootRepo::Undecodable(why)) => OpenStatus::Unreadable(why),
             Err(err) => OpenStatus::Unreadable(err.to_string()),
         })
@@ -172,7 +172,9 @@ impl RepoD<'_> {
             OpenStatus::Ok => Ok(true),
             OpenStatus::NotFound => Ok(false),
             OpenStatus::OrphanMirror => Err(ProtocolError::orphan_mirror(self.root)),
-            OpenStatus::StandardLayout => Err(ProtocolError::standard_layout(self.root)),
+            OpenStatus::ObjectStoreLayout => {
+                Err(ProtocolError::object_store_layout(self.root))
+            }
             OpenStatus::Unreadable(why) => {
                 Err(ProtocolError::repo_unreadable(self.root, &why))
             }
@@ -188,8 +190,8 @@ impl RepoD<'_> {
         Ok(match self.root_repo()? {
             RootRepo::Missing => Some(Placement::Link),
             RootRepo::InterruptedCreation => Some(Placement::Replace),
-            RootRepo::Standard(_) => {
-                return Err(ProtocolError::standard_layout(self.root));
+            RootRepo::ObjectStore(_) => {
+                return Err(ProtocolError::object_store_layout(self.root));
             }
             RootRepo::OrphanMirror | RootRepo::Undecodable(_) => None,
         })
@@ -283,7 +285,7 @@ impl RepoD<'_> {
         let undecodable =
             |err| RootRepo::Undecodable(format!("it doesn't decode: {err}"));
         Ok(match layout_v1::lists_feature(&bytes) {
-            Ok(false) => RootRepo::Standard(bytes),
+            Ok(false) => RootRepo::ObjectStore(bytes),
             Ok(true) => match layout_v1::is_interrupted_creation(&bytes) {
                 Ok(true) => RootRepo::InterruptedCreation,
                 Ok(false) => RootRepo::OrphanMirror,
@@ -556,12 +558,12 @@ mod tests {
     /// Only `RepoInitializedUpdate` in its ops log, like an interrupted
     /// creation, but without the feature.
     #[test]
-    fn create_over_a_fresh_standard_repo_is_an_error() {
+    fn create_over_a_fresh_object_store_repo_is_an_error() {
         let root = tempfile::tempdir().unwrap();
         plant(root.path(), &featureless_repo_info(3));
         let err = repo(root.path()).create(&v0_bytes()).unwrap_err();
         assert!(
-            matches!(&err, ProtocolError::Other(msg) if msg.contains("is in the standard layout")),
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("is in the object store layout")),
             "{err:?}"
         );
         assert_eq!(names(root.path()), strings(["repo"]));
@@ -830,7 +832,7 @@ mod tests {
         );
         assert_eq!(
             status(&|root| plant(root, &featureless_repo_info(1))),
-            OpenStatus::StandardLayout
+            OpenStatus::ObjectStoreLayout
         );
         for planted in [UNDECODABLE.to_vec(), Vec::new()] {
             assert!(
@@ -881,7 +883,7 @@ mod tests {
         );
         let err = opens(&featureless_repo_info(1)).unwrap_err();
         assert!(
-            matches!(&err, ProtocolError::Other(msg) if msg.contains("is in the standard layout")),
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("is in the object store layout")),
             "{err:?}"
         );
         let err = opens(UNDECODABLE).unwrap_err();

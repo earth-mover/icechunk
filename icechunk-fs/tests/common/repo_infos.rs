@@ -21,7 +21,7 @@ pub(crate) fn repo_info(seq: u32) -> Vec<u8> {
 
 /// Like [`repo_info`] without writer features: what an implementation that
 /// doesn't implement the layout writes (a fork), or the last version of a
-/// conversion to the standard layout.
+/// conversion to the object store layout.
 pub(crate) fn featureless_repo_info(seq: u32) -> Vec<u8> {
     minimal(seq, &[])
 }

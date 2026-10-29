@@ -59,7 +59,7 @@ pub enum StorageErrorKind {
     Throttled { code: String, message: String },
     /// The current version doesn't list `filesystem-layout-v1`.
     #[error(
-        "a conversion to the standard layout was interrupted, rerun convert_to_standard_layout(): {0}"
+        "a conversion to the object store layout was interrupted, rerun convert_to_object_store_layout(): {0}"
     )]
     LayoutConversionInProgress(String),
     /// The fork check found a fork; nothing was published or deleted.
@@ -88,7 +88,7 @@ pub enum StorageErrorKind {
     Other(String),
 }
 
-pub const FORK_EXPLANATION: &str = "A fork comes from something that doesn't implement the filesystem layout, such as Icechunk 2.3 or older, overwriting the repo file: the repo file and repo.d then hold diverging histories, and recovery is manual. The same check also reports the standard repo info of an interrupted conversion from the standard layout, which rerunning convert_to_filesystem_layout() completes, and a copy of a version that a stale listing didn't show, which running the operation again once listings refresh clears";
+pub const FORK_EXPLANATION: &str = "A fork comes from something that doesn't implement the filesystem layout, such as Icechunk 2.3 or older, overwriting the repo file: the repo file and repo.d then hold diverging histories, and recovery is manual. The same check also reports the repo file left by an interrupted conversion from the object store layout, which rerunning convert_to_filesystem_layout() completes, and a copy of a version that a stale listing didn't show, which running the operation again once listings refresh clears";
 
 impl StorageErrorKind {
     pub fn is_throttled(&self) -> bool {

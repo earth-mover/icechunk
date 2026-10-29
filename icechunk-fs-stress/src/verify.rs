@@ -104,9 +104,9 @@ pub struct EarlierPhases {
     /// The logs of the earlier phases, oldest first: the repository oracle
     /// checks their operations too.
     pub logs: Vec<BTreeMap<LogName, Vec<Record>>>,
-    /// The backups of `overwritten/` from before this phase's era, the
-    /// standard layout's among them: versions that were current, which L1
-    /// doesn't check.
+    /// The backups of `overwritten/` from before this phase's era, those
+    /// made in the object store layout among them: versions that were current,
+    /// which L1 doesn't check.
     pub backups: HashSet<String>,
 }
 

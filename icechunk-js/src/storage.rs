@@ -1114,7 +1114,7 @@ impl JsStorage {
     /// 2.4.0 read its repositories through the mirror and can't modify them.
     /// Never let anything else write `repo`: Icechunk before 2.4.0 changing the
     /// status, or other tools, fork the repository.
-    /// Repositories in the standard layout, as `newLocalFilesystem` and Icechunk
+    /// Repositories in the object store layout, as `newLocalFilesystem` and Icechunk
     /// before 2.4.0 write them, are refused until converted, once, with
     /// `convertToFilesystemLayout`. Experimental. Unix only.
     #[napi(factory)]
@@ -1140,7 +1140,7 @@ impl JsStorage {
         }
     }
 
-    /// Converts a repository in the standard layout, as `newLocalFilesystem` and
+    /// Converts a repository in the object store layout, as `newLocalFilesystem` and
     /// Icechunk before 2.4.0 write it, to the filesystem layout of
     /// `newFilesystem`, which refuses to open it until then. It changes only the
     /// writer features and the update log, and keeps the repository's status.
@@ -1168,7 +1168,7 @@ impl JsStorage {
     }
 
     /// Converts a repository in the filesystem layout of `newFilesystem` back to
-    /// the standard layout that `newLocalFilesystem`, other backends and
+    /// the object store layout that `newLocalFilesystem`, other backends and
     /// Icechunk before 2.4.0 write. It changes only the writer features and the
     /// update log, and keeps the repository's status.
     /// Administrative: run it with nothing else using the repository, no writer
@@ -1176,29 +1176,29 @@ impl JsStorage {
     /// administrative operation; anything else is undefined behavior. If it is
     /// interrupted, run it again under the same condition: the rerun completes
     /// the conversion. Until then, every write and garbage collection through
-    /// `newFilesystem` fails, saying that a conversion to the standard layout is
+    /// `newFilesystem` fails, saying that a conversion to the object store layout is
     /// in progress and to rerun it.
     /// A copy of a filesystem-layout repository on other storage is read-only.
     /// To get a copy that can be written elsewhere: set the status of the source
-    /// to read-only (with Python or Rust), convert it to the standard layout,
+    /// to read-only (with Python or Rust), convert it to the object store layout,
     /// copy it, convert the source back with `convertToFilesystemLayout` if it
     /// should stay in this layout, and set the statuses to online (with Python
     /// or Rust).
     /// Resolves to true if this call converted the repository, false if it was
-    /// in the standard layout already; rejects if there is no repository.
+    /// in the object store layout already; rejects if there is no repository.
     #[napi]
-    pub async fn convert_to_standard_layout(&self) -> napi::Result<bool> {
+    pub async fn convert_to_object_store_layout(&self) -> napi::Result<bool> {
         #[cfg(unix)]
         {
             let outcome = self
-                .filesystem("convertToStandardLayout")?
-                .convert_to_standard_layout()
+                .filesystem("convertToObjectStoreLayout")?
+                .convert_to_object_store_layout()
                 .await
                 .map_napi_err()?;
             Ok(matches!(outcome, icechunk::storage::ConversionOutcome::Converted))
         }
         #[cfg(not(unix))]
-        Err(only_filesystem("convertToStandardLayout"))
+        Err(only_filesystem("convertToObjectStoreLayout"))
     }
 
     /// Publishes the current version of the repository as the mirror `repo`,
@@ -1214,7 +1214,7 @@ impl JsStorage {
     /// Resolves to whether `repo` holds the version current in the last
     /// listing and, if the publication gave up, the version it left `repo`
     /// holding. Rejects on a fork, an unreadable `repo` or an interrupted
-    /// conversion to the standard layout.
+    /// conversion to the object store layout.
     #[napi]
     pub async fn publish_mirror(&self) -> napi::Result<JsPublishOutcome> {
         #[cfg(unix)]

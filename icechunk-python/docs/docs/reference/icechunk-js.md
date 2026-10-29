@@ -133,7 +133,7 @@ const local = await Storage.newLocalFilesystem('/path/to/repo')
 const fs = await Storage.newFilesystem('/path/to/repo')
 // It stores the repository in the filesystem layout: other backends and Icechunk before 2.4.0 read it, read-only.
 // fs.convertToFilesystemLayout() converts a repository written by newLocalFilesystem (needed before opening it),
-// fs.convertToStandardLayout() converts back, fs.publishMirror() repairs a lagging mirror (best effort)
+// fs.convertToObjectStoreLayout() converts back, fs.publishMirror() repairs a lagging mirror (best effort)
 
 // Amazon S3
 const s3 = Storage.newS3('my-bucket', 'my-prefix', credentials, options)

@@ -10,7 +10,8 @@ use std::{
 
 use anyhow::{Context as _, bail, ensure};
 use icechunk_fs::fault_injection::{
-    ConversionStep, FromStandardStep, Point, Sabotage as ProtocolSabotage, ToStandardStep,
+    ConversionStep, FromObjectStoreStep, Point, Sabotage as ProtocolSabotage,
+    ToObjectStoreStep,
 };
 use serde::{Deserialize, Serialize};
 
@@ -118,15 +119,15 @@ pub enum PointName {
     MirrorRenamed,
     /// The conversions' steps, where the conversion scenario kills its
     /// converter; never in a run's fault points.
-    FromStandardBackup,
-    FromStandardBuild,
-    FromStandardRenameDir,
-    FromStandardPublish,
-    ToStandardForkCheck,
-    ToStandardChange,
-    ToStandardPublish,
-    ToStandardRenameDir,
-    ToStandardDeleteDir,
+    FromObjectStoreBackup,
+    FromObjectStoreBuild,
+    FromObjectStoreRenameDir,
+    FromObjectStorePublish,
+    ToObjectStoreForkCheck,
+    ToObjectStoreChange,
+    ToObjectStorePublish,
+    ToObjectStoreRenameDir,
+    ToObjectStoreDeleteDir,
 }
 
 impl PointName {
@@ -217,8 +218,8 @@ pub enum Sabotage {
     CommitWithoutPublish,
     GcWithoutForkCheck,
     GcPublishesListed,
-    FromStandardWithoutProvenance,
-    ToStandardWithoutChange,
+    FromObjectStoreWithoutProvenance,
+    ToObjectStoreWithoutChange,
     DeleteDirBeforePublish,
 }
 
@@ -564,7 +565,7 @@ impl TryFrom<Point> for PointName {
     type Error = Point;
 
     fn try_from(point: Point) -> Result<Self, Point> {
-        use ConversionStep::{FromStandard, ToStandard};
+        use ConversionStep::{FromObjectStore, ToObjectStore};
         match point {
             Point::Staged => Ok(Self::Staged),
             Point::Linked => Ok(Self::Linked),
@@ -576,15 +577,27 @@ impl TryFrom<Point> for PointName {
             Point::BeforeMirrorRename => Ok(Self::BeforeMirrorRename),
             Point::MirrorRenamed => Ok(Self::MirrorRenamed),
             Point::Conversion(step) => Ok(match step {
-                FromStandard(FromStandardStep::Backup) => Self::FromStandardBackup,
-                FromStandard(FromStandardStep::Build) => Self::FromStandardBuild,
-                FromStandard(FromStandardStep::RenameDir) => Self::FromStandardRenameDir,
-                FromStandard(FromStandardStep::Publish) => Self::FromStandardPublish,
-                ToStandard(ToStandardStep::ForkCheck) => Self::ToStandardForkCheck,
-                ToStandard(ToStandardStep::Change) => Self::ToStandardChange,
-                ToStandard(ToStandardStep::Publish) => Self::ToStandardPublish,
-                ToStandard(ToStandardStep::RenameDir) => Self::ToStandardRenameDir,
-                ToStandard(ToStandardStep::DeleteDir) => Self::ToStandardDeleteDir,
+                FromObjectStore(FromObjectStoreStep::Backup) => {
+                    Self::FromObjectStoreBackup
+                }
+                FromObjectStore(FromObjectStoreStep::Build) => Self::FromObjectStoreBuild,
+                FromObjectStore(FromObjectStoreStep::RenameDir) => {
+                    Self::FromObjectStoreRenameDir
+                }
+                FromObjectStore(FromObjectStoreStep::Publish) => {
+                    Self::FromObjectStorePublish
+                }
+                ToObjectStore(ToObjectStoreStep::ForkCheck) => {
+                    Self::ToObjectStoreForkCheck
+                }
+                ToObjectStore(ToObjectStoreStep::Change) => Self::ToObjectStoreChange,
+                ToObjectStore(ToObjectStoreStep::Publish) => Self::ToObjectStorePublish,
+                ToObjectStore(ToObjectStoreStep::RenameDir) => {
+                    Self::ToObjectStoreRenameDir
+                }
+                ToObjectStore(ToObjectStoreStep::DeleteDir) => {
+                    Self::ToObjectStoreDeleteDir
+                }
             }),
             Point::Creation(_) | Point::BeforeMirrorRead => Err(point),
         }
@@ -598,17 +611,31 @@ impl TryFrom<PointName> for Point {
     type Error = PointName;
 
     fn try_from(name: PointName) -> Result<Self, PointName> {
-        use ConversionStep::{FromStandard, ToStandard};
+        use ConversionStep::{FromObjectStore, ToObjectStore};
         let step = match name {
-            PointName::FromStandardBackup => FromStandard(FromStandardStep::Backup),
-            PointName::FromStandardBuild => FromStandard(FromStandardStep::Build),
-            PointName::FromStandardRenameDir => FromStandard(FromStandardStep::RenameDir),
-            PointName::FromStandardPublish => FromStandard(FromStandardStep::Publish),
-            PointName::ToStandardForkCheck => ToStandard(ToStandardStep::ForkCheck),
-            PointName::ToStandardChange => ToStandard(ToStandardStep::Change),
-            PointName::ToStandardPublish => ToStandard(ToStandardStep::Publish),
-            PointName::ToStandardRenameDir => ToStandard(ToStandardStep::RenameDir),
-            PointName::ToStandardDeleteDir => ToStandard(ToStandardStep::DeleteDir),
+            PointName::FromObjectStoreBackup => {
+                FromObjectStore(FromObjectStoreStep::Backup)
+            }
+            PointName::FromObjectStoreBuild => {
+                FromObjectStore(FromObjectStoreStep::Build)
+            }
+            PointName::FromObjectStoreRenameDir => {
+                FromObjectStore(FromObjectStoreStep::RenameDir)
+            }
+            PointName::FromObjectStorePublish => {
+                FromObjectStore(FromObjectStoreStep::Publish)
+            }
+            PointName::ToObjectStoreForkCheck => {
+                ToObjectStore(ToObjectStoreStep::ForkCheck)
+            }
+            PointName::ToObjectStoreChange => ToObjectStore(ToObjectStoreStep::Change),
+            PointName::ToObjectStorePublish => ToObjectStore(ToObjectStoreStep::Publish),
+            PointName::ToObjectStoreRenameDir => {
+                ToObjectStore(ToObjectStoreStep::RenameDir)
+            }
+            PointName::ToObjectStoreDeleteDir => {
+                ToObjectStore(ToObjectStoreStep::DeleteDir)
+            }
             _ => return Err(name),
         };
         Ok(Self::Conversion(step))
@@ -635,10 +662,12 @@ impl From<ProtocolSabotage> for Sabotage {
             ProtocolSabotage::CommitWithoutPublish => Self::CommitWithoutPublish,
             ProtocolSabotage::GcWithoutForkCheck => Self::GcWithoutForkCheck,
             ProtocolSabotage::GcPublishesListed => Self::GcPublishesListed,
-            ProtocolSabotage::FromStandardWithoutProvenance => {
-                Self::FromStandardWithoutProvenance
+            ProtocolSabotage::FromObjectStoreWithoutProvenance => {
+                Self::FromObjectStoreWithoutProvenance
             }
-            ProtocolSabotage::ToStandardWithoutChange => Self::ToStandardWithoutChange,
+            ProtocolSabotage::ToObjectStoreWithoutChange => {
+                Self::ToObjectStoreWithoutChange
+            }
             ProtocolSabotage::DeleteDirBeforePublish => Self::DeleteDirBeforePublish,
         }
     }
@@ -666,9 +695,9 @@ impl Sabotage {
             | Self::CommitWithoutPublish
             | Self::GcWithoutForkCheck
             | Self::GcPublishesListed => PointName::BeforePublish,
-            Self::FromStandardWithoutProvenance => PointName::FromStandardRenameDir,
-            Self::ToStandardWithoutChange => PointName::ToStandardChange,
-            Self::DeleteDirBeforePublish => PointName::ToStandardRenameDir,
+            Self::FromObjectStoreWithoutProvenance => PointName::FromObjectStoreRenameDir,
+            Self::ToObjectStoreWithoutChange => PointName::ToObjectStoreChange,
+            Self::DeleteDirBeforePublish => PointName::ToObjectStoreRenameDir,
         }
     }
 
@@ -677,8 +706,8 @@ impl Sabotage {
     pub fn is_conversion(self) -> bool {
         matches!(
             self,
-            Self::FromStandardWithoutProvenance
-                | Self::ToStandardWithoutChange
+            Self::FromObjectStoreWithoutProvenance
+                | Self::ToObjectStoreWithoutChange
                 | Self::DeleteDirBeforePublish
         )
     }
@@ -1028,7 +1057,7 @@ mod tests {
             }),
             ("relative storage", |c| c.storage = Some(PathBuf::from("storage"))),
             ("conversion step in the fault points", |c| {
-                c.faults.points = vec![PointName::Linked, PointName::ToStandardChange];
+                c.faults.points = vec![PointName::Linked, PointName::ToObjectStoreChange];
             }),
         ];
         for (name, mutate) in cases {
@@ -1183,17 +1212,38 @@ mod tests {
             assert!(!name.is_conversion_step(), "{name:?}");
             assert_eq!(serde_json::to_value(name).unwrap(), json);
         }
-        use ConversionStep::{FromStandard, ToStandard};
+        use ConversionStep::{FromObjectStore, ToObjectStore};
         let steps = [
-            (FromStandard(FromStandardStep::Backup), PointName::FromStandardBackup),
-            (FromStandard(FromStandardStep::Build), PointName::FromStandardBuild),
-            (FromStandard(FromStandardStep::RenameDir), PointName::FromStandardRenameDir),
-            (FromStandard(FromStandardStep::Publish), PointName::FromStandardPublish),
-            (ToStandard(ToStandardStep::ForkCheck), PointName::ToStandardForkCheck),
-            (ToStandard(ToStandardStep::Change), PointName::ToStandardChange),
-            (ToStandard(ToStandardStep::Publish), PointName::ToStandardPublish),
-            (ToStandard(ToStandardStep::RenameDir), PointName::ToStandardRenameDir),
-            (ToStandard(ToStandardStep::DeleteDir), PointName::ToStandardDeleteDir),
+            (
+                FromObjectStore(FromObjectStoreStep::Backup),
+                PointName::FromObjectStoreBackup,
+            ),
+            (
+                FromObjectStore(FromObjectStoreStep::Build),
+                PointName::FromObjectStoreBuild,
+            ),
+            (
+                FromObjectStore(FromObjectStoreStep::RenameDir),
+                PointName::FromObjectStoreRenameDir,
+            ),
+            (
+                FromObjectStore(FromObjectStoreStep::Publish),
+                PointName::FromObjectStorePublish,
+            ),
+            (
+                ToObjectStore(ToObjectStoreStep::ForkCheck),
+                PointName::ToObjectStoreForkCheck,
+            ),
+            (ToObjectStore(ToObjectStoreStep::Change), PointName::ToObjectStoreChange),
+            (ToObjectStore(ToObjectStoreStep::Publish), PointName::ToObjectStorePublish),
+            (
+                ToObjectStore(ToObjectStoreStep::RenameDir),
+                PointName::ToObjectStoreRenameDir,
+            ),
+            (
+                ToObjectStore(ToObjectStoreStep::DeleteDir),
+                PointName::ToObjectStoreDeleteDir,
+            ),
         ];
         for (step, name) in steps {
             assert_eq!(PointName::try_from(Point::Conversion(step)), Ok(name));
@@ -1201,8 +1251,8 @@ mod tests {
             assert!(name.is_conversion_step(), "{name:?}");
         }
         assert_eq!(
-            serde_json::to_value(PointName::ToStandardDeleteDir).unwrap(),
-            "to_standard_delete_dir"
+            serde_json::to_value(PointName::ToObjectStoreDeleteDir).unwrap(),
+            "to_object_store_delete_dir"
         );
         let creation = Point::Creation(icechunk_fs::fault_injection::CreationStep::Built);
         assert_eq!(PointName::try_from(creation), Err(creation));
@@ -1296,22 +1346,22 @@ mod tests {
                 PointName::BeforePublish,
             ),
             (
-                P::FromStandardWithoutProvenance,
-                S::FromStandardWithoutProvenance,
-                "from_standard_without_provenance",
-                PointName::FromStandardRenameDir,
+                P::FromObjectStoreWithoutProvenance,
+                S::FromObjectStoreWithoutProvenance,
+                "from_object_store_without_provenance",
+                PointName::FromObjectStoreRenameDir,
             ),
             (
-                P::ToStandardWithoutChange,
-                S::ToStandardWithoutChange,
-                "to_standard_without_change",
-                PointName::ToStandardChange,
+                P::ToObjectStoreWithoutChange,
+                S::ToObjectStoreWithoutChange,
+                "to_object_store_without_change",
+                PointName::ToObjectStoreChange,
             ),
             (
                 P::DeleteDirBeforePublish,
                 S::DeleteDirBeforePublish,
                 "delete_dir_before_publish",
-                PointName::ToStandardRenameDir,
+                PointName::ToObjectStoreRenameDir,
             ),
         ];
         for (protocol, sabotage, json, point) in sabotages {

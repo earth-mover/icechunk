@@ -144,15 +144,15 @@ pub enum Violation {
         detail: String,
     },
     /// C3: a conversion didn't finish, or didn't leave the target layout and
-    /// nothing else; or a planted standard write didn't stop the rerun of an
-    /// interrupted conversion from the standard layout.
+    /// nothing else; or a planted object-store-layout write didn't stop the rerun
+    /// of an interrupted conversion from the object store layout.
     ConversionEndState {
         direction: Direction,
         detail: String,
     },
-    /// C5: something overwrote the standard `$ROOT/repo` after a conversion
-    /// to the standard layout.
-    OverwroteStandard {
+    /// C5: something overwrote the converted `$ROOT/repo` after a conversion
+    /// to the object store layout.
+    OverwroteObjectStore {
         detail: String,
     },
     /// C6: `repo.d` was deleted before `$ROOT/repo` held the conversion's
@@ -160,8 +160,8 @@ pub enum Violation {
     DeletedHistory {
         detail: String,
     },
-    /// C7: a writer attempt during an interrupted conversion to the standard
-    /// layout didn't fail with the error naming the conversion to rerun.
+    /// C7: a writer attempt during an interrupted conversion to the object
+    /// store layout didn't fail with the error naming the conversion to rerun.
     WriterDuringConversion {
         id: Uuid,
         detail: String,
@@ -201,7 +201,7 @@ impl Violation {
             Self::ForkDamaged { .. } => "ForkDamaged",
             Self::ConversionMismatch { .. } => "ConversionMismatch",
             Self::ConversionEndState { .. } => "ConversionEndState",
-            Self::OverwroteStandard { .. } => "OverwroteStandard",
+            Self::OverwroteObjectStore { .. } => "OverwroteObjectStore",
             Self::DeletedHistory { .. } => "DeletedHistory",
             Self::WriterDuringConversion { .. } => "WriterDuringConversion",
             Self::ConversionRetried { .. } => "ConversionRetried",
@@ -311,7 +311,7 @@ pub enum Warning {
         detail: String,
     },
     /// On a network filesystem, run `attempt` of the conversion to the
-    /// standard layout returned `NothingToConvert` and left `repo.d`, with
+    /// object store layout returned `NothingToConvert` and left `repo.d`, with
     /// `$ROOT/repo` a copy of its current version without the feature: its
     /// listing of the storage root missed `repo.d`, an accepted limit. The
     /// conversion runs again after `rerun_after_ms`.
@@ -688,7 +688,7 @@ mod tests {
             Violation::LostUpdate { id: Uuid::nil(), detail: String::new() },
             Violation::GcAfterFork { id: Uuid::nil() },
             Violation::ConversionEndState {
-                direction: Direction::ToStandard,
+                direction: Direction::ToObjectStore,
                 detail: String::new(),
             },
             Violation::ReadOnlyMirrorMismatch { version: None, detail: String::new() },

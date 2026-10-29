@@ -17,7 +17,7 @@
 //! though a client may serve them from its cache: doc 020 lists the false fork
 //! reports and mirror regressions this hides as accepted limits.
 //!
-//! Bounds and abstractions: the conversion to the standard layout attempts its
+//! Bounds and abstractions: the conversion to the object store layout attempts its
 //! change twice per run, the code up to nine times (see
 //! [`Config::conversion_attempts`]). The provenance check's reach in changes
 //! depends on the ops-log page size, so beyond one change the model offers both
@@ -35,7 +35,7 @@
 //!   before its hook runs, the hook's gate never decides `GC_PUBLISHED`, and the
 //!   code's `GcPublishesListed` sabotage has no counterpart here;
 //! - a stale root listing that still shows `repo.d` after the conversion to the
-//!   standard layout renamed it aside, which makes the code fail with
+//!   object store layout renamed it aside, which makes the code fail with
 //!   `Incomplete` (liveness only).
 //!
 //! Repo info contents are abstract ([`Content`]): what matters is whether they
@@ -66,14 +66,14 @@ use model::{
 /// First versions written by creator `i` are `(CREATOR + i, attempt)`. Their ops
 /// log holds only `RepoInitializedUpdate`.
 const CREATOR: u8 = 100;
-/// Versions the conversion to the standard layout makes: the only ones
+/// Versions the conversion to the object store layout makes: the only ones
 /// that don't list the feature.
-const TO_STANDARD: u8 = 150;
+const TO_OBJECT_STORE: u8 = 150;
 const STATUS: u8 = 160;
 const GC: u8 = 170;
 const EXPLICIT: u8 = 180;
-/// First versions built by the conversion from the standard layout.
-const FROM_STANDARD: u8 = 200;
+/// First versions built by the conversion from the object store layout.
+const FROM_OBJECT_STORE: u8 = 200;
 /// The provenance check reads three ops-log files. At the smallest page, one
 /// update per file, they reach the conversion's backup while at most one change
 /// landed on its first version; at the default page, thousands. Within this
@@ -82,14 +82,14 @@ const FROM_STANDARD: u8 = 200;
 const PROVENANCE_CHANGES: u8 = 1;
 /// Stage ids of the publishers other than writers, which use their index.
 const CREATOR_STAGE: u8 = 30;
-const FROM_STANDARD_STAGE: u8 = 40;
+const FROM_OBJECT_STORE_STAGE: u8 = 40;
 
 fn is_creation(hash: AttemptId) -> bool {
-    (CREATOR..TO_STANDARD).contains(&hash.0)
+    (CREATOR..TO_OBJECT_STORE).contains(&hash.0)
 }
 
 fn featureless(hash: AttemptId) -> bool {
-    hash.0 == TO_STANDARD
+    hash.0 == TO_OBJECT_STORE
 }
 
 /// The nondeterministic outcome of an actor's step, decided by the
@@ -129,43 +129,46 @@ impl Choice {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 enum Content {
     /// The bytes of the version with this hash. They list the feature unless the
-    /// conversion to the standard layout made them.
+    /// conversion to the object store layout made them.
     Version(AttemptId),
-    /// Written by a library that took `repo` for a standard repository (an old
-    /// library's `set_status`) from the version it read. It doesn't list the
-    /// feature.
+    /// Written by a library that took `repo` for a repository in the object
+    /// store layout (an old library's `set_status`) from the version it read.
+    /// It doesn't list the feature.
     Fork { from: AttemptId },
-    /// A standard repo info updated `updates` times by standard writes: from
-    /// the original repository in the standard layout (`from: None`), or from
-    /// the featureless version `from` that a conversion to the standard layout
-    /// left (`updates >= 1`).
-    Standard { from: Option<AttemptId>, updates: u8 },
+    /// A repo info in the object store layout updated `updates` times by
+    /// object-store-layout writes: from the original repository in the object
+    /// store layout (`from: None`), or from the featureless version `from` that
+    /// a conversion to the object store layout left (`updates >= 1`).
+    ObjectStore { from: Option<AttemptId>, updates: u8 },
 }
 
-const ORIGINAL: Content = Content::Standard { from: None, updates: 0 };
+const ORIGINAL: Content = Content::ObjectStore { from: None, updates: 0 };
 
 impl Content {
     fn lists_feature(self) -> bool {
         matches!(self, Content::Version(hash) if !featureless(hash))
     }
 
-    /// A standard repo info that standard writes update: the original, or what
-    /// a conversion to the standard layout left, updated or not.
-    fn takes_standard_writes(self) -> bool {
+    /// A repo info in the object store layout that object-store-layout writes
+    /// update: the original, or what a conversion to the object store layout
+    /// left, updated or not.
+    fn takes_object_store_writes(self) -> bool {
         match self {
-            Content::Standard { .. } => true,
+            Content::ObjectStore { .. } => true,
             Content::Version(hash) => featureless(hash),
             Content::Fork { .. } => false,
         }
     }
 
-    /// A standard write of it.
+    /// An object-store-layout write of it.
     fn updated(self) -> Content {
         match self {
-            Content::Standard { from, updates } => {
-                Content::Standard { from, updates: updates + 1 }
+            Content::ObjectStore { from, updates } => {
+                Content::ObjectStore { from, updates: updates + 1 }
             }
-            Content::Version(hash) => Content::Standard { from: Some(hash), updates: 1 },
+            Content::Version(hash) => {
+                Content::ObjectStore { from: Some(hash), updates: 1 }
+            }
             other => other,
         }
     }
@@ -174,10 +177,10 @@ impl Content {
 /// A `repo.d.tmp.<id>/` directory.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 enum Tmp {
-    /// Built by a creation or the conversion from the standard layout, around
+    /// Built by a creation or the conversion from the object store layout, around
     /// this first version.
     Build(AttemptId),
-    /// `repo.d`, renamed aside by the conversion to the standard layout.
+    /// `repo.d`, renamed aside by the conversion to the object store layout.
     Aside,
 }
 
@@ -210,7 +213,7 @@ struct Publish {
     /// The version this publication left in `repo`: `GaveUp { left }`.
     left: Option<Version>,
     /// A repo info that the fork check accepts besides versions: the bytes the
-    /// conversion from the standard layout backed up.
+    /// conversion from the object store layout backed up.
     accept: Option<Content>,
     /// The step this publisher was at when the old writer's write landed after
     /// its fork check.
@@ -258,10 +261,10 @@ enum Role {
     /// Sets the status `ReadOnly` with a change, waits for the copier, then
     /// (`online`) sets it back to `Online`.
     Status { online: bool },
-    /// The conversion to the standard layout (administrative).
+    /// The conversion to the object store layout (administrative).
     /// `relists`: lists again after its fork check found a newer version, in
     /// this run.
-    ToStandard { restarts: u8, relists: u8 },
+    ToObjectStore { restarts: u8, relists: u8 },
     /// `publish_mirror()`: publishes the version its listing shows. A probe
     /// proving the listed marker current changes nothing: the listing has no
     /// other effect, so a stale one is the same as a fresh one taken earlier.
@@ -290,7 +293,8 @@ enum Phase {
     PublishAfter,
     /// The status is `ReadOnly`: the copier copies.
     WaitCopy,
-    /// The conversion to standard reads `$ROOT/repo` before its change.
+    /// The conversion to the object store layout reads `$ROOT/repo` before its
+    /// change.
     ForkCheck,
     /// `rename(repo.d, repo.d.tmp.<id>)`.
     RenameDir,
@@ -332,7 +336,7 @@ enum Copier {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-enum FromStandardPhase {
+enum FromObjectStorePhase {
     Start,
     Recover,
     /// Back up `repo`'s bytes to `overwritten/<B>`.
@@ -348,8 +352,8 @@ enum FromStandardPhase {
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
-struct FromStandard {
-    phase: FromStandardPhase,
+struct FromObjectStore {
+    phase: FromObjectStorePhase,
     restarts: u8,
     serial: u8,
     hash: AttemptId,
@@ -428,7 +432,7 @@ enum Violation {
     GcDeletedUnpublished,
     ReadOnlyChanged,
     DeletedBeforePublished,
-    StandardOverwritten,
+    ObjectStoreOverwritten,
     EndState,
 }
 
@@ -444,7 +448,7 @@ struct State {
     mirrors: BTreeSet<u8>,
     tmps: BTreeSet<Tmp>,
     /// What each landed version derives from: its base, or for a first version
-    /// of the conversion from the standard layout, the bytes it backed up.
+    /// of the conversion from the object store layout, the bytes it backed up.
     parents: BTreeMap<AttemptId, Content>,
     /// Versions that became current, in order.
     history: Vec<AttemptId>,
@@ -456,10 +460,10 @@ struct State {
     acked: BTreeSet<Version>,
     writers: Vec<Writer>,
     copier: Option<Copier>,
-    from_standard: Option<FromStandard>,
+    from_object_store: Option<FromObjectStore>,
     creators: Vec<Creator>,
     old_writes: u8,
-    standard_writes: u8,
+    object_store_writes: u8,
     fork: Option<Fork>,
     gc_deleted_during_fork: bool,
     changed_during_fork: bool,
@@ -467,25 +471,27 @@ struct State {
     /// that only compares hashes with `repo.d` would call it a fork.
     hash_only_false_alarm: bool,
     false_fork_report: bool,
-    /// A fork report for the standard repo info of an interrupted conversion
-    /// from the standard layout.
+    /// A fork report for the original repo info of an interrupted conversion
+    /// from the object store layout.
     fork_report_interrupted: bool,
-    /// A fork check found a standard write made outside the rules.
+    /// A fork check found an object-store-layout write made outside the rules.
     divergence_detected: bool,
-    /// A rerun of the conversion from the standard layout stopped at its
+    /// A rerun of the conversion from the object store layout stopped at its
     /// provenance check.
     provenance_stopped: bool,
     /// The end-state violation is the accepted limit of a rerun of the
-    /// conversion to the standard layout whose root listing missed `repo.d`.
+    /// conversion to the object store layout whose root listing missed `repo.d`.
     stale_root_end: bool,
-    /// The conversion to standard's fork check found a newer version's bytes
-    /// in `repo`: its listing was stale.
+    /// The fork check of the conversion to the object store layout found a
+    /// newer version's bytes in `repo`: its listing was stale.
     relisted_after_fork_check: bool,
-    /// The conversion to standard stopped after `relist_bound` relistings.
+    /// The conversion to the object store layout stopped after `relist_bound`
+    /// relistings.
     relists_exhausted: bool,
     /// A fork check whose listing of `repo.d` was stale reported a false fork.
     false_fork_stale: bool,
-    /// The conversion to the standard layout changed the repo info, then met a fork.
+    /// The conversion to the object store layout changed the repo info, then
+    /// met a fork.
     stuck_on_fork: bool,
     /// While GC deleted, `repo` held a version older than the one GC's
     /// publication left there.
@@ -501,7 +507,7 @@ struct State {
 enum Actor {
     Writer(usize),
     Copier,
-    FromStandard,
+    FromObjectStore,
     Creator(usize),
 }
 
@@ -509,7 +515,7 @@ enum Actor {
 enum Owner {
     Writer(usize),
     Creator(usize),
-    FromStandard,
+    FromObjectStore,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -518,8 +524,8 @@ enum Action {
     Crash(Actor),
     /// An old library's `set_status` through `$ROOT/repo`: unsupported.
     OldWrite,
-    /// An update of a standard `$ROOT/repo` by any library.
-    StandardWrite,
+    /// An update of `$ROOT/repo` in the object store layout by any library.
+    ObjectStoreWrite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -533,7 +539,7 @@ enum StatusOps {
 enum Sabotage {
     /// A change returns without publishing the mirror.
     CommitWithoutPublish,
-    /// The conversion to the standard layout renames `repo.d` aside before
+    /// The conversion to the object store layout renames `repo.d` aside before
     /// publishing its version.
     DeleteDirBeforePublish,
 }
@@ -547,8 +553,8 @@ struct Config {
     gc: bool,
     status: Option<StatusOps>,
     copier: bool,
-    to_standard: bool,
-    /// Attempts at its change per run of the conversion to the standard
+    to_object_store: bool,
+    /// Attempts at its change per run of the conversion to the object store
     /// layout: the first, and one after each conflict, which a stale listing
     /// causes. The code makes up to `RELISTS + 1` (9). The retry loop is
     /// uniform: each attempt starts from a new `read_latest`, fork check and
@@ -557,16 +563,16 @@ struct Config {
     /// interleaving a later one does, and exhaustion stops the same way at any
     /// bound: 2 is the model's bound.
     conversion_attempts: u8,
-    from_standard: bool,
-    /// A rerun of the conversion from the standard layout publishes only over
+    from_object_store: bool,
+    /// A rerun of the conversion from the object store layout publishes only over
     /// the bytes its first version backed up.
     provenance_check: bool,
     /// A publication whose fork check finds the bytes of a version newer than
     /// its target in `repo` adopts it instead of renaming an older one over it.
     mirror_never_backwards: bool,
-    /// How many times the conversion to standard lists again after its fork
-    /// check found a newer version, in one run, before it stops with a
-    /// retryable error.
+    /// How many times the conversion to the object store layout lists again
+    /// after its fork check found a newer version, in one run, before it stops
+    /// with a retryable error.
     relist_bound: u8,
     /// Every `repo.d` starts at `N = 0` instead of above the `N` of the
     /// earlier ones.
@@ -575,7 +581,7 @@ struct Config {
     /// `publish_mirror()` runs once, at any time.
     explicit_publish: bool,
     old_writes: u8,
-    standard_writes: u8,
+    object_store_writes: u8,
     crashes: bool,
     /// How many times a crashed conversion or creation runs again.
     max_restarts: u8,
@@ -592,9 +598,9 @@ const NOTHING: Config = Config {
     gc: false,
     status: None,
     copier: false,
-    to_standard: false,
+    to_object_store: false,
     conversion_attempts: 2,
-    from_standard: false,
+    from_object_store: false,
     provenance_check: true,
     first_n_zero: false,
     relist_bound: 8,
@@ -602,7 +608,7 @@ const NOTHING: Config = Config {
     creators: 0,
     explicit_publish: false,
     old_writes: 0,
-    standard_writes: 0,
+    object_store_writes: 0,
     crashes: false,
     max_restarts: 1,
     lost_replies: false,
@@ -669,11 +675,11 @@ impl State {
         match content {
             Content::Version(hash) => self.parents.get(&hash).copied(),
             Content::Fork { from } => Some(Content::Version(from)),
-            Content::Standard { from: Some(hash), updates: 1 } => {
+            Content::ObjectStore { from: Some(hash), updates: 1 } => {
                 Some(Content::Version(hash))
             }
-            Content::Standard { from, updates } => {
-                Some(Content::Standard { from, updates: updates.checked_sub(1)? })
+            Content::ObjectStore { from, updates } => {
+                Some(Content::ObjectStore { from, updates: updates.checked_sub(1)? })
             }
         }
     }
@@ -696,13 +702,13 @@ impl State {
     }
 
     /// How many changes version `hash` is past the first version of a
-    /// conversion from the standard layout that backed up `repo`, if it derives
+    /// conversion from the object store layout that backed up `repo`, if it derives
     /// from one: how far the provenance check must read.
     fn changes_since_backup(&self, hash: AttemptId, repo: Content) -> Option<u8> {
         let (mut hash, mut changes) = (hash, 0);
         loop {
             let parent = *self.parents.get(&hash)?;
-            if hash.0 == FROM_STANDARD {
+            if hash.0 == FROM_OBJECT_STORE {
                 return (parent == repo).then_some(changes);
             }
             let Content::Version(next) = parent else { return None };
@@ -710,13 +716,13 @@ impl State {
         }
     }
 
-    /// What the conversion from the standard layout backed up for the first
+    /// What the conversion from the object store layout backed up for the first
     /// version that `hash` derives from.
     fn origin(&self, hash: AttemptId) -> Option<Content> {
         let mut hash = hash;
         loop {
             let parent = *self.parents.get(&hash)?;
-            if hash.0 == FROM_STANDARD {
+            if hash.0 == FROM_OBJECT_STORE {
                 return Some(parent);
             }
             let Content::Version(next) = parent else { return None };
@@ -728,7 +734,9 @@ impl State {
         match owner {
             Owner::Writer(index) => self.writers[index].publish,
             Owner::Creator(index) => self.creators[index].publish,
-            Owner::FromStandard => self.from_standard.map_or(IDLE_PUBLISH, |c| c.publish),
+            Owner::FromObjectStore => {
+                self.from_object_store.map_or(IDLE_PUBLISH, |c| c.publish)
+            }
         }
     }
 
@@ -736,8 +744,8 @@ impl State {
         match owner {
             Owner::Writer(index) => self.writers[index].publish = publish,
             Owner::Creator(index) => self.creators[index].publish = publish,
-            Owner::FromStandard => {
-                if let Some(conv) = &mut self.from_standard {
+            Owner::FromObjectStore => {
+                if let Some(conv) = &mut self.from_object_store {
                     conv.publish = publish;
                 }
             }
@@ -763,9 +771,9 @@ impl State {
             })
             .map(Owner::Creator);
         let conversion = self
-            .from_standard
-            .filter(|conv| conv.phase == FromStandardPhase::Publish)
-            .map(|_| Owner::FromStandard);
+            .from_object_store
+            .filter(|conv| conv.phase == FromObjectStorePhase::Publish)
+            .map(|_| Owner::FromObjectStore);
         writers.chain(creators).chain(conversion).collect()
     }
 
@@ -773,7 +781,7 @@ impl State {
         match owner {
             Owner::Writer(index) => index as u8,
             Owner::Creator(index) => CREATOR_STAGE + index as u8,
-            Owner::FromStandard => FROM_STANDARD_STAGE,
+            Owner::FromObjectStore => FROM_OBJECT_STORE_STAGE,
         }
     }
 
@@ -782,10 +790,10 @@ impl State {
             Owner::Writer(index) => match self.writers[index].role {
                 Role::Data | Role::Status { .. } | Role::Explicit => Eraser::Writer,
                 Role::Gc { .. } => Eraser::Gc,
-                Role::ToStandard { .. } => Eraser::Conversion,
+                Role::ToObjectStore { .. } => Eraser::Conversion,
             },
             Owner::Creator(_) => Eraser::Creator,
-            Owner::FromStandard => Eraser::Conversion,
+            Owner::FromObjectStore => Eraser::Conversion,
         }
     }
 
@@ -795,14 +803,14 @@ impl State {
 
     /// A conversion is running: nobody else may step.
     fn admin_running(&self) -> bool {
-        use FromStandardPhase as F;
+        use FromObjectStorePhase as F;
         self.writers.iter().any(|w| {
-            matches!(w.role, Role::ToStandard { .. })
+            matches!(w.role, Role::ToObjectStore { .. })
                 && !matches!(
                     w.phase,
                     Phase::Start | Phase::Done | Phase::Stopped | Phase::Crashed
                 )
-        }) || self.from_standard.is_some_and(|conv| {
+        }) || self.from_object_store.is_some_and(|conv| {
             !matches!(conv.phase, F::Start | F::Done | F::Stopped | F::Crashed)
         })
     }
@@ -811,7 +819,7 @@ impl State {
     /// conversion may start.
     fn others_idle(&self) -> bool {
         self.writers.iter().all(|w| {
-            matches!(w.role, Role::ToStandard { .. })
+            matches!(w.role, Role::ToObjectStore { .. })
                 || matches!(
                     w.phase,
                     Phase::Start | Phase::Done | Phase::Crashed | Phase::WaitCopy
@@ -833,12 +841,12 @@ impl State {
         self.writers
             .iter()
             .all(|w| matches!(w.phase, Phase::Done | Phase::Stopped | Phase::Crashed))
-            && self.from_standard.is_none_or(|conv| {
+            && self.from_object_store.is_none_or(|conv| {
                 matches!(
                     conv.phase,
-                    FromStandardPhase::Done
-                        | FromStandardPhase::Stopped
-                        | FromStandardPhase::Crashed
+                    FromObjectStorePhase::Done
+                        | FromObjectStorePhase::Stopped
+                        | FromObjectStorePhase::Crashed
                 )
             })
             && self.creators.iter().all(|c| {
@@ -882,8 +890,8 @@ impl State {
         if let Some(c) = self.copier {
             parts.push(format!("copier:{c:?}"));
         }
-        if let Some(c) = self.from_standard {
-            let active = c.phase == FromStandardPhase::Publish;
+        if let Some(c) = self.from_object_store {
+            let active = c.phase == FromObjectStorePhase::Publish;
             parts.push(publish(format!("from:{:?}", c.phase), c.publish, active));
         }
         parts.extend(self.creators.iter().map(|c| {
@@ -908,12 +916,13 @@ impl State {
 
 /// A fork check found in `repo` a repo info without the feature that is not one
 /// of the versions it knows. That is a fork when the old library wrote it; a
-/// divergence when a standard write updated a standard repo info before the rerun
-/// of an interrupted conversion (outside the rules); and expected when it is the
-/// standard repo info of a conversion from the standard layout interrupted before
-/// it published, met before the rerun (outside the rules). Anything else is a
-/// false report: an accepted one when the check's own listing of `repo.d` was
-/// stale and missed the version file with `repo`'s bytes.
+/// divergence when an object-store-layout write updated a repo info in the
+/// object store layout before the rerun of an interrupted conversion (outside
+/// the rules); and expected when it is the original repo info of a conversion
+/// from the object store layout interrupted before it published, met before the
+/// rerun (outside the rules). Anything else is a false report: an accepted one
+/// when the check's own listing of `repo.d` was stale and missed the version
+/// file with `repo`'s bytes.
 fn detect_fork(state: &mut State, stale_listing: bool) {
     let interrupted = state.marker().and_then(|m| state.origin(m.hash));
     match (state.repo, &mut state.fork) {
@@ -921,7 +930,7 @@ fn detect_fork(state: &mut State, stale_listing: bool) {
         (Some(repo), _) if interrupted == Some(repo) => {
             state.fork_report_interrupted = true;
         }
-        (Some(Content::Standard { .. }), _) => state.divergence_detected = true,
+        (Some(Content::ObjectStore { .. }), _) => state.divergence_detected = true,
         _ if stale_listing => state.false_fork_stale = true,
         _ => state.false_fork_report = true,
     }
@@ -945,7 +954,7 @@ fn overwrite_repo(
         }
         Some(old) if !old.lists_feature() && !state.derives(new, old) => violate(
             state,
-            Violation::StandardOverwritten,
+            Violation::ObjectStoreOverwritten,
             format!("{old:?} replaced by version {new:?}, which doesn't derive from it"),
         ),
         _ => {}
@@ -998,9 +1007,11 @@ impl Model for LayoutModel {
         if config.status.is_some() {
             writers.push(writer(STATUS, Role::Status { online: false }));
         }
-        if config.to_standard {
-            writers
-                .push(writer(TO_STANDARD, Role::ToStandard { restarts: 0, relists: 0 }));
+        if config.to_object_store {
+            writers.push(writer(
+                TO_OBJECT_STORE,
+                Role::ToObjectStore { restarts: 0, relists: 0 },
+            ));
         }
         if config.explicit_publish {
             writers.push(writer(EXPLICIT, Role::Explicit));
@@ -1029,8 +1040,8 @@ impl Model for LayoutModel {
             acked: BTreeSet::new(),
             writers,
             copier: config.copier.then_some(Copier::Waiting),
-            from_standard: config.from_standard.then_some(FromStandard {
-                phase: FromStandardPhase::Start,
+            from_object_store: config.from_object_store.then_some(FromObjectStore {
+                phase: FromObjectStorePhase::Start,
                 restarts: 0,
                 serial: 0,
                 hash: INITIAL_HASH,
@@ -1040,7 +1051,7 @@ impl Model for LayoutModel {
             }),
             creators,
             old_writes: config.old_writes,
-            standard_writes: config.standard_writes,
+            object_store_writes: config.object_store_writes,
             fork: None,
             gc_deleted_during_fork: false,
             changed_during_fork: false,
@@ -1059,7 +1070,7 @@ impl Model for LayoutModel {
             gc_published_n: None,
             violation: None,
         };
-        if config.from_standard && !config.to_standard {
+        if config.from_object_store && !config.to_object_store {
             return vec![State { repo: Some(ORIGINAL), ..base }];
         }
         if config.creators > 0 {
@@ -1084,7 +1095,7 @@ impl Model for LayoutModel {
 
         for (index, writer) in state.writers.iter().enumerate() {
             let actor = Actor::Writer(index);
-            let conversion = matches!(writer.role, Role::ToStandard { .. });
+            let conversion = matches!(writer.role, Role::ToObjectStore { .. });
             let running = !matches!(
                 writer.phase,
                 Phase::Start | Phase::Done | Phase::Stopped | Phase::Crashed
@@ -1169,9 +1180,9 @@ impl Model for LayoutModel {
             }
         }
 
-        if let Some(conv) = state.from_standard {
-            use FromStandardPhase as P;
-            let actor = Actor::FromStandard;
+        if let Some(conv) = state.from_object_store {
+            use FromObjectStorePhase as P;
+            let actor = Actor::FromObjectStore;
             match conv.phase {
                 P::Start | P::Recover if conv.phase == P::Recover || admin_may_start => {
                     self.push_seen(state, actor, actions);
@@ -1236,11 +1247,11 @@ impl Model for LayoutModel {
         {
             actions.push(Action::OldWrite);
         }
-        if state.standard_writes > 0
+        if state.object_store_writes > 0
             && !admin
-            && state.repo.is_some_and(Content::takes_standard_writes)
+            && state.repo.is_some_and(Content::takes_object_store_writes)
         {
-            actions.push(Action::StandardWrite);
+            actions.push(Action::ObjectStoreWrite);
         }
 
         if config.crashes {
@@ -1255,13 +1266,15 @@ impl Model for LayoutModel {
             Action::Step(actor, choice) => match actor {
                 Actor::Writer(index) => self.step_writer(&mut state, index, choice)?,
                 Actor::Copier => step_copier(&mut state, choice)?,
-                Actor::FromStandard => self.step_from_standard(&mut state, choice)?,
+                Actor::FromObjectStore => {
+                    self.step_from_object_store(&mut state, choice)?;
+                }
                 Actor::Creator(index) => self.step_creator(&mut state, index, choice)?,
             },
             Action::Crash(actor) => self.crash(&mut state, actor),
             Action::OldWrite => old_write(&mut state),
-            Action::StandardWrite => {
-                state.standard_writes -= 1;
+            Action::ObjectStoreWrite => {
+                state.object_store_writes -= 1;
                 state.repo = state.repo.map(Content::updated);
             }
         }
@@ -1303,8 +1316,8 @@ impl Model for LayoutModel {
             Property::always(DELETED_PUBLISHED, |_, s: &State| {
                 clean(s, Violation::DeletedBeforePublished)
             }),
-            Property::always(STANDARD_KEPT, |_, s: &State| {
-                clean(s, Violation::StandardOverwritten)
+            Property::always(OBJECT_STORE_KEPT, |_, s: &State| {
+                clean(s, Violation::ObjectStoreOverwritten)
             }),
             Property::always(SAME_END_STATE, |_, s: &State| {
                 clean(s, Violation::EndState)
@@ -1352,8 +1365,8 @@ impl Model for LayoutModel {
             Property::sometimes(FROM_DONE_AFTER_REFUSAL, |_, state: &State| {
                 state.fork_report_interrupted
                     && state
-                        .from_standard
-                        .is_some_and(|conv| conv.phase == FromStandardPhase::Done)
+                        .from_object_store
+                        .is_some_and(|conv| conv.phase == FromObjectStorePhase::Done)
             }),
             Property::sometimes(STUCK_ON_FORK, |_, state: &State| state.stuck_on_fork),
             Property::sometimes(HASH_ONLY_FALSE_ALARM, |_, state: &State| {
@@ -1384,64 +1397,77 @@ impl Model for LayoutModel {
         // Reachability of the steps the properties above judge: each config
         // asserts the ones it must reach.
         properties.extend([
-            Property::sometimes(REACH_TO_STANDARD_DONE, |_, state: &State| {
+            Property::sometimes(REACH_TO_OBJECT_STORE_DONE, |_, state: &State| {
                 state.dir.is_none()
                     && state.writers.iter().any(|w| {
-                        matches!(w.role, Role::ToStandard { .. })
+                        matches!(w.role, Role::ToObjectStore { .. })
                             && w.phase == Phase::Done
                     })
             }),
-            Property::sometimes(REACH_TO_STANDARD_STEP_3, |_, state: &State| {
+            Property::sometimes(REACH_TO_OBJECT_STORE_STEP_3, |_, state: &State| {
                 state.writers.iter().any(|w| {
-                    matches!(w.role, Role::ToStandard { .. })
+                    matches!(w.role, Role::ToObjectStore { .. })
                         && w.phase == Phase::Publish
                         && w.publish.proved.is_none()
                 })
             }),
-            Property::sometimes(REACH_TO_STANDARD_AFTER_RENAME, |_, state: &State| {
-                state.dir.is_none()
-                    && state.tmps.contains(&Tmp::Aside)
-                    && state.writers.iter().any(|w| {
-                        matches!(w.role, Role::ToStandard { .. })
-                            && w.phase == Phase::Start
-                    })
-            }),
-            Property::sometimes(REACH_TO_STANDARD_RERUN_RENAMES, |_, state: &State| {
-                state.writers.iter().any(|w| {
-                    matches!(w.role, Role::ToStandard { restarts, .. } if restarts > 0)
+            Property::sometimes(
+                REACH_TO_OBJECT_STORE_AFTER_RENAME,
+                |_, state: &State| {
+                    state.dir.is_none()
+                        && state.tmps.contains(&Tmp::Aside)
+                        && state.writers.iter().any(|w| {
+                            matches!(w.role, Role::ToObjectStore { .. })
+                                && w.phase == Phase::Start
+                        })
+                },
+            ),
+            Property::sometimes(
+                REACH_TO_OBJECT_STORE_RERUN_RENAMES,
+                |_, state: &State| {
+                    state.writers.iter().any(|w| {
+                    matches!(w.role, Role::ToObjectStore { restarts, .. } if restarts > 0)
                         && w.phase == Phase::RenameDir
                         && w.attempts == 0
                 })
-            }),
-            Property::sometimes(REACH_TO_STANDARD_LEFTOVERS, |_, state: &State| {
+                },
+            ),
+            Property::sometimes(REACH_TO_OBJECT_STORE_LEFTOVERS, |_, state: &State| {
                 state.writers.iter().any(|w| w.phase == Phase::DeleteLeftovers)
             }),
-            Property::sometimes(REACH_TO_STANDARD_RELIST, |_, state: &State| {
+            Property::sometimes(REACH_TO_OBJECT_STORE_RELIST, |_, state: &State| {
                 state.relisted_after_fork_check
             }),
-            Property::sometimes(REACH_FROM_STANDARD_RERUN, |_, state: &State| {
-                state.from_standard.is_some_and(|conv| {
-                    conv.phase == FromStandardPhase::Publish
+            Property::sometimes(REACH_FROM_OBJECT_STORE_RERUN, |_, state: &State| {
+                state.from_object_store.is_some_and(|conv| {
+                    conv.phase == FromObjectStorePhase::Publish
                         && conv.publish.proved.is_none()
                         && conv.publish.accept.is_some()
                 })
             }),
-            Property::sometimes(REACH_FROM_STANDARD_RERUN_DEEP, |_, state: &State| {
-                state.from_standard.is_some_and(|conv| {
-                    conv.phase == FromStandardPhase::Publish && conv.deep_provenance
-                })
-            }),
-            Property::sometimes(REACH_STANDARD_UPDATES_CARRIED, |_, state: &State| {
-                state.marker().is_some_and(|m| {
-                    m.hash.0 == FROM_STANDARD
-                        && matches!(
-                            state.parents.get(&m.hash),
-                            Some(Content::Standard { from: Some(_), .. })
-                        )
-                })
-            }),
+            Property::sometimes(
+                REACH_FROM_OBJECT_STORE_RERUN_DEEP,
+                |_, state: &State| {
+                    state.from_object_store.is_some_and(|conv| {
+                        conv.phase == FromObjectStorePhase::Publish
+                            && conv.deep_provenance
+                    })
+                },
+            ),
+            Property::sometimes(
+                REACH_OBJECT_STORE_UPDATES_CARRIED,
+                |_, state: &State| {
+                    state.marker().is_some_and(|m| {
+                        m.hash.0 == FROM_OBJECT_STORE
+                            && matches!(
+                                state.parents.get(&m.hash),
+                                Some(Content::ObjectStore { from: Some(_), .. })
+                            )
+                    })
+                },
+            ),
             Property::sometimes(REACH_FROM_AFTER_TO, |_, state: &State| {
-                state.marker().is_some_and(|m| m.hash.0 == FROM_STANDARD)
+                state.marker().is_some_and(|m| m.hash.0 == FROM_OBJECT_STORE)
                     && state.history.iter().any(|h| featureless(*h))
             }),
             Property::sometimes(REACH_GC_DELETES, |_, state: &State| {
@@ -1450,10 +1476,10 @@ impl Model for LayoutModel {
             Property::sometimes(REACH_CREATOR_REPUBLISHES, |_, state: &State| {
                 state.creators.iter().any(|c| c.phase == CreatorPhase::PublishCurrent)
             }),
-            Property::sometimes(REACH_TO_STANDARD_READ_ONLY, |_, state: &State| {
+            Property::sometimes(REACH_TO_OBJECT_STORE_READ_ONLY, |_, state: &State| {
                 state.dir.is_none()
                     && state.writers.iter().any(|w| {
-                        matches!(w.role, Role::ToStandard { .. })
+                        matches!(w.role, Role::ToObjectStore { .. })
                             && w.phase == Phase::Done
                     })
                     && state.history.last().is_some_and(|last| {
@@ -1471,7 +1497,7 @@ impl Model for LayoutModel {
             && !config.stale_listings
             && !config.stale_root_listings
             && config.old_writes == 0
-            && config.standard_writes == 0;
+            && config.object_store_writes == 0;
         if faultless {
             properties.push(Property::eventually(
                 CONVERGES,
@@ -1496,8 +1522,9 @@ fn erased_silently_by(state: &State, by: Eraser) -> bool {
         .is_some_and(|erasure| erasure.silent && erasure.by == by)
 }
 
-/// `$ROOT/repo` holds a version that was current, a standard repo info of
-/// record, or a creation's first version before its `repo.d` exists.
+/// `$ROOT/repo` holds a version that was current, the repo info of record in
+/// the object store layout, or a creation's first version before its `repo.d`
+/// exists.
 fn mirror_was_current(state: &State) -> bool {
     if state.fork.is_some() {
         return true;
@@ -1596,12 +1623,13 @@ fn step_copier(state: &mut State, choice: Choice) -> Option<()> {
 ///   only ever name versions that landed. The publication's `Stage`: its target
 ///   is a marker's version, a proved one, one adopted from `repo` or GC's own,
 ///   all landed. `version_file_n` of `repo`'s hash: `repo` holds landed versions,
-///   forks, standard repo infos or a creator's first version, whose file enters
-///   `repo.d` only with that `repo.d`, as it lands. The attempt's own `Link`:
-///   not in flight any more, and no other attempt has its hash, so its name
-///   never recurs. Tidy-up and the sweep only delete. No property, metric or
-///   reach condition reads other files: they read the marker, `repo`,
-///   `history`, `parents`, `readonly`, `acked` and the copier's recorded bytes.
+///   forks, repo infos in the object store layout or a creator's first version,
+///   whose file enters `repo.d` only with that `repo.d`, as it lands. The
+///   attempt's own `Link`: not in flight any more, and no other attempt has its
+///   hash, so its name never recurs. Tidy-up and the sweep only delete. No
+///   property, metric or reach condition reads other files: they read the
+///   marker, `repo`, `history`, `parents`, `readonly`, `acked` and the copier's
+///   recorded bytes.
 /// - `repo.d/stage.<id>` of an attempt not in flight: its only reader is that
 ///   attempt's own `Link`; the sweep only deletes.
 /// - `repo.d/mirror.<id>` of a publisher not publishing (it crashed): its only
@@ -1647,7 +1675,9 @@ fn normalize(state: &mut State) {
             writer.serial = 0;
             writer.role = match writer.role {
                 Role::Gc { .. } => Role::Gc { changed: None, left: None, mirror: None },
-                Role::ToStandard { .. } => Role::ToStandard { restarts: 0, relists: 0 },
+                Role::ToObjectStore { .. } => {
+                    Role::ToObjectStore { restarts: 0, relists: 0 }
+                }
                 role => role,
             };
         }
@@ -1667,8 +1697,8 @@ fn normalize(state: &mut State) {
             creator.restarts = 0;
         }
     }
-    if let Some(conv) = &mut state.from_standard {
-        use FromStandardPhase as P;
+    if let Some(conv) = &mut state.from_object_store {
+        use FromObjectStorePhase as P;
         if conv.phase != P::Publish {
             conv.publish = IDLE_PUBLISH;
             conv.deep_provenance = false;
@@ -1689,7 +1719,7 @@ fn normalize(state: &mut State) {
 impl LayoutModel {
     fn budget(&self, role: Role) -> u8 {
         match role {
-            Role::ToStandard { .. } => self.config.conversion_attempts,
+            Role::ToObjectStore { .. } => self.config.conversion_attempts,
             _ => self.config.max_attempts,
         }
     }
@@ -1762,10 +1792,10 @@ impl LayoutModel {
     /// Everyone finished, the conversions completed, and the mirror is current.
     fn converged(&self, state: &State) -> bool {
         let conversions_done = state.writers.iter().all(|w| {
-            !matches!(w.role, Role::ToStandard { .. }) || w.phase == Phase::Done
+            !matches!(w.role, Role::ToObjectStore { .. }) || w.phase == Phase::Done
         }) && state
-            .from_standard
-            .is_none_or(|conv| conv.phase == FromStandardPhase::Done);
+            .from_object_store
+            .is_none_or(|conv| conv.phase == FromObjectStorePhase::Done);
         state.finished()
             && conversions_done
             && state
@@ -1774,23 +1804,25 @@ impl LayoutModel {
     }
 
     /// A conversion stops only for a reason the configuration provides: stale
-    /// listings (attempts exhausted, a to-standard root listing that misses
-    /// `repo.d`), the old writer or standard writes (forks, provenance), the
-    /// other conversion (a conversion in progress), or bounded publication rounds
-    /// (giving up); or for the accepted limit of a provenance check whose
-    /// ops-log files end before the backup (`missed`), after changes made before
-    /// the rerun. Otherwise it must finish, rerun or not.
+    /// listings (attempts exhausted, a root listing of the conversion to the
+    /// object store layout that misses `repo.d`), the old writer or
+    /// object-store-layout writes (forks, provenance), the other conversion (a
+    /// conversion in progress), or bounded publication rounds (giving up); or
+    /// for the accepted limit of a provenance check whose ops-log files end
+    /// before the backup (`missed`), after changes made before the rerun.
+    /// Otherwise it must finish, rerun or not.
     fn check_stop(&self, last: &State, state: &mut State, missed: bool) {
         let config = self.config;
         let stopped = |s: &State| {
             s.writers.iter().any(|w| w.phase == Phase::Stopped)
-                || s.from_standard.is_some_and(|c| c.phase == FromStandardPhase::Stopped)
+                || s.from_object_store
+                    .is_some_and(|c| c.phase == FromObjectStorePhase::Stopped)
         };
         let reasons = config.stale_listings
-            || (config.stale_root_listings && config.to_standard)
+            || (config.stale_root_listings && config.to_object_store)
             || config.old_writes > 0
-            || config.standard_writes > 0
-            || (config.to_standard && config.from_standard)
+            || config.object_store_writes > 0
+            || (config.to_object_store && config.from_object_store)
             || config.publish_rounds != 0
             || missed;
         if !reasons && stopped(state) && !stopped(last) {
@@ -1810,7 +1842,7 @@ impl LayoutModel {
             Actor::Writer(index) => {
                 let writer = &mut state.writers[index];
                 writer.phase = Phase::Crashed;
-                if let Role::ToStandard { restarts, relists } = &mut writer.role
+                if let Role::ToObjectStore { restarts, relists } = &mut writer.role
                     && restart(restarts)
                 {
                     *relists = 0;
@@ -1819,12 +1851,12 @@ impl LayoutModel {
                 }
             }
             Actor::Copier => {}
-            Actor::FromStandard => {
-                if let Some(conv) = &mut state.from_standard {
+            Actor::FromObjectStore => {
+                if let Some(conv) = &mut state.from_object_store {
                     conv.phase = if restart(&mut conv.restarts) {
-                        FromStandardPhase::Start
+                        FromObjectStorePhase::Start
                     } else {
-                        FromStandardPhase::Crashed
+                        FromObjectStorePhase::Crashed
                     };
                 }
             }
@@ -1839,16 +1871,16 @@ impl LayoutModel {
         }
     }
 
-    // ── writers, GC, the status setter, the conversion to standard ──────────
+    // ── writers, GC, the status setter, the conversion to the object store layout
 
     fn step_writer(&self, state: &mut State, index: usize, choice: Choice) -> Option<()> {
         let before = state.writers[index];
         let (base_n, base_hash) = before.base;
         let reachable = state.reachable();
-        let conversion = matches!(before.role, Role::ToStandard { .. });
+        let conversion = matches!(before.role, Role::ToObjectStore { .. });
         match (before.phase, choice) {
             (Phase::Start | Phase::Recover, _) if conversion => {
-                self.to_standard_decide(state, index, choice)?;
+                self.to_object_store_decide(state, index, choice)?;
             }
             // `read_latest`: the listed version and its bytes. A version
             // without the feature is refused: a conversion is in progress.
@@ -1876,7 +1908,7 @@ impl LayoutModel {
                 {
                     return None;
                 }
-                // A featureless current version: a conversion to the standard
+                // A featureless current version: a conversion to the object store
                 // layout is in progress. `ReadOnly`: only a status change goes on.
                 let read_only = state.readonly.contains(&seen.hash)
                     && !matches!(before.role, Role::Status { .. });
@@ -1952,7 +1984,7 @@ impl LayoutModel {
                 };
             }
             // Before its change: a `repo` without the feature that is not the
-            // listed version is a fork, or a conversion from the standard layout
+            // listed version is a fork, or a conversion from the object store layout
             // to rerun first. Refuse, changing nothing.
             // `SeenNone`: its stale listing of `repo.d` misses the version file
             // with `repo`'s bytes.
@@ -1973,8 +2005,11 @@ impl LayoutModel {
                             || (featureless(hash) && !featureless(base_hash)) =>
                     {
                         state.relisted_after_fork_check = true;
-                        let Role::ToStandard { restarts, relists } = before.role else {
-                            unreachable!("only the conversion to standard has this step");
+                        let Role::ToObjectStore { restarts, relists } = before.role
+                        else {
+                            unreachable!(
+                                "only the conversion to the object store layout has this step"
+                            );
                         };
                         let writer = &mut state.writers[index];
                         if relists >= self.config.relist_bound {
@@ -1983,7 +2018,7 @@ impl LayoutModel {
                             writer.phase = Phase::Stopped;
                         } else {
                             writer.role =
-                                Role::ToStandard { restarts, relists: relists + 1 };
+                                Role::ToObjectStore { restarts, relists: relists + 1 };
                             writer.phase = Phase::Recover;
                         }
                     }
@@ -2032,7 +2067,7 @@ impl LayoutModel {
             }
             (Phase::DeleteTmp | Phase::DeleteLeftovers, Choice::Normal) => {
                 state.tmps.clear();
-                check_to_standard_end(state);
+                check_to_object_store_end(state);
                 state.writers[index].phase = Phase::Done;
             }
             _ => return None,
@@ -2042,7 +2077,7 @@ impl LayoutModel {
 
     /// The conversion's (re)start: from a listing of `$ROOT`, stale only with
     /// `stale_root_listings`, and a possibly stale one of `repo.d`.
-    fn to_standard_decide(
+    fn to_object_store_decide(
         &self,
         state: &mut State,
         index: usize,
@@ -2061,7 +2096,7 @@ impl LayoutModel {
                 // exists.
                 state.truth()?;
                 // Finished, but for deleting leftover tmp directories, if `repo`
-                // is the converted standard repo info. Otherwise an orphan
+                // is the converted repo info. Otherwise an orphan
                 // mirror, or `NotFound` for an interrupted creation: an error.
                 state.writers[index].phase = if state.lacks_feature() {
                     Phase::DeleteLeftovers
@@ -2097,7 +2132,7 @@ impl LayoutModel {
         let role = state.writers[index].role;
         let base_read_only = state.readonly.contains(&source.hash);
         if base_read_only
-            && !matches!(role, Role::Status { .. } | Role::ToStandard { .. })
+            && !matches!(role, Role::Status { .. } | Role::ToObjectStore { .. })
         {
             violate(
                 state,
@@ -2148,7 +2183,7 @@ impl LayoutModel {
         let writer = &mut state.writers[index];
         writer.phase = Phase::Publish;
         writer.publish = publish_of(version, Some(version), None);
-        let conversion = matches!(me.role, Role::ToStandard { .. });
+        let conversion = matches!(me.role, Role::ToObjectStore { .. });
         match self.config.sabotage {
             // The conversion calls the change's steps without its publication.
             Some(Sabotage::CommitWithoutPublish) if !conversion => {
@@ -2178,10 +2213,10 @@ impl LayoutModel {
         state.writers[index].phase = match me.role {
             // After its last attempt the conversion stops with a retryable
             // error; otherwise it lists again.
-            Role::ToStandard { .. } if me.attempts >= self.budget(me.role) => {
+            Role::ToObjectStore { .. } if me.attempts >= self.budget(me.role) => {
                 Phase::Stopped
             }
-            Role::ToStandard { .. } => Phase::Recover,
+            Role::ToObjectStore { .. } => Phase::Recover,
             _ => Phase::Start,
         };
     }
@@ -2222,8 +2257,8 @@ impl LayoutModel {
             }
             Role::Status { .. } => Phase::Done,
             // `Current` proves step 3; `GaveUp` fails the run, to be rerun.
-            Role::ToStandard { .. } if current => Phase::RenameDir,
-            Role::ToStandard { .. } => Phase::Stopped,
+            Role::ToObjectStore { .. } if current => Phase::RenameDir,
+            Role::ToObjectStore { .. } => Phase::Stopped,
         };
         state.writers[index].phase = next;
     }
@@ -2391,11 +2426,11 @@ impl LayoutModel {
         Some(outcome)
     }
 
-    // ── conversion from the standard layout ────────────────────────────────
+    // ── conversion from the object store layout ─────────────────────────────
 
-    fn step_from_standard(&self, state: &mut State, choice: Choice) -> Option<()> {
-        use FromStandardPhase as P;
-        let conv = state.from_standard?;
+    fn step_from_object_store(&self, state: &mut State, choice: Choice) -> Option<()> {
+        use FromObjectStorePhase as P;
+        let conv = state.from_object_store?;
         let mut next = conv;
         let lost = choice == Choice::LostReply;
         match (conv.phase, choice) {
@@ -2413,13 +2448,13 @@ impl LayoutModel {
                     return None;
                 }
                 next.phase = match state.repo {
-                    // A conversion to the standard layout is in progress.
+                    // A conversion to the object store layout is in progress.
                     _ if featureless(seen.hash) => P::Stopped,
                     // Converted already, or nothing to convert: then step 8.
                     Some(repo) if repo.lists_feature() => {
                         state.tmps.clear();
                         if state.origin(seen.hash).is_some() {
-                            check_from_standard_end(state);
+                            check_from_object_store_end(state);
                         }
                         P::Done
                     }
@@ -2453,7 +2488,7 @@ impl LayoutModel {
                 next.phase = P::Build;
             }
             (P::Build, Choice::Normal) => {
-                next.hash = (FROM_STANDARD, conv.serial);
+                next.hash = (FROM_OBJECT_STORE, conv.serial);
                 next.serial += 1;
                 state.tmps.insert(Tmp::Build(next.hash));
                 let Some(backup) = conv.backup else { unreachable!("backed up") };
@@ -2478,24 +2513,24 @@ impl LayoutModel {
                 }
             }
             (P::Publish, choice) => {
-                state.from_standard = Some(next);
+                state.from_object_store = Some(next);
                 next.phase =
-                    match self.step_publish(state, Owner::FromStandard, choice)? {
+                    match self.step_publish(state, Owner::FromObjectStore, choice)? {
                         Published::Running => P::Publish,
                         // Leftover tmp directories of crashed runs go too.
                         Published::Current => {
                             state.tmps.clear();
-                            check_from_standard_end(state);
+                            check_from_object_store_end(state);
                             P::Done
                         }
                         // An error that says to rerun the conversion.
                         Published::GaveUp | Published::Fork => P::Stopped,
                     };
-                next.publish = state.publish(Owner::FromStandard);
+                next.publish = state.publish(Owner::FromObjectStore);
             }
             _ => return None,
         }
-        state.from_standard = Some(next);
+        state.from_object_store = Some(next);
         Some(())
     }
 
@@ -2653,13 +2688,13 @@ impl ChangeAttempt for WriterAttempt<'_> {
     }
 }
 
-/// An uninterrupted conversion to the standard layout leaves `repo` holding the
+/// An uninterrupted conversion to the object store layout leaves `repo` holding the
 /// version it made last, without the feature, and nothing else.
-fn check_to_standard_end(state: &mut State) {
+fn check_to_object_store_end(state: &mut State) {
     if state.fork.is_some() {
         return;
     }
-    // Standard writes may update the standard repo info once `repo.d` is gone.
+    // Object-store-layout writes may update `repo` once `repo.d` is gone.
     let last = state.history.last().copied();
     let expected = last.is_some_and(|last| {
         featureless(last)
@@ -2682,7 +2717,7 @@ fn check_to_standard_end(state: &mut State) {
             state,
             Violation::EndState,
             format!(
-                "to standard ended with repo.d at {:?}, repo {:?}, tmps {:?}",
+                "the conversion to the object store layout ended with repo.d at {:?}, repo {:?}, tmps {:?}",
                 state.marker(),
                 state.repo,
                 state.tmps
@@ -2691,9 +2726,9 @@ fn check_to_standard_end(state: &mut State) {
     }
 }
 
-/// The conversion from the standard layout leaves `repo.d`, and `repo` holding a
+/// The conversion from the object store layout leaves `repo.d`, and `repo` holding a
 /// version that was current and derives from one of its first versions.
-fn check_from_standard_end(state: &mut State) {
+fn check_from_object_store_end(state: &mut State) {
     let expected = match state.repo {
         Some(Content::Version(hash)) => {
             state.history.contains(&hash) && state.origin(hash).is_some()
@@ -2705,7 +2740,7 @@ fn check_from_standard_end(state: &mut State) {
             state,
             Violation::EndState,
             format!(
-                "from standard ended with repo {:?}, tmps {:?}",
+                "the conversion from the object store layout ended with repo {:?}, tmps {:?}",
                 state.repo, state.tmps
             ),
         );
@@ -2853,25 +2888,21 @@ fn silent_erasures(config: Config) -> BTreeSet<(Eraser, Option<PublishStep>)> {
 
 // ── configurations ──────────────────────────────────────────────────────────
 
-const REACH_TO_STANDARD_DONE: &str = "reach: the conversion to standard completes";
-const REACH_TO_STANDARD_STEP_3: &str =
-    "reach: a rerun of the conversion to standard publishes its featureless version";
-const REACH_TO_STANDARD_AFTER_RENAME: &str =
-    "reach: the conversion to standard crashes after renaming repo.d aside";
-const REACH_TO_STANDARD_RERUN_RENAMES: &str = "reach: a rerun of the conversion to standard publishes its featureless version and renames repo.d aside";
-const REACH_TO_STANDARD_LEFTOVERS: &str = "reach: a rerun of the conversion to standard finds repo.d gone and deletes leftovers";
-const REACH_TO_STANDARD_RELIST: &str = "reach: the conversion to standard's fork check finds a newer version's bytes and lists again";
-const REACH_FROM_STANDARD_RERUN: &str =
-    "reach: a rerun of the conversion from standard publishes after its provenance check";
-const REACH_FROM_STANDARD_RERUN_DEEP: &str = "reach: a rerun of the conversion from standard publishes after its provenance check, two changes or more past the backup";
-const REACH_STANDARD_UPDATES_CARRIED: &str = "reach: a conversion from standard carries standard updates made after a conversion to standard";
-const REACH_FROM_AFTER_TO: &str =
-    "reach: a conversion from standard follows a conversion to standard";
+const REACH_TO_OBJECT_STORE_DONE: &str =
+    "reach: the conversion to the object store layout completes";
+const REACH_TO_OBJECT_STORE_STEP_3: &str = "reach: a rerun of the conversion to the object store layout publishes its featureless version";
+const REACH_TO_OBJECT_STORE_AFTER_RENAME: &str = "reach: the conversion to the object store layout crashes after renaming repo.d aside";
+const REACH_TO_OBJECT_STORE_RERUN_RENAMES: &str = "reach: a rerun of the conversion to the object store layout publishes its featureless version and renames repo.d aside";
+const REACH_TO_OBJECT_STORE_LEFTOVERS: &str = "reach: a rerun of the conversion to the object store layout finds repo.d gone and deletes leftovers";
+const REACH_TO_OBJECT_STORE_RELIST: &str = "reach: the fork check of the conversion to the object store layout finds a newer version's bytes and lists again";
+const REACH_FROM_OBJECT_STORE_RERUN: &str = "reach: a rerun of the conversion from the object store layout publishes after its provenance check";
+const REACH_FROM_OBJECT_STORE_RERUN_DEEP: &str = "reach: a rerun of the conversion from the object store layout publishes after its provenance check, two changes or more past the backup";
+const REACH_OBJECT_STORE_UPDATES_CARRIED: &str = "reach: a conversion from the object store layout carries the object-store-layout writes made after a conversion to the object store layout";
+const REACH_FROM_AFTER_TO: &str = "reach: a conversion from the object store layout follows a conversion to the object store layout";
 const REACH_GC_DELETES: &str = "reach: GC deletes";
 const REACH_CREATOR_REPUBLISHES: &str =
     "reach: a creator that lost the directory rename publishes the current version";
-const REACH_TO_STANDARD_READ_ONLY: &str =
-    "reach: the conversion to standard completes from a ReadOnly version, which it keeps";
+const REACH_TO_OBJECT_STORE_READ_ONLY: &str = "reach: the conversion to the object store layout completes from a ReadOnly version, which it keeps";
 const MARKER_BYTES: &str = "the current marker has bytes";
 const NO_ACK_LOST: &str = "no acknowledged change lost";
 const MIRROR_CURRENT: &str = "the mirror is a version that was current";
@@ -2881,9 +2912,10 @@ const READ_ONLY: &str =
 const COPY_CONSISTENT: &str = "a copy taken while ReadOnly holds the ReadOnly version";
 const DELETED_PUBLISHED: &str =
     "repo.d is deleted only once repo holds its current version without the feature";
-const STANDARD_KEPT: &str = "a standard repository is never overwritten";
+const OBJECT_STORE_KEPT: &str =
+    "a repository in the object store layout is never overwritten";
 const SAME_END_STATE: &str = "a conversion ends as an uninterrupted run";
-const ONLY_STALE_ROOT_END: &str = "a conversion ends as an uninterrupted run, or as a rerun to standard whose root listing missed repo.d";
+const ONLY_STALE_ROOT_END: &str = "a conversion ends as an uninterrupted run, or as a rerun of the conversion to the object store layout whose root listing missed repo.d";
 const NO_FALSE_FORK: &str = "no fork report without a fork";
 const CONVERGES: &str = "everyone finishes, with the mirror current";
 const ERASED_BY_WRITER: &str = "metric: a writer's publication erases a fork";
@@ -2892,17 +2924,13 @@ const DETECTED: &str = "metric: a check detects a fork";
 const UNDETECTED: &str = "metric: everyone finishes with a fork nobody detected";
 const CHANGE_DURING_FORK: &str = "metric: a change lands with a fork in repo";
 const GC_DELETES_DURING_FORK: &str = "metric: GC deletes data while a fork is in repo";
-const FORK_REPORT_INTERRUPTED: &str = "metric: a fork check before the rerun finds the standard repo of an interrupted conversion from standard";
+const FORK_REPORT_INTERRUPTED: &str = "metric: a fork check before the rerun finds the original repo of an interrupted conversion from the object store layout";
 const FALSE_FORK_STALE: &str = "metric: a fork check whose listing of repo.d is stale reports a false fork (accepted)";
-const RELISTS_EXHAUSTED: &str =
-    "metric: the conversion to standard stops after relisting relist_bound times";
-const FROM_DONE_AFTER_REFUSAL: &str = "reach: the conversion from standard finishes after a fork check found its standard repo";
-const DIVERGENCE_DETECTED: &str =
-    "metric: a fork check finds a standard write made before the rerun of a conversion";
-const PROVENANCE_STOPPED: &str =
-    "metric: a rerun of the conversion from standard stops at its provenance check";
-const STUCK_ON_FORK: &str =
-    "metric: the conversion to standard changes the repo info, then meets a fork";
+const RELISTS_EXHAUSTED: &str = "metric: the conversion to the object store layout stops after relisting relist_bound times";
+const FROM_DONE_AFTER_REFUSAL: &str = "reach: the conversion from the object store layout finishes after a fork check found its original repo";
+const DIVERGENCE_DETECTED: &str = "metric: a fork check finds an object-store-layout write made before the rerun of a conversion";
+const PROVENANCE_STOPPED: &str = "metric: a rerun of the conversion from the object store layout stops at its provenance check";
+const STUCK_ON_FORK: &str = "metric: the conversion to the object store layout changes the repo info, then meets a fork";
 const HASH_ONLY_FALSE_ALARM: &str =
     "metric: a hash-only check would call a lagging mirror a fork";
 const GC_MIRROR_REGRESSED: &str =
@@ -3075,214 +3103,239 @@ fn fork_windows() {
     assert_eq!(found, expected);
 }
 
-const TO_STANDARD_ONLY: Config = Config { writers: 1, to_standard: true, ..NOTHING };
+const TO_OBJECT_STORE_ONLY: Config =
+    Config { writers: 1, to_object_store: true, ..NOTHING };
 
 #[test]
-fn to_standard_plain() {
-    check("to_standard_plain", TO_STANDARD_ONLY, &[], &[REACH_TO_STANDARD_DONE]);
+fn to_object_store_plain() {
+    check(
+        "to_object_store_plain",
+        TO_OBJECT_STORE_ONLY,
+        &[],
+        &[REACH_TO_OBJECT_STORE_DONE],
+    );
 }
 
-/// The conversion to the standard layout crashing and losing replies at every
+/// The conversion to the object store layout crashing and losing replies at every
 /// step, after writers that may have crashed before publishing, and next to
 /// writers and GC between a crash and the rerun: every rerun ends as an
 /// uninterrupted run, and `repo.d` goes only once `repo` holds its featureless
 /// current version.
 #[test]
-fn to_standard_crashes() {
-    let config = Config { writers: 2, to_standard: true, ..CRASHES };
+fn to_object_store_crashes() {
+    let config = Config { writers: 2, to_object_store: true, ..CRASHES };
     check(
-        "to_standard_crashes",
+        "to_object_store_crashes",
         config,
         &[],
         &[
-            REACH_TO_STANDARD_DONE,
-            REACH_TO_STANDARD_STEP_3,
-            REACH_TO_STANDARD_AFTER_RENAME,
-            REACH_TO_STANDARD_RERUN_RENAMES,
-            REACH_TO_STANDARD_LEFTOVERS,
+            REACH_TO_OBJECT_STORE_DONE,
+            REACH_TO_OBJECT_STORE_STEP_3,
+            REACH_TO_OBJECT_STORE_AFTER_RENAME,
+            REACH_TO_OBJECT_STORE_RERUN_RENAMES,
+            REACH_TO_OBJECT_STORE_LEFTOVERS,
         ],
     );
 }
 
 #[test]
-fn to_standard_gc_crashes() {
-    let config = Config { writers: 1, gc: true, to_standard: true, ..CRASHES };
+fn to_object_store_gc_crashes() {
+    let config = Config { writers: 1, gc: true, to_object_store: true, ..CRASHES };
     check(
-        "to_standard_gc_crashes",
+        "to_object_store_gc_crashes",
         config,
         &[],
-        &[REACH_TO_STANDARD_DONE, REACH_GC_DELETES],
+        &[REACH_TO_OBJECT_STORE_DONE, REACH_GC_DELETES],
     );
 }
 
 /// With stale listings: the conversion's change from a stale base fails at its
 /// rename, so the version it converts is the current one.
 #[test]
-fn to_standard_stale_listings() {
-    let config =
-        Config { writers: 2, to_standard: true, relist_bound: QUICK_RELISTS, ..FAULTS };
+fn to_object_store_stale_listings() {
+    let config = Config {
+        writers: 2,
+        to_object_store: true,
+        relist_bound: QUICK_RELISTS,
+        ..FAULTS
+    };
     check(
-        "to_standard_stale_listings",
+        "to_object_store_stale_listings",
         config,
         &[],
         &[
-            REACH_TO_STANDARD_DONE,
-            REACH_TO_STANDARD_STEP_3,
-            REACH_TO_STANDARD_AFTER_RENAME,
-            REACH_TO_STANDARD_RELIST,
+            REACH_TO_OBJECT_STORE_DONE,
+            REACH_TO_OBJECT_STORE_STEP_3,
+            REACH_TO_OBJECT_STORE_AFTER_RENAME,
+            REACH_TO_OBJECT_STORE_RELIST,
             FALSE_FORK_STALE,
             RELISTS_EXHAUSTED,
         ],
     );
 }
 
-/// `publish_mirror()` between a crash of the conversion to standard after its
-/// step 3 and the rerun, with stale listings: its target can be an older version
-/// while `repo` holds the published featureless one. Its fork check adopts that
-/// newer version as found in place (it never goes backwards), so it neither
-/// reports a fork nor overwrites it; only a fork check whose own listing is stale
-/// reports a false fork (accepted).
+/// `publish_mirror()` between a crash of the conversion to the object store
+/// layout after its step 3 and the rerun, with stale listings: its target can
+/// be an older version while `repo` holds the published featureless one. Its
+/// fork check adopts that newer version as found in place (it never goes
+/// backwards), so it neither reports a fork nor overwrites it; only a fork
+/// check whose own listing is stale reports a false fork (accepted).
 #[test]
-fn to_standard_publish_mirror() {
+fn to_object_store_publish_mirror() {
     let config = Config {
         writers: 1,
-        to_standard: true,
+        to_object_store: true,
         explicit_publish: true,
         relist_bound: QUICK_RELISTS,
         ..FAULTS
     };
-    check("to_standard_publish_mirror", config, &[], &[FALSE_FORK_STALE]);
+    check("to_object_store_publish_mirror", config, &[], &[FALSE_FORK_STALE]);
 }
 
 /// Without the rule that a publication never renames an older version over the
 /// bytes of a newer one in `repo`, it replaces the published featureless version,
-/// the standard repo info of record, with an older version.
+/// the repo info of record in the object store layout, with an older version.
 #[test]
-fn to_standard_publish_mirror_backwards() {
+fn to_object_store_publish_mirror_backwards() {
     let config = Config {
         writers: 1,
-        to_standard: true,
+        to_object_store: true,
         explicit_publish: true,
         mirror_never_backwards: false,
         relist_bound: QUICK_RELISTS,
         ..FAULTS
     };
-    check("to_standard_publish_mirror_backwards", config, &[STANDARD_KEPT], &[]);
+    check("to_object_store_publish_mirror_backwards", config, &[OBJECT_STORE_KEPT], &[]);
 }
 
 /// A `ReadOnly` repository converts too, and stays `ReadOnly`.
 #[test]
-fn to_standard_read_only() {
+fn to_object_store_read_only() {
     let config = Config {
         writers: 1,
         status: Some(StatusOps::ReadOnly),
-        to_standard: true,
+        to_object_store: true,
         relist_bound: QUICK_RELISTS,
         ..FAULTS
     };
     check(
-        "to_standard_read_only",
+        "to_object_store_read_only",
         config,
         &[],
-        &[REACH_TO_STANDARD_DONE, REACH_TO_STANDARD_READ_ONLY],
+        &[REACH_TO_OBJECT_STORE_DONE, REACH_TO_OBJECT_STORE_READ_ONLY],
     );
 }
 
 /// Sabotage: the conversion renames `repo.d` aside before it publishes its
 /// version without the feature.
 #[test]
-fn to_standard_delete_dir_before_publish() {
-    let config =
-        Config { sabotage: Some(Sabotage::DeleteDirBeforePublish), ..TO_STANDARD_ONLY };
-    check("to_standard_delete_dir_before_publish", config, &[DELETED_PUBLISHED], &[]);
+fn to_object_store_delete_dir_before_publish() {
+    let config = Config {
+        sabotage: Some(Sabotage::DeleteDirBeforePublish),
+        ..TO_OBJECT_STORE_ONLY
+    };
+    check("to_object_store_delete_dir_before_publish", config, &[DELETED_PUBLISHED], &[]);
 }
 
 /// A rerun whose stale listing of `$ROOT` misses `repo.d`, after an earlier
-/// run published its version without the feature, finds that standard `repo`
+/// run published its version without the feature, finds that `repo`
 /// and reports nothing to convert, leaving `repo.d`: an accepted limit, cured by
 /// running the conversion again once listings refresh. Every end-state
 /// violation is that one (`ONLY_STALE_ROOT_END` holds). A run whose root listing
 /// misses `repo.d` before that stops on the orphan mirror, changing nothing.
 #[test]
-fn to_standard_stale_root_listing() {
-    let config =
-        Config { writers: 1, to_standard: true, stale_root_listings: true, ..CRASHES };
-    check("to_standard_stale_root_listing", config, &[SAME_END_STATE], &[]);
+fn to_object_store_stale_root_listing() {
+    let config = Config {
+        writers: 1,
+        to_object_store: true,
+        stale_root_listings: true,
+        ..CRASHES
+    };
+    check("to_object_store_stale_root_listing", config, &[SAME_END_STATE], &[]);
 }
 
 /// The old library writes `repo` between a crash and the rerun (unsupported): the
 /// conversion's publication detects the fork and stops, possibly after its
 /// change, which leaves the repository refusing writers.
 #[test]
-fn to_standard_fork_before_rerun() {
-    let config = Config { writers: 1, to_standard: true, old_writes: 1, ..CRASHES };
-    check("to_standard_fork_before_rerun", config, &[], &[DETECTED, STUCK_ON_FORK]);
+fn to_object_store_fork_before_rerun() {
+    let config = Config { writers: 1, to_object_store: true, old_writes: 1, ..CRASHES };
+    check("to_object_store_fork_before_rerun", config, &[], &[DETECTED, STUCK_ON_FORK]);
 }
 
-const FROM_STANDARD_ONLY: Config = Config { from_standard: true, ..NOTHING };
+const FROM_OBJECT_STORE_ONLY: Config = Config { from_object_store: true, ..NOTHING };
 
 #[test]
-fn from_standard_plain() {
-    check("from_standard_plain", FROM_STANDARD_ONLY, &[], &[]);
+fn from_object_store_plain() {
+    check("from_object_store_plain", FROM_OBJECT_STORE_ONLY, &[], &[]);
 }
 
 /// A rerun after a crash at any step ends as an uninterrupted run.
 #[test]
-fn from_standard_crashes() {
+fn from_object_store_crashes() {
     check(
-        "from_standard_crashes",
-        Config { from_standard: true, ..CRASHES },
+        "from_object_store_crashes",
+        Config { from_object_store: true, ..CRASHES },
         &[],
-        &[REACH_FROM_STANDARD_RERUN],
+        &[REACH_FROM_OBJECT_STORE_RERUN],
     );
 }
 
-/// A standard update of `repo` between a crash and the rerun: the provenance
-/// check stops the rerun instead of publishing over it.
+/// An object-store-layout write of `repo` between a crash and the rerun: the
+/// provenance check stops the rerun instead of publishing over it.
 #[test]
-fn from_standard_standard_writes() {
-    let config = Config { from_standard: true, standard_writes: 1, ..CRASHES };
-    check("from_standard_standard_writes", config, &[], &[PROVENANCE_STOPPED]);
+fn from_object_store_with_object_store_writes() {
+    let config = Config { from_object_store: true, object_store_writes: 1, ..CRASHES };
+    check(
+        "from_object_store_with_object_store_writes",
+        config,
+        &[],
+        &[PROVENANCE_STOPPED],
+    );
 }
 
 /// Without the provenance check, the rerun publishes the first version over the
-/// updated standard `repo`.
+/// updated `repo`.
 #[test]
-fn from_standard_without_provenance() {
+fn from_object_store_without_provenance() {
     let config = Config {
-        from_standard: true,
-        standard_writes: 1,
+        from_object_store: true,
+        object_store_writes: 1,
         provenance_check: false,
         ..CRASHES
     };
-    check("from_standard_without_provenance", config, &[STANDARD_KEPT], &[]);
+    check("from_object_store_without_provenance", config, &[OBJECT_STORE_KEPT], &[]);
 }
 
 /// Writers between a crash and the rerun, with stale listings.
 #[test]
-fn from_standard_writers() {
-    let config = Config { from_standard: true, writers: 1, ..FAULTS };
-    check("from_standard_writers", config, &[], &[]);
+fn from_object_store_writers() {
+    let config = Config { from_object_store: true, writers: 1, ..FAULTS };
+    check("from_object_store_writers", config, &[], &[]);
 }
 
-/// Creations never overwrite the standard repository, even with a stale root
-/// listing.
+/// Creations never overwrite the repository in the object store layout, even
+/// with a stale root listing.
 #[test]
-fn from_standard_and_creator() {
-    let config =
-        Config { from_standard: true, creators: 1, stale_root_listings: true, ..CRASHES };
-    check("from_standard_and_creator", config, &[], &[]);
+fn from_object_store_and_creator() {
+    let config = Config {
+        from_object_store: true,
+        creators: 1,
+        stale_root_listings: true,
+        ..CRASHES
+    };
+    check("from_object_store_and_creator", config, &[], &[]);
 }
 
-/// To the standard layout and back, either conversion crashing at any step, with
+/// To the object store layout and back, either conversion crashing at any step, with
 /// a writer.
 #[test]
 fn round_trip() {
     let config = Config {
         writers: 1,
-        to_standard: true,
-        from_standard: true,
-        standard_writes: 1,
+        to_object_store: true,
+        from_object_store: true,
+        object_store_writes: 1,
         ..CRASHES
     };
     check(
@@ -3291,53 +3344,57 @@ fn round_trip() {
         &[],
         &[
             FORK_REPORT_INTERRUPTED,
-            REACH_TO_STANDARD_DONE,
-            REACH_TO_STANDARD_RERUN_RENAMES,
-            REACH_TO_STANDARD_LEFTOVERS,
+            REACH_TO_OBJECT_STORE_DONE,
+            REACH_TO_OBJECT_STORE_RERUN_RENAMES,
+            REACH_TO_OBJECT_STORE_LEFTOVERS,
             REACH_FROM_AFTER_TO,
-            REACH_FROM_STANDARD_RERUN,
-            REACH_STANDARD_UPDATES_CARRIED,
+            REACH_FROM_OBJECT_STORE_RERUN,
+            REACH_OBJECT_STORE_UPDATES_CARRIED,
         ],
     );
 }
 
-/// A writer that runs between a crash of the conversion from the standard layout
+/// A writer that runs between a crash of the conversion from the object store layout
 /// after its directory rename and the rerun (outside the rules) makes a change on
-/// the first version and reports the standard `repo` as a fork when it
+/// the first version and reports the original `repo` as a fork when it
 /// publishes. Nothing is lost; the rerun publishes through its provenance check.
 #[test]
-fn from_standard_writers_crashes() {
-    let config = Config { from_standard: true, writers: 1, ..CRASHES };
-    check("from_standard_writers_crashes", config, &[], &[FORK_REPORT_INTERRUPTED]);
+fn from_object_store_writers_crashes() {
+    let config = Config { from_object_store: true, writers: 1, ..CRASHES };
+    check("from_object_store_writers_crashes", config, &[], &[FORK_REPORT_INTERRUPTED]);
 }
 
-/// Two writers between a crash of the conversion from the standard layout after
+/// Two writers between a crash of the conversion from the object store layout after
 /// its directory rename and the rerun (outside the rules): the rerun's provenance
 /// check, two changes past the conversion's backup, finds it (a large page) and
 /// publishes, or misses it (a small page) and stops, changing nothing. The
-/// writers' publications meet the standard `repo` before the rerun and report a
-/// fork (`FORK_REPORT_INTERRUPTED`), as in `from_standard_writers_crashes`.
+/// writers' publications meet the original `repo` before the rerun and report a
+/// fork (`FORK_REPORT_INTERRUPTED`), as in `from_object_store_writers_crashes`.
 #[test]
-fn from_standard_two_writers_crashes() {
-    let config = Config { from_standard: true, writers: 2, ..CRASHES };
+fn from_object_store_two_writers_crashes() {
+    let config = Config { from_object_store: true, writers: 2, ..CRASHES };
     check(
-        "from_standard_two_writers_crashes",
+        "from_object_store_two_writers_crashes",
         config,
         &[],
-        &[PROVENANCE_STOPPED, REACH_FROM_STANDARD_RERUN_DEEP, FORK_REPORT_INTERRUPTED],
+        &[
+            PROVENANCE_STOPPED,
+            REACH_FROM_OBJECT_STORE_RERUN_DEEP,
+            FORK_REPORT_INTERRUPTED,
+        ],
     );
 }
 
-/// A standard write and a writer between a crash of the conversion from the
-/// standard layout and its rerun (outside the rules): the writer's publication
-/// finds the updated standard `repo`, a real divergence, and leaves it alone; the
-/// rerun's provenance check stops.
+/// An object-store-layout write and a writer between a crash of the conversion
+/// from the object store layout and its rerun (outside the rules): the writer's
+/// publication finds the updated `repo`, a real divergence, and leaves it
+/// alone; the rerun's provenance check stops.
 #[test]
-fn from_standard_writers_standard_writes() {
+fn from_object_store_writers_with_object_store_writes() {
     let config =
-        Config { from_standard: true, writers: 1, standard_writes: 1, ..CRASHES };
+        Config { from_object_store: true, writers: 1, object_store_writes: 1, ..CRASHES };
     check(
-        "from_standard_writers_standard_writes",
+        "from_object_store_writers_with_object_store_writes",
         config,
         &[],
         &[DIVERGENCE_DETECTED, PROVENANCE_STOPPED],
@@ -3352,8 +3409,8 @@ fn from_standard_writers_standard_writes() {
 fn round_trip_first_n_zero() {
     let config = Config {
         gc: true,
-        to_standard: true,
-        from_standard: true,
+        to_object_store: true,
+        from_object_store: true,
         first_n_zero: true,
         relist_bound: QUICK_RELISTS,
         ..FAULTS
@@ -3361,13 +3418,14 @@ fn round_trip_first_n_zero() {
     check("round_trip_first_n_zero", config, &[MARKER_BYTES], &[]);
 }
 
-/// A conversion to the standard layout run after an interrupted conversion from
-/// the standard layout, instead of its rerun (outside the rules): its fork check
-/// before its change finds the old standard `repo` and refuses, changing nothing,
-/// so the rerun of the conversion from the standard layout can still finish.
+/// A conversion to the object store layout run after an interrupted conversion from
+/// the object store layout, instead of its rerun (outside the rules): its fork check
+/// before its change finds the original `repo` and refuses, changing nothing,
+/// so the rerun of the conversion from the object store layout can still finish.
 #[test]
 fn round_trip_mixed_conversions() {
-    let config = Config { writers: 0, to_standard: true, from_standard: true, ..CRASHES };
+    let config =
+        Config { writers: 0, to_object_store: true, from_object_store: true, ..CRASHES };
     let stuck = format!("!{STUCK_ON_FORK}");
     check(
         "round_trip_mixed_conversions",
@@ -3376,7 +3434,7 @@ fn round_trip_mixed_conversions() {
         &[
             FORK_REPORT_INTERRUPTED,
             &stuck,
-            REACH_FROM_STANDARD_RERUN,
+            REACH_FROM_OBJECT_STORE_RERUN,
             REACH_FROM_AFTER_TO,
             FROM_DONE_AFTER_REFUSAL,
         ],
@@ -3387,9 +3445,9 @@ fn round_trip_mixed_conversions() {
 fn round_trip_gc() {
     let config = Config {
         gc: true,
-        to_standard: true,
-        from_standard: true,
-        standard_writes: 1,
+        to_object_store: true,
+        from_object_store: true,
+        object_store_writes: 1,
         relist_bound: QUICK_RELISTS,
         ..FAULTS
     };
@@ -3397,7 +3455,7 @@ fn round_trip_gc() {
         "round_trip_gc",
         config,
         &[],
-        &[REACH_FROM_AFTER_TO, REACH_GC_DELETES, REACH_STANDARD_UPDATES_CARRIED],
+        &[REACH_FROM_AFTER_TO, REACH_GC_DELETES, REACH_OBJECT_STORE_UPDATES_CARRIED],
     );
 }
 
@@ -3422,45 +3480,49 @@ fn two_creators() {
     );
 }
 
-/// Two creators, then a conversion to the standard layout, which waits for a
+/// Two creators, then a conversion to the object store layout, which waits for a
 /// repository (on an empty root it fails with `ObjectNotFound`).
 #[test]
-fn creators_to_standard() {
-    let config = Config { creators: 2, to_standard: true, ..NOTHING };
+fn creators_to_object_store() {
+    let config = Config { creators: 2, to_object_store: true, ..NOTHING };
     check(
-        "creators_to_standard",
+        "creators_to_object_store",
         config,
         &[MIRROR_CURRENT],
-        &[REACH_CREATOR_REPUBLISHES, REACH_TO_STANDARD_DONE],
+        &[REACH_CREATOR_REPUBLISHES, REACH_TO_OBJECT_STORE_DONE],
     );
 }
 
 /// A creator that crashed after its directory rename runs again with a root
 /// listing that misses `repo.d`, during an interrupted conversion to the
-/// standard layout (outside the rules): it replaces `repo` as an interrupted
+/// object store layout (outside the rules): it replaces `repo` as an interrupted
 /// creation, loses the directory rename and publishes the current version,
 /// without the feature, which the conversion's rerun publishes anyway. The
 /// rerun with a stale root listing leaves `repo.d`, as in
-/// `to_standard_stale_root_listing`, and every end-state violation is that one.
+/// `to_object_store_stale_root_listing`, and every end-state violation is that one.
 #[test]
-fn creator_to_standard_stale_root_listings() {
-    let config =
-        Config { creators: 1, to_standard: true, stale_root_listings: true, ..CRASHES };
+fn creator_to_object_store_stale_root_listings() {
+    let config = Config {
+        creators: 1,
+        to_object_store: true,
+        stale_root_listings: true,
+        ..CRASHES
+    };
     check(
-        "creator_to_standard_stale_root_listings",
+        "creator_to_object_store_stale_root_listings",
         config,
         &[MIRROR_CURRENT, SAME_END_STATE],
-        &[CREATOR_PUBLISHES_FEATURELESS, REACH_TO_STANDARD_DONE],
+        &[CREATOR_PUBLISHES_FEATURELESS, REACH_TO_OBJECT_STORE_DONE],
     );
 }
 
 // ── large configurations, `just fs-model-check` ─────────────────────────────
 
 const ROUND_TRIP_REACHES: &[&str] = &[
-    REACH_TO_STANDARD_DONE,
+    REACH_TO_OBJECT_STORE_DONE,
     REACH_FROM_AFTER_TO,
-    REACH_FROM_STANDARD_RERUN,
-    REACH_STANDARD_UPDATES_CARRIED,
+    REACH_FROM_OBJECT_STORE_RERUN,
+    REACH_OBJECT_STORE_UPDATES_CARRIED,
 ];
 
 /// Two writers, GC, the status set `ReadOnly` and back around a copy, crashes and
@@ -3518,49 +3580,49 @@ fn slow_layout_fork_detection() {
     );
 }
 
-/// A conversion to the standard layout next to two writers and GC, every fault.
+/// A conversion to the object store layout next to two writers and GC, every fault.
 #[test]
 #[ignore = "large state space; run `just fs-model-check`"]
-fn slow_layout_to_standard_everything() {
-    let config = Config { writers: 2, gc: true, to_standard: true, ..FAULTS };
+fn slow_layout_to_object_store_everything() {
+    let config = Config { writers: 2, gc: true, to_object_store: true, ..FAULTS };
     check_large(
-        "slow_layout_to_standard_everything",
+        "slow_layout_to_object_store_everything",
         config,
         &[],
         &[
-            REACH_TO_STANDARD_DONE,
-            REACH_TO_STANDARD_STEP_3,
-            REACH_TO_STANDARD_AFTER_RENAME,
-            REACH_TO_STANDARD_RELIST,
+            REACH_TO_OBJECT_STORE_DONE,
+            REACH_TO_OBJECT_STORE_STEP_3,
+            REACH_TO_OBJECT_STORE_AFTER_RENAME,
+            REACH_TO_OBJECT_STORE_RELIST,
             REACH_GC_DELETES,
         ],
     );
 }
 
-/// To the standard layout and back, next to two writers, every fault.
+/// To the object store layout and back, next to two writers, every fault.
 #[test]
 #[ignore = "large state space; run `just fs-model-check`"]
 fn slow_layout_round_trip_writers() {
     let config = Config {
         writers: 2,
-        to_standard: true,
-        from_standard: true,
-        standard_writes: 1,
+        to_object_store: true,
+        from_object_store: true,
+        object_store_writes: 1,
         ..FAULTS
     };
     check_large("slow_layout_round_trip_writers", config, &[], ROUND_TRIP_REACHES);
 }
 
-/// To the standard layout and back, next to a writer and GC, every fault.
+/// To the object store layout and back, next to a writer and GC, every fault.
 #[test]
 #[ignore = "large state space; run `just fs-model-check`"]
 fn slow_layout_round_trip_gc() {
     let config = Config {
         writers: 1,
         gc: true,
-        to_standard: true,
-        from_standard: true,
-        standard_writes: 1,
+        to_object_store: true,
+        from_object_store: true,
+        object_store_writes: 1,
         ..FAULTS
     };
     check_large(

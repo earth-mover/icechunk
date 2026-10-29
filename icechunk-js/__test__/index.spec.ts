@@ -455,7 +455,7 @@ nativeUnixOnly('filesystem storage conversion changes nothing on its own reposit
   t.pass()
 })
 
-nativeUnixOnly('filesystem storage converts between the standard and filesystem layouts', async (t) => {
+nativeUnixOnly('filesystem storage converts between the object store and filesystem layouts', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
   try {
     const legacy = await Repository.create(await Storage.newLocalFilesystem(dir))
@@ -471,12 +471,12 @@ nativeUnixOnly('filesystem storage converts between the standard and filesystem 
     const repo = await Repository.open(storage)
     assert.equal(await repo.lookupBranch('main'), main)
 
-    assert.equal(await storage.convertToStandardLayout(), true)
-    assert.equal(await storage.convertToStandardLayout(), false)
+    assert.equal(await storage.convertToObjectStoreLayout(), true)
+    assert.equal(await storage.convertToObjectStoreLayout(), false)
     await t.throwsAsync(stat(join(dir, 'repo.d')))
-    const standard = await Repository.open(await Storage.newLocalFilesystem(dir))
-    await standard.createBranch('dev', main)
-    assert.deepEqual((await standard.listBranches()).sort(), ['dev', 'main'])
+    const objectStoreRepo = await Repository.open(await Storage.newLocalFilesystem(dir))
+    await objectStoreRepo.createBranch('dev', main)
+    assert.deepEqual((await objectStoreRepo.listBranches()).sort(), ['dev', 'main'])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -543,7 +543,7 @@ nativeUnixOnly('filesystem storage reports forks, unreadable mirrors and durable
   }
 })
 
-nativeUnixOnly('filesystem storage refuses writes during an interrupted conversion to the standard layout', async (t) => {
+nativeUnixOnly('filesystem storage refuses writes during an interrupted conversion to the object store layout', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
   try {
     const root = join(dir, 'root')
@@ -551,9 +551,9 @@ nativeUnixOnly('filesystem storage refuses writes during an interrupted conversi
     const storage = await Storage.newFilesystem(root)
     await Repository.create(storage)
     await cp(root, copy, { recursive: true })
-    assert.equal(await (await Storage.newFilesystem(copy)).convertToStandardLayout(), true)
+    assert.equal(await (await Storage.newFilesystem(copy)).convertToObjectStoreLayout(), true)
 
-    // What a conversion to the standard layout interrupted after its change leaves.
+    // What a conversion to the object store layout interrupted after its change leaves.
     const featureless = await readFile(join(copy, 'repo'))
     const [marker] = (await readdir(join(root, 'repo.d'))).filter((name) => name.startsWith('latest.'))
     const n = BigInt(marker.split('.')[2]) + 1n
@@ -565,11 +565,11 @@ nativeUnixOnly('filesystem storage refuses writes during an interrupted conversi
     const repo = await Repository.open(await Storage.newFilesystem(root))
     await t.throwsAsync(
       async () => { await repo.createBranch('dev', await repo.lookupBranch('main')) },
-      { message: /conversion to the standard layout was interrupted, rerun convert_to_standard_layout/ },
+      { message: /conversion to the object store layout was interrupted, rerun convert_to_object_store_layout/ },
     )
     await t.throwsAsync(
       async () => { await storage.publishMirror() },
-      { message: /rerun convert_to_standard_layout/ },
+      { message: /rerun convert_to_object_store_layout/ },
     )
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -578,7 +578,7 @@ nativeUnixOnly('filesystem storage refuses writes during an interrupted conversi
 
 nativeOnly('repository operations of filesystem storage fail on other storage', async (t) => {
   const storage = await Storage.newInMemory()
-  for (const method of ['convertToFilesystemLayout', 'convertToStandardLayout', 'publishMirror'] as const) {
+  for (const method of ['convertToFilesystemLayout', 'convertToObjectStoreLayout', 'publishMirror'] as const) {
     await t.throwsAsync(
       async () => { await storage[method]() },
       { message: `${method} is only available on storage created with Storage.newFilesystem` },

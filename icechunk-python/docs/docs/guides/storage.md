@@ -314,7 +314,7 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
 Icechunk can also store a repository in a filesystem, given the path to the location of the store. There are two filesystem backends:
 
-- [`local_filesystem_storage`](../reference/storage.md#icechunk.storage.local_filesystem_storage). It is not safe for concurrent commits.
+- [`local_filesystem_storage`](../reference/storage.md#icechunk.storage.local_filesystem_storage). Like every other backend, it stores repositories in the object store layout: it emulates an object store on the filesystem, with the repo info in a single `repo` file. It is not safe for concurrent commits.
 - [`filesystem_storage`](../reference/storage.md#icechunk.storage.filesystem_storage), experimental. It is safe for concurrent writers on filesystems that meet [its requirements](#requirements-and-limits-of-filesystem_storage), including network filesystems such as NFS. It stores repositories in [the filesystem layout](../reference/spec-filesystem-layout-v1.md), which other backends and older Icechunk versions can read but not modify.
 
 === "Local filesystem"
@@ -406,14 +406,14 @@ While the status is read-only, every modification of the repository is refused, 
 The copy keeps the read-only status. On a filesystem, `filesystem_storage` can set it online and write to it. A copy on other storage, such as an object store, can be read through its mirror, but every modification is refused. To get a copy that can be modified on other storage:
 
 1. Set the status of the original to read-only.
-2. Convert the original to the standard layout with `convert_to_standard_layout()`, as described in [Switching an existing repo](#switching-an-existing-repo).
+2. Convert the original to the object store layout with `convert_to_object_store_layout()`, as described in [Switching an existing repo](#switching-an-existing-repo).
 3. Copy it.
 4. If the original should stay in the filesystem layout, convert it back with `convert_to_filesystem_layout()`.
 5. Set the statuses of the original and the copy to online.
 
 #### Switching an existing repo
 
-Repositories created with `local_filesystem_storage`, another backend or an Icechunk version older than 2.4.0 are in the standard layout: `repo` is a single file. `filesystem_storage` refuses to open them, with an error that names `convert_to_filesystem_layout`, until they are converted once. [`FilesystemStorage.convert_to_standard_layout`](../reference/storage.md#icechunk.storage.FilesystemStorage.convert_to_standard_layout) converts a repository back.
+Repositories created with `local_filesystem_storage`, another backend or an Icechunk version older than 2.4.0 are in the object store layout: `repo` is a single file. `filesystem_storage` refuses to open them, with an error that names `convert_to_filesystem_layout`, until they are converted once. [`FilesystemStorage.convert_to_object_store_layout`](../reference/storage.md#icechunk.storage.FilesystemStorage.convert_to_object_store_layout) converts a repository back.
 
 !!! warning "Conversions are administrative operations"
 
@@ -434,11 +434,11 @@ To convert a repository to the filesystem layout:
 
 3. From then on, modify the repository only with `filesystem_storage`.
 
-To convert it back to the standard layout, stop every writer and run `convert_to_standard_layout()`. It changes the repository to a version without the writer feature, publishes it as `repo`, then deletes `repo.d/`. It returns `True` if it converted the repository and `False` if it was in the standard layout already. A run interrupted before its change leaves the repository usable.
+To convert it back to the object store layout, stop every writer and run `convert_to_object_store_layout()`. It changes the repository to a version without the writer feature, publishes it as `repo`, then deletes `repo.d/`. It returns `True` if it converted the repository and `False` if it was in the object store layout already. A run interrupted before its change leaves the repository usable.
 
 ```python
 storage = icechunk.filesystem_storage("/path/to/my/dataset")
-storage.convert_to_standard_layout()
+storage.convert_to_object_store_layout()
 repo = icechunk.Repository.open(icechunk.local_filesystem_storage("/path/to/my/dataset"))
 ```
 
@@ -450,7 +450,7 @@ Also note:
 
 #### Forks
 
-A _fork_ is a `repo` file that doesn't list the `filesystem-layout-v1` writer feature, next to a `repo.d/` that doesn't hold it. `repo` and `repo.d/` then hold diverging histories. To other backends and older Icechunk versions, the `repo` side is an ordinary repository in the standard layout: they can commit to it and collect garbage in it, and that garbage collection deletes files that only the `repo.d/` history references.
+A _fork_ is a `repo` file that doesn't list the `filesystem-layout-v1` writer feature, next to a `repo.d/` that doesn't hold it. `repo` and `repo.d/` then hold diverging histories. To other backends and older Icechunk versions, the `repo` side is an ordinary repository in the object store layout: they can commit to it and collect garbage in it, and that garbage collection deletes files that only the `repo.d/` history references.
 
 Forks come only from unsupported writes of `repo`:
 
@@ -458,7 +458,7 @@ Forks come only from unsupported writes of `repo`:
 - **Writing `repo` by hand or with other tools**, such as copying a backup over it. Never write `repo` yourself: only `filesystem_storage` writes it.
 - **Writes through other backends that skip the writer-feature check**
 
-**Detection is best effort.** Before every publication of the mirror, and before the change of a conversion to the standard layout, `filesystem_storage` checks `repo`. On a fork, nothing is published or deleted, and the operation raises an error.
+**Detection is best effort.** Before every publication of the mirror, and before the change of a conversion to the object store layout, `filesystem_storage` checks `repo`. On a fork, nothing is published or deleted, and the operation raises an error.
 
 **Recovery** is manual and keeps one of the two histories. First stop every process that uses the repository, older Icechunk versions included.
 
@@ -473,7 +473,7 @@ _Keep `repo`_, dropping the changes made through `filesystem_storage` after the 
 
 1. Check that every object `repo` references exists: a mirror that lagged behind garbage collection can reference deleted objects.
 2. Archive `repo.d/`, then delete it.
-3. The repository is now in the standard layout. To return to the filesystem layout, convert it with `convert_to_filesystem_layout()`.
+3. The repository is now in the object store layout. To return to the filesystem layout, convert it with `convert_to_filesystem_layout()`.
 
 ### HTTP Storage
 

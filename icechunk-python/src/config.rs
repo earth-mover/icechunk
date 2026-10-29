@@ -3031,22 +3031,22 @@ impl PyFilesystemStorage {
         })
     }
 
-    fn convert_to_standard_layout(&self, py: Python<'_>) -> PyResult<bool> {
+    fn convert_to_object_store_layout(&self, py: Python<'_>) -> PyResult<bool> {
         let filesystem = Arc::clone(&self.filesystem);
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                converted(filesystem.convert_to_standard_layout().await)
+                converted(filesystem.convert_to_object_store_layout().await)
             })
         })
     }
 
-    fn convert_to_standard_layout_async<'py>(
+    fn convert_to_object_store_layout_async<'py>(
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, pyo3::PyAny>> {
         let filesystem = Arc::clone(&self.filesystem);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            converted(filesystem.convert_to_standard_layout().await)
+            converted(filesystem.convert_to_object_store_layout().await)
         })
     }
 

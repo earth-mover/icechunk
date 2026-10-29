@@ -180,8 +180,9 @@ fn marker(version: &VersionInfo) -> String {
 }
 
 /// Makes `bytes` the current version on top of `base` with plain file
-/// operations: how the conversion to the standard layout's change makes a
-/// version without the feature, which changes through the storage refuse.
+/// operations: how the change of the conversion to the object store layout
+/// makes a version without the feature, which changes through the storage
+/// refuse.
 fn plant_version(dir: &Path, bytes: &[u8], base: &VersionInfo) -> VersionInfo {
     let new = version(
         &format!("{:x}", Sha256::digest(bytes)),
@@ -611,14 +612,14 @@ async fn protocol_names_are_invalid_keys() {
 }
 
 #[tokio_test]
-async fn a_standard_repo_must_be_converted() {
+async fn an_object_store_repo_must_be_converted() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
-    let standard = featureless_repo_info(0);
-    std::fs::write(dir.path().join("repo"), &standard).unwrap();
+    let object_store_info = featureless_repo_info(0);
+    std::fs::write(dir.path().join("repo"), &object_store_info).unwrap();
 
     let message = assert_other_error(try_get_conditional(&st, None).await);
-    assert!(message.contains("standard layout"), "{message}");
+    assert!(message.contains("object store layout"), "{message}");
     assert!(message.contains("convert_to_filesystem_layout()"), "{message}");
     let message = assert_other_error(get_object(&st, "repo").await);
     assert!(message.contains("convert_to_filesystem_layout()"), "{message}");
@@ -626,7 +627,7 @@ async fn a_standard_repo_must_be_converted() {
         put_conditional(&st, "repo", &v0_bytes(), PutCondition::Create).await,
     );
     assert!(message.contains("convert_to_filesystem_layout()"), "{message}");
-    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), standard);
+    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), object_store_info);
 
     let before = now_ms();
     assert_eq!(
@@ -649,7 +650,7 @@ async fn a_standard_repo_must_be_converted() {
         Vec::from_iter(names(&dir.path().join("overwritten"))).try_into().unwrap();
     assert_eq!(
         std::fs::read(dir.path().join("overwritten").join(backup)).unwrap(),
-        standard
+        object_store_info
     );
     assert_eq!(
         st.convert_to_filesystem_layout().await.unwrap(),
@@ -679,9 +680,9 @@ async fn converting_nothing_is_not_found() {
 /// A repository listing writer features this storage doesn't implement is
 /// refused before anything is written; that needs features only test builds
 /// of `icechunk-format` write, so it is tested in `icechunk`. Here: an
-/// interrupted conversion to the standard layout.
+/// interrupted conversion to the object store layout.
 #[tokio_test]
-async fn converting_during_a_conversion_to_the_standard_layout_refuses() {
+async fn converting_during_a_conversion_to_the_object_store_layout_refuses() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
     let v0 = create(&st, &v0_bytes()).await;
@@ -689,14 +690,14 @@ async fn converting_during_a_conversion_to_the_standard_layout_refuses() {
     let before = tree(dir.path());
     let err = st.convert_to_filesystem_layout().await.unwrap_err();
     assert!(matches!(err.kind, StorageErrorKind::LayoutConversionInProgress(_)), "{err}");
-    assert!(err.to_string().contains("convert_to_standard_layout()"), "{err}");
+    assert!(err.to_string().contains("convert_to_object_store_layout()"), "{err}");
     assert_eq!(tree(dir.path()), before);
 }
 
-/// The current version without the feature becomes the standard `repo`, and
-/// `repo.d` goes; a conversion back works.
+/// The current version without the feature becomes `repo` in the object store
+/// layout, and `repo.d` goes; a conversion back works.
 #[tokio_test]
-async fn a_repository_converts_to_the_standard_layout_and_back() {
+async fn a_repository_converts_to_the_object_store_layout_and_back() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
     let v0 = create(&st, &v0_bytes()).await;
@@ -705,15 +706,15 @@ async fn a_repository_converts_to_the_standard_layout_and_back() {
         std::fs::read(dir.path().join("repo.d").join(version_file(&v1))).unwrap();
 
     assert_eq!(
-        st.convert_to_standard_layout().await.unwrap(),
+        st.convert_to_object_store_layout().await.unwrap(),
         ConversionOutcome::Converted
     );
     assert_eq!(
         names(dir.path()),
         BTreeSet::from(["overwritten".to_string(), "repo".to_string()])
     );
-    let standard = mirror(dir.path());
-    let info = icechunk_format::layout_v1::change_info(&standard).unwrap();
+    let object_store_info = mirror(dir.path());
+    let info = icechunk_format::layout_v1::change_info(&object_store_info).unwrap();
     assert!(!info.lists_feature);
     let attempt = info.attempt.unwrap().id;
     assert_eq!(
@@ -724,10 +725,10 @@ async fn a_repository_converts_to_the_standard_layout_and_back() {
         assert_other_error(try_get_conditional(&storage(dir.path()), None).await);
     assert!(message.contains("convert_to_filesystem_layout()"), "{message}");
     assert_eq!(
-        st.convert_to_standard_layout().await.unwrap(),
+        st.convert_to_object_store_layout().await.unwrap(),
         ConversionOutcome::NothingToConvert
     );
-    assert_eq!(mirror(dir.path()), standard);
+    assert_eq!(mirror(dir.path()), object_store_info);
 
     let st = storage(dir.path());
     assert_eq!(
@@ -739,48 +740,48 @@ async fn a_repository_converts_to_the_standard_layout_and_back() {
 }
 
 #[tokio_test]
-async fn converting_nothing_to_the_standard_layout_is_not_found() {
+async fn converting_nothing_to_the_object_store_layout_is_not_found() {
     let dir = tempfile::tempdir().unwrap();
-    let err = storage(dir.path()).convert_to_standard_layout().await.unwrap_err();
+    let err = storage(dir.path()).convert_to_object_store_layout().await.unwrap_err();
     assert!(matches!(err.kind, StorageErrorKind::ObjectNotFound), "{err}");
     assert_eq!(names(dir.path()), BTreeSet::new());
 }
 
-/// A conversion from the standard layout interrupted after its directory
-/// rename leaves the standard repo info in `$ROOT/repo`, no version of
-/// `repo.d`: converting to the standard layout instead of rerunning it stops,
-/// naming the conversion to rerun, and changes nothing.
+/// A conversion from the object store layout interrupted after its directory
+/// rename leaves the original repo info in `$ROOT/repo`, no version of
+/// `repo.d`: converting to the object store layout instead of rerunning it
+/// stops, naming the conversion to rerun, and changes nothing.
 #[tokio_test]
-async fn converting_to_standard_during_an_interrupted_conversion_from_it_is_a_fork() {
+async fn converting_to_object_store_during_an_interrupted_conversion_from_it_is_a_fork() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
-    let standard = featureless_repo_info(0);
-    std::fs::write(dir.path().join("repo"), &standard).unwrap();
+    let object_store_info = featureless_repo_info(0);
+    std::fs::write(dir.path().join("repo"), &object_store_info).unwrap();
     assert_eq!(
         st.convert_to_filesystem_layout().await.unwrap(),
         ConversionOutcome::Converted
     );
-    std::fs::write(dir.path().join("repo"), &standard).unwrap();
+    std::fs::write(dir.path().join("repo"), &object_store_info).unwrap();
     let before = tree(dir.path());
 
-    let err = st.convert_to_standard_layout().await.unwrap_err();
+    let err = st.convert_to_object_store_layout().await.unwrap_err();
     assert!(matches!(err.kind, StorageErrorKind::RepositoryForked(_)), "{err}");
     assert!(
         err.to_string().contains("rerunning convert_to_filesystem_layout()"),
         "{err}"
     );
     assert_eq!(tree(dir.path()), before);
-    assert_eq!(mirror(dir.path()), standard);
+    assert_eq!(mirror(dir.path()), object_store_info);
 }
 
 #[tokio_test]
-async fn converting_to_standard_refuses_an_unreadable_mirror() {
+async fn converting_to_object_store_refuses_an_unreadable_mirror() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
     create(&st, &v0_bytes()).await;
     plant_mirror(dir.path(), b"");
     let before = tree(dir.path());
-    let err = st.convert_to_standard_layout().await.unwrap_err();
+    let err = st.convert_to_object_store_layout().await.unwrap_err();
     assert!(matches!(err.kind, StorageErrorKind::MirrorUnreadable(_)), "{err}");
     assert_eq!(tree(dir.path()), before);
 }
@@ -970,7 +971,7 @@ async fn a_change_refuses_bytes_without_the_feature() {
     let before = tree(dir.path());
     let err = update(&st, &featureless_repo_info(1), &v0).await.unwrap_err();
     assert!(matches!(err.kind, StorageErrorKind::LayoutConversionInProgress(_)), "{err}");
-    assert!(err.to_string().contains("convert_to_standard_layout()"), "{err}");
+    assert!(err.to_string().contains("convert_to_object_store_layout()"), "{err}");
     let message = assert_other_error(update(&st, UNDECODABLE, &v0).await);
     assert!(message.contains("doesn't decode"), "{message}");
     assert_eq!(tree(dir.path()), before);
@@ -1286,13 +1287,13 @@ async fn publish_mirror_refuses_a_current_version_without_the_feature() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
     let v0 = create(&st, &v0_bytes()).await;
-    // What an interrupted conversion to the standard layout leaves.
+    // What an interrupted conversion to the object store layout leaves.
     let v1 = plant_version(dir.path(), &featureless_repo_info(1), &v0);
     let before = mirror(dir.path());
 
     let err = st.publish_mirror().await.err().unwrap();
     assert!(matches!(err.kind, StorageErrorKind::LayoutConversionInProgress(_)), "{err}");
-    assert!(err.to_string().contains("convert_to_standard_layout()"), "{err}");
+    assert!(err.to_string().contains("convert_to_object_store_layout()"), "{err}");
     assert_eq!(mirror(dir.path()), before);
     assert_eq!(names(&dir.path().join("repo.d")), settled(&v1));
 }
@@ -1381,7 +1382,7 @@ async fn gc_hook_without_a_change_is_refused_while_repo_d_exists() {
     plant_version(dir.path(), &featureless_repo_info(1), &v0);
     let err = gc_hook(&st, GcPhase::BeforeDeletes { changed: None }).await.unwrap_err();
     assert!(matches!(err.kind, StorageErrorKind::LayoutConversionInProgress(_)), "{err}");
-    assert!(err.to_string().contains("convert_to_standard_layout()"), "{err}");
+    assert!(err.to_string().contains("convert_to_object_store_layout()"), "{err}");
     assert_eq!(mirror(dir.path()), v0_bytes());
 }
 

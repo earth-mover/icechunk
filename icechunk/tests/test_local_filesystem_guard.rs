@@ -95,8 +95,9 @@ const READS: [Op; 3] = [Op::OpenAndListBranches, Op::ReadRepoFile, Op::DeleteOth
 
 const OTHER_OBJECT: &str = "guard-test/source";
 
-/// A standard repository with one commit on `main` and a `dev` branch, and
-/// the bytes of its repo info rewritten to list `filesystem-layout-v1`.
+/// A repository in the object store layout with one commit on `main` and a
+/// `dev` branch, and the bytes of its repo info rewritten to list
+/// `filesystem-layout-v1`.
 struct Template {
     dir: tempfile::TempDir,
     main_tip: SnapshotId,
@@ -142,8 +143,9 @@ async fn template() -> TestResult<Template> {
 }
 
 /// Deletes every unreachable object, dropping snapshots only when
-/// `drops_snapshots`: without that, GC on a standard repository makes no change
-/// and the hook before its deletes is the first write it attempts.
+/// `drops_snapshots`: without that, GC on a repository in the object store
+/// layout makes no change and the hook before its deletes is the first write it
+/// attempts.
 fn gc_config(drops_snapshots: bool) -> GCConfig {
     let cutoff = Utc::now() + Duration::hours(1);
     let metadata = if drops_snapshots {

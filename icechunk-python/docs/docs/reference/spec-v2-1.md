@@ -5,7 +5,7 @@ title: Specification
 
 !!! Note
 
-    This is Icechunk specification version 2.1, used by Icechunk 2.1.0 to 2.3.x. The current specification is [spec version 2.2](./spec-v2-2.md). For older on-disk formats, see [spec version 2](./spec-v2.md), and [spec version 1](./spec-v1.md). See [Changes from spec version 2 to 2.1](#changes-from-spec-version-2-to-21) for a summary of what changed.
+    This is the Icechunk specification, spec version 2.1. See [Spec versions](./version-policy.md#spec-versions) for the current version and the releases of the reference implementation that implement each. See [Changes from spec version 2 to 2.1](#changes-from-spec-version-2-to-21) for a summary of what changed.
 
 !!! Note
 

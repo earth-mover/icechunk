@@ -323,8 +323,8 @@ fn selftest_detects_every_case_in_both_modes() {
         "commit-without-publish",
         "gc-without-fork-check",
         "gc-publishes-listed",
-        "from-standard-without-provenance",
-        "to-standard-without-change",
+        "from-object-store-without-provenance",
+        "to-object-store-without-change",
         "delete-dir-before-publish",
     ];
     let storage = both.iter().chain(&["legacy-local"]).map(|case| ("storage", *case));

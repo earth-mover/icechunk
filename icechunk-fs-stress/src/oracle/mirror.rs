@@ -147,7 +147,7 @@ pub fn file_layout_defect(bytes: &[u8], statuses: RunStatuses) -> Option<String>
 /// Repository mode: the hashes of the versions that were current, the
 /// backups of the repo info in `overwritten/` and `current`, checking each
 /// distinct one for L1, except the backups named in `earlier_eras`: those
-/// the conversion scenario's earlier eras wrote, in the standard layout among
+/// the conversion scenario's earlier eras wrote, in the object store layout among
 /// them. Every backup is a copy of a version that was current when it was
 /// read: icechunk backs up the version it updates, conditionally on that
 /// version, and so do the conversions and the fork actor. An undecodable
@@ -829,8 +829,8 @@ mod tests {
         assert_eq!(layout_defect(&layout, Online), None);
         assert_eq!(layout_defect(&layout, Toggled), None);
 
-        let standard = initial_repo_info(&[]).unwrap();
-        let detail = file_layout_defect(&standard, Online).unwrap();
+        let object_store_info = initial_repo_info(&[]).unwrap();
+        let detail = file_layout_defect(&object_store_info, Online).unwrap();
         assert!(detail.contains("lists the writer features []"), "{detail}");
 
         let spec_version = layout.spec_version().unwrap();
@@ -1530,10 +1530,10 @@ mod tests {
         let overwritten = dir.path().join(BACKUP_DIR);
         fs::create_dir_all(&overwritten).unwrap();
         let layout = layout_repo_info();
-        let standard = initial_repo_info(&[]).unwrap().to_vec();
+        let object_store_info = initial_repo_info(&[]).unwrap().to_vec();
         fs::write(overwritten.join("repo.1.A"), &layout).unwrap();
         fs::write(overwritten.join("repo.2.B"), &layout).unwrap();
-        fs::write(overwritten.join("repo.3.C"), &standard).unwrap();
+        fs::write(overwritten.join("repo.3.C"), &object_store_info).unwrap();
         fs::write(overwritten.join("repo.4.D.staging.x"), b"torn").unwrap();
         fs::write(overwritten.join("config.yaml.5.E"), b"config").unwrap();
         let current = b"current".to_vec();
@@ -1548,8 +1548,10 @@ mod tests {
             &mut verdict,
         )
         .unwrap();
-        let expected: HashSet<String> =
-            [&layout, &standard, &current].into_iter().map(|b| payload_etag(b)).collect();
+        let expected: HashSet<String> = [&layout, &object_store_info, &current]
+            .into_iter()
+            .map(|b| payload_etag(b))
+            .collect();
         assert_eq!(was_current, expected);
         let what: Vec<&str> = verdict
             .violations
@@ -1575,7 +1577,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             with_earlier,
-            [&layout, &standard].into_iter().map(|b| payload_etag(b)).collect()
+            [&layout, &object_store_info].into_iter().map(|b| payload_etag(b)).collect()
         );
         assert_eq!(verdict.violations, []);
 

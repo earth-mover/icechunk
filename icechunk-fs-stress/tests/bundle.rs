@@ -322,7 +322,7 @@ fn scenario_root(root: &Path, phase_2_passed: bool) {
     storage_root(&root.join("storage"));
     run_root(&root.join("phase-1"), Some(true));
     run_root(&root.join("phase-2"), Some(phase_2_passed));
-    write(&root.join("phase-2/logs/scenario.from-standard.0.log"), "{}\n");
+    write(&root.join("phase-2/logs/scenario.from-object-store.0.log"), "{}\n");
 }
 
 #[test]
@@ -342,7 +342,7 @@ fn a_scenario_shares_one_storage_root() {
         "s/report.json",
         "s/phase-1/run.json",
         "s/phase-1/report.json",
-        "s/phase-2/logs/scenario.from-standard.0.log",
+        "s/phase-2/logs/scenario.from-object-store.0.log",
         "s/storage/repo",
         "s/storage/repo.d/v1",
     ] {

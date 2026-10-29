@@ -61,8 +61,9 @@ backups, is unchanged. On a filesystem, every other object is written to
 `<name>.staging.<id>` and renamed into place, or written directly under its
 final name when no reader can know that name before a change makes the object
 reachable, so no reader sees a partial object. Converting a repository between
-this layout and the standard layout rewrites only the repo info, in both
-directions.
+this layout and the *object store layout*, the single `$ROOT/repo` file that
+every other backend updates by conditional writes, rewrites only the repo info,
+in both directions.
 
 The new spec 2.2 allows for writer features. The repo info in this new layout
 lists the `filesystem-layout-v1` writer feature. Because Icechunk 2.0 to 2.3
@@ -84,7 +85,7 @@ refuses to modify the repository.
 | `repo.d/latest.<K>.<N>.<h>` | The marker: version `N` is current |
 | `repo.d/stage.<id>` | Staged bytes of a change attempt |
 | `repo.d/mirror.<id>` | A staged copy of the mirror |
-| `repo.d.tmp.<id>/` | A `repo.d` being built (creation, conversion from the standard layout) or deleted (conversion to the standard layout) |
+| `repo.d.tmp.<id>/` | A `repo.d` being built (creation, conversion from the object store layout) or deleted (conversion to the object store layout) |
 | `<name>.staging.<id>` | Staged bytes of the object `<name>`, in any directory |
 
 `N` is a decimal integer below `10^15` without leading zeros, `K` is its nines'
@@ -94,7 +95,7 @@ UUID in its hyphenated, lowercase form. A marker name parses only if `K` and `N`
 agree. Version files are immutable, and markers are only renamed.
 
 The first version of a `repo.d`, built by a creation or a conversion from the
-standard layout, has `N` equal to the Unix time in milliseconds when it was
+object store layout, has `N` equal to the Unix time in milliseconds when it was
 built. Each change adds one. The clock of the host that builds a `repo.d` must
 not lag the highest `N` of an earlier `repo.d` at the same path, because a stale
 listing can still show that directory's markers (see
@@ -136,12 +137,12 @@ place a copy of the version at `$ROOT/repo` with an exclusive link, then
 rename the directory to `repo.d`. A directory rename fails if the target
 exists and is not empty, so creation is exclusive.
 
-**Convert to the standard layout.** Make a change that removes the
+**Convert to the object store layout.** Make a change that removes the
 feature, publish that version as the mirror, rename `repo.d` to a
 `repo.d.tmp.<id>` and delete it.
 
-**Convert from the standard layout.** Back up `repo`, build `repo.d` from it as
-a creation does, and publish.
+**Convert from the object store layout.** Back up `repo`, build `repo.d` from
+it as a creation does, and publish.
 
 ## Invariants
 
@@ -158,7 +159,7 @@ a creation does, and publish.
    onto `$ROOT/repo` while it has `$ROOT/repo` open. No marker is ever
    opened. This avoids NFS silly-rename and cache issues.
 5. Every version in `repo.d` lists `filesystem-layout-v1`, except the last one,
-   made by a conversion to the standard layout: a change refuses bytes that
+   made by a conversion to the object store layout: a change refuses bytes that
    don't, and only that conversion's change writes them.
 6. Every version a publication copies is either one that a server-decided step
    of the same operation proved current, or one that a listing taken after that
@@ -185,7 +186,7 @@ showing the marker under two names or none, and a change or the sweep can delete
 a listed version file before it is read; in each case the reader lists again, a
 bounded number of times. A missing `repo.d` sends the reader back to
 [classifying the root](#opening). If the current version doesn't list
-`filesystem-layout-v1`, a conversion to the standard layout was interrupted:
+`filesystem-layout-v1`, a conversion to the object store layout was interrupted:
 reads work, but Icechunk refuses every modification, GC and `publish_mirror()`
 until that conversion is rerun.
 
@@ -283,7 +284,7 @@ late; the check catches it. If only `repo` fails the check, run
 The copy keeps the status `ReadOnly`. On a filesystem, `FilesystemStorage`
 can set it `Online` and write to it; on other storage it is read-only
 through its mirror. To get a writable copy on other storage, convert the
-source to the standard layout before copying it.
+source to the object store layout before copying it.
 
 ### GC
 
@@ -313,32 +314,32 @@ replaces. Creators can race: the directory rename picks one winner, and a
 loser that placed `$ROOT/repo` publishes the current version before
 reporting that the repository exists.
 
-### Conversion from the standard layout
+### Conversion from the object store layout
 
-`convert_to_filesystem_layout()` backs up the standard `repo` to `overwritten/`,
-builds a `repo.d.tmp.<id>/` whose first version is that repo info with
+`convert_to_filesystem_layout()` backs up `repo` to `overwritten/`, builds a
+`repo.d.tmp.<id>/` whose first version is that repo info with
 `filesystem-layout-v1` added (a `RepoStatusChangedUpdate` naming the backup),
-renames the directory to `repo.d`, and publishes the mirror over the standard
+renames the directory to `repo.d`, and publishes the mirror over the original
 `repo`. Until that publication, readers that don't implement the layout still
-find the standard repo info. A rerun after a crash between the rename and the
-publication finds `repo.d` next to a standard `repo`; it publishes only if a
-backup named or linked within the three newest files of `repo.d`'s ops log
-holds the bytes of that `repo`, proving this conversion built `repo.d` from it,
-and otherwise stops and reports. Its publication's fork check accepts that
-standard repo info. A rerun that finds a current version without the feature
-stops: a conversion to the standard layout is in progress.
+find the original repo info. A rerun after a crash between the rename and the
+publication finds `repo.d` next to a `repo` without the feature; it publishes
+only if a backup named or linked within the three newest files of `repo.d`'s ops
+log holds the bytes of that `repo`, proving this conversion built `repo.d` from
+it, and otherwise stops and reports. Its publication's fork check accepts that
+original repo info. A rerun that finds a current version without the feature
+stops: a conversion to the object store layout is in progress.
 
-### Conversion to the standard layout
+### Conversion to the object store layout
 
-`convert_to_standard_layout()` checks for a fork, then makes a change, like any
-other except that its new version doesn't list the feature: it removes
+`convert_to_object_store_layout()` checks for a fork, then makes a change, like
+any other except that its new version doesn't list the feature: it removes
 `filesystem-layout-v1` and the gate, keeping the repository's own status. The
 change's marker rename proves the version it converts is current, even under a
-stale listing. It then publishes that version, so `$ROOT/repo` becomes the
-standard repo info, renames `repo.d` to a `repo.d.tmp.<id>` and deletes it. From
-the change until the rerun finishes, the current version lacks the feature, so
-nothing else modifies the repository: a rerun finds that version and only
-publishes and deletes.
+stale listing. It then publishes that version, so `$ROOT/repo` becomes the repo
+info of the object store layout, renames `repo.d` to a `repo.d.tmp.<id>` and
+deletes it. From the change until the rerun finishes, the current version lacks
+the feature, so nothing else modifies the repository: a rerun finds that version
+and only publishes and deletes.
 
 ### Fsyncs
 
@@ -374,11 +375,11 @@ What the algorithm needs from the filesystem, and where:
 
 | # | Requirement | Needed by | Without it |
 | --- | --- | --- | --- |
-| 1 | Atomic `rename` by name, decided by the server, failing with `ENOENT` if the source name is gone | every change, GC's and the conversion to the standard layout's included | Lost update |
+| 1 | Atomic `rename` by name, decided by the server, failing with `ENOENT` if the source name is gone | every change, including GC's and that of the conversion to the object store layout | Lost update |
 | 2 | The same for renames between directories of `$ROOT` | the mirror's rename from `repo.d/mirror.<id>` to `$ROOT/repo` | A torn or missing mirror |
 | 3 | `link` into a new name, complete content behind it, failing with `EEXIST` if the name exists | publishing bytes, creation's `$ROOT/repo`, conditional creates of other objects | Changes fail; creation not exclusive |
-| 4 | Exclusive directory rename | creation, the conversion from the standard layout | Concurrent creations clobber each other |
-| 5 | Atomic directory rename | the conversion to the standard layout's rename of `repo.d` aside, the sweep's rename of build directories | A partly deleted `repo.d` |
+| 4 | Exclusive directory rename | creation, the conversion from the object store layout | Concurrent creations clobber each other |
+| 5 | Atomic directory rename | the rename of `repo.d` aside by the conversion to the object store layout, the sweep's rename of build directories | A partly deleted `repo.d` |
 | 6 | `unlink` by name | tidy-up, sweep, conversions | Garbage |
 | 7 | Listings that show only names that existed | reads, sweep, publications | Lost update |
 | 8 | Durable `fsync` | the change path, publications, conversions, every write | Power-loss damage |
@@ -388,37 +389,37 @@ What the algorithm needs from the filesystem, and where:
 ## Forks
 
 A *fork* is a `$ROOT/repo` that decodes without `filesystem-layout-v1` while
-`repo.d` exists, and isn't a version of `repo.d` or the standard repo info that
-an interrupted conversion from the standard layout is about to replace. It comes
-from something that doesn't implement the layout writing `$ROOT/repo`, all of it
-unsupported: an Icechunk 2.0 to 2.3 status change through the mirror, a write
-through another backend that skips the writer-feature check, or a person or tool
-copying a file over it. `repo` and `repo.d` then hold diverging histories, and
-to other implementations the `repo` side is an ordinary repository they can
-write and garbage-collect, deleting files only `repo.d` references. Icechunk
-2.4's `local_filesystem_storage` refuses GC and every write of `repo` while
-`repo.d` exists, so 2.4 itself can't fork the repository through the local
-backend.
+`repo.d` exists, and isn't a version of `repo.d` or the original repo info that
+an interrupted conversion from the object store layout is about to replace. It
+comes from something that doesn't implement the layout writing `$ROOT/repo`, all
+of it unsupported: an Icechunk 2.0 to 2.3 status change through the mirror, a
+write through another backend that skips the writer-feature check, or a person
+or tool copying a file over it. `repo` and `repo.d` then hold diverging
+histories, and to other implementations the `repo` side is an ordinary
+repository they can write and garbage-collect, deleting files only `repo.d`
+references. Icechunk 2.4's `local_filesystem_storage` refuses GC and every write
+of `repo` while `repo.d` exists, so 2.4 itself can't fork the repository through
+the local backend.
 
 Detection, the *fork check*, is best effort. Before every publication, and
-before the change of the conversion to the standard layout, the operation checks
-`$ROOT/repo`: missing, a copy of a version (by hash) or a repo info that lists
-the feature is not a fork; one without the feature is. On a fork nothing is
-published or deleted and the operation reports it; a change that already landed
-reports that it is durable. An unreadable `$ROOT/repo` is reported and never
-overwritten, but not called a fork. A fork written between a check and the
+before the change of the conversion to the object store layout, the operation
+checks `$ROOT/repo`: missing, a copy of a version (by hash) or a repo info that
+lists the feature is not a fork; one without the feature is. On a fork nothing
+is published or deleted and the operation reports it; a change that already
+landed reports that it is durable. An unreadable `$ROOT/repo` is reported and
+never overwritten, but not called a fork. A fork written between a check and the
 rename is overwritten without a report, and a stale listing on NFS or FUSE can
 produce a false report that running the operation again clears.
 
 Recovery is manual and keeps one of the two histories: keep `repo.d`, by moving
 `$ROOT/repo` aside and republishing, which drops the changes made through the
 fork; or keep `repo`, by archiving and deleting `repo.d`, which leaves a
-repository in the standard layout and drops the changes made through the layout
-after the fork. Either way, first check that the kept history's objects still
-exist, since garbage collection on the other side may have deleted some. An
-*orphan mirror*, a `$ROOT/repo` that lists the feature without a `repo.d`, means
-`repo.d` was deleted or not copied: restore it, or build `repo.d` from the
-mirror's bytes, losing the changes after it.
+repository in the object store layout and drops the changes made through the
+filesystem layout after the fork. Either way, first check that the kept
+history's objects still exist, since garbage collection on the other side may
+have deleted some. An *orphan mirror*, a `$ROOT/repo` that lists the feature
+without a `repo.d`, means `repo.d` was deleted or not copied: restore it, or
+build `repo.d` from the mirror's bytes, losing the changes after it.
 
 ## Old writers
 
@@ -441,16 +442,16 @@ Converting a repository once every other writer has stopped is safe.
 | Unproved publications | `publish_mirror()`, or a creation that lost its race, publishes the version its listing shows | An older version that was current may be installed | The next publication |
 | Never-current mirror | A creator places `$ROOT/repo`, loses the race and crashes before republishing | `$ROOT/repo` holds a first version that was never current | The next publication |
 | Administrative operations with other users | Anything else runs during a conversion | Undefined | Out of scope |
-| Standard write during an interrupted conversion | A library writes the standard `$ROOT/repo` between a conversion's crash and its rerun, in either direction | A fork; the rerun stops. After a conversion to the standard layout nothing is lost | Manual recovery |
+| Object-store-layout write during an interrupted conversion | A library writes `$ROOT/repo` as in the object store layout between a conversion's crash and its rerun, in either direction | A fork; the rerun stops. After a conversion to the object store layout nothing is lost | Manual recovery |
 | Readers during a conversion | Mid-conversion | Readers of `repo.d` and of `$ROOT/repo` see different things | The end of the conversion |
 | First `N` below an earlier `repo.d`'s | A new `repo.d` starts below an earlier one's highest `N` (clock lag, or more than one change per millisecond on average) | GC from a stale listing can delete the current version | Permanent if it happens |
-| Writer before a conversion's rerun | A writer changes the repository after an interrupted conversion from the standard layout, before its rerun | A false fork report; the change is durable | The rerun, while the conversion's backup is within the 3 ops-log files it reads; after more changes, manual recovery |
-| Wrong conversion instead of a rerun | The conversion to the standard layout runs while one from it is interrupted | It refuses and names the conversion to rerun | The rerun |
+| Writer before a conversion's rerun | A writer changes the repository after an interrupted conversion from the object store layout, before its rerun | A false fork report; the change is durable | The rerun, while the conversion's backup is within the 3 ops-log files it reads; after more changes, manual recovery |
+| Wrong conversion instead of a rerun | The conversion to the object store layout runs while one from it is interrupted | It refuses and names the conversion to rerun | The rerun |
 | Delayed NFSv3 duplicate request | A retransmitted rename of `repo.d` executes after a full round trip of conversions | `repo.d` moves aside | Manual recovery; theoretical |
 | Old creation while the mirror is missing | Icechunk 2.0 to 2.3 creates a repository over a root whose mirror is missing | A fork | Manual recovery |
 | False fork report | The fork check's own listing of `repo.d` is stale, or its read of `$ROOT/repo` comes from the client's cache (NFS, FUSE) | A fork report without a fork; nothing changes | Running the operation again |
 | Mirror steps back | The fork check reads an older `$ROOT/repo` from the client's cache (NFS, FUSE) | The publication installs its version over a newer one | The next publication |
-| Rerun misses `repo.d` | The rerun of an interrupted conversion to the standard layout lists `$ROOT` stale (NFS, FUSE) and misses `repo.d` | It reports nothing to convert and leaves `repo.d`, whose current version lacks the feature | Running it again once listings refresh |
+| Rerun misses `repo.d` | The rerun of an interrupted conversion to the object store layout lists `$ROOT` stale (NFS, FUSE) and misses `repo.d` | It reports nothing to convert and leaves `repo.d`, whose current version lacks the feature | Running it again once listings refresh |
 | Spurious conflict | Many changes land, or listings stay stale, after a change's lost reply | A conflict although the change landed | Never a false acknowledgement |
 
 ## Rejected alternative: compare-and-swap on a single `repo` file

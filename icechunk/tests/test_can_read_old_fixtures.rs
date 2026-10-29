@@ -45,8 +45,9 @@ fn generate_unknown_feature_fixture() -> Result<(), Box<dyn Error>> {
     add_test_feature(&dir)
 }
 
-/// Adds `test-feature-v1` to the standard-layout repository at `dir` with one
-/// status change, backing the replaced repo info up to `overwritten/`.
+/// Adds `test-feature-v1` to the repository in the object store layout at
+/// `dir` with one status change, backing the replaced repo info up to
+/// `overwritten/`.
 fn add_test_feature(dir: &Path) -> Result<(), Box<dyn Error>> {
     let repo = dir.join(REPO_INFO_FILE_PATH);
     let bytes = std::fs::read(&repo)?;
@@ -75,7 +76,7 @@ const DEEP_OPS_LOG_PAGE_SIZE: u16 = 50;
 const DEEP_OPS_LOG_CYCLES: i8 = 100;
 
 /// Writes, at the absolute path in `ICECHUNK_GENERATE_DEEP_OPS_LOG_FIXTURE`, a
-/// standard-layout repository listing `test-feature-v1` (like
+/// repository in the object store layout listing `test-feature-v1` (like
 /// `test-repo-v2-unknown-feature`) with a long ops log split into pages of
 /// [`DEEP_OPS_LOG_PAGE_SIZE`] entries, for checks against older Icechunk
 /// releases (not checked in).
@@ -83,7 +84,7 @@ const DEEP_OPS_LOG_CYCLES: i8 = 100;
 /// The history is written in the filesystem layout, where every status change
 /// stores the gate with `underlying`: [`DEEP_OPS_LOG_CYCLES`] cycles of a
 /// commit, three `ReadOnly`/`Online` status-change pairs, a branch created and
-/// deleted and a metadata change. Then it's converted to the standard layout
+/// deleted and a metadata change. Then it's converted to the object store layout
 /// and `test-feature-v1` is added. `group1/small_chunks` (int8, 5 chunks of 1)
 /// holds the cycle number: 0 on `dev` and the tag `v0`, the last cycle on
 /// `main` and the tag `last`.
@@ -167,7 +168,7 @@ async fn generate_deep_ops_log_fixture() -> Result<(), Box<dyn Error>> {
     repo.create_tag("last", &tip.ok_or("no cycles")?).await?;
     drop(repo);
 
-    let outcome = FilesystemStorage::new(dir)?.convert_to_standard_layout().await?;
+    let outcome = FilesystemStorage::new(dir)?.convert_to_object_store_layout().await?;
     if outcome != ConversionOutcome::Converted {
         return Err(format!("the conversion returned {outcome:?}").into());
     }

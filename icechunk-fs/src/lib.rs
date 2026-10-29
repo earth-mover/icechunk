@@ -34,8 +34,8 @@ pub use storage::{
 #[doc(hidden)]
 pub mod fault_injection {
     pub use crate::hooks::{
-        ConversionStep, CreationStep, FromStandardStep, Observed, Point, ProtocolHooks,
-        Sabotage, ToStandardStep,
+        ConversionStep, CreationStep, FromObjectStoreStep, Observed, Point,
+        ProtocolHooks, Sabotage, ToObjectStoreStep,
     };
 }
 

@@ -1,12 +1,12 @@
 //! The conversion scenario's rules, on the files a conversion leaves: it
 //! changes only the writer features, the gate and the ops log (C2), a
 //! finished one leaves the target layout and nothing else (C3), nothing
-//! overwrites the standard `$ROOT/repo` afterwards (C5), `repo.d` is deleted
-//! only once `$ROOT/repo` holds the conversion's version without the feature
-//! (C6), and a writer during an interrupted conversion to the standard layout
-//! fails with the error naming it (C7). C1 is the repository oracle over
-//! every phase's logs, C4 rule I1 on the first version a conversion from the
-//! standard layout builds.
+//! overwrites the converted `$ROOT/repo` afterwards (C5),
+//! `repo.d` is deleted only once `$ROOT/repo` holds the conversion's version
+//! without the feature (C6), and a writer during an interrupted conversion to
+//! the object store layout fails with the error naming it (C7). C1 is the
+//! repository oracle over every phase's logs, C4 rule I1 on the first version
+//! a conversion from the object store layout builds.
 
 use std::{fs, io, path::Path};
 
@@ -26,9 +26,9 @@ const REPO_D: &str = "repo.d";
 const TMP_PREFIX: &str = "repo.d.tmp.";
 const MARKER_PREFIX: &str = "latest.";
 
-/// The error of every refused change while a conversion to the standard
+/// The error of every refused change while a conversion to the object store
 /// layout is interrupted names this rerun.
-pub const TO_STANDARD_RERUN: &str = "convert_to_standard_layout()";
+pub const TO_OBJECT_STORE_RERUN: &str = "convert_to_object_store_layout()";
 
 fn decode(bytes: &[u8], what: &str) -> Result<RepoInfo, String> {
     repo_info_file::decode(bytes)
@@ -78,7 +78,7 @@ fn named_backup(bytes: &[u8]) -> Result<String, String> {
 
 /// C2: the defect of `after`, the repo info a conversion in `direction`
 /// wrote, against `before`, the backup its newest ops-log entry names: it
-/// must be `before` with only the writer feature added (from the standard
+/// must be `before` with only the writer feature added (from the object store
 /// layout) or removed with the gate (to it), the same status, and exactly
 /// one `RepoStatusChangedUpdate` on top of `before`'s ops log. `Err` only if
 /// the backup can't be read.
@@ -118,8 +118,8 @@ fn compare(
             .map_err(|err| field(&format!("the writer features of {which}"), err))
     };
     let (expected_before, expected_after) = match direction {
-        Direction::FromStandard => (vec![], vec![layout_v1::FEATURE.to_owned()]),
-        Direction::ToStandard => (vec![layout_v1::FEATURE.to_owned()], vec![]),
+        Direction::FromObjectStore => (vec![], vec![layout_v1::FEATURE.to_owned()]),
+        Direction::ToObjectStore => (vec![layout_v1::FEATURE.to_owned()], vec![]),
     };
     if features(&before, "the backup")? != expected_before {
         return Err(format!(
@@ -133,7 +133,7 @@ fn compare(
             features(&after, "the converted repo info")?
         ));
     }
-    if direction == Direction::ToStandard
+    if direction == Direction::ToObjectStore
         && !after
             .header()
             .map_err(|err| field("the header", err))?
@@ -222,7 +222,7 @@ fn compare(
 }
 
 /// C3: what keeps the storage root from being in the layout `direction`
-/// converts to, and nothing else: to the standard layout, a `$ROOT/repo`
+/// converts to, and nothing else: to the object store layout, a `$ROOT/repo`
 /// without writer features or gate, no `repo.d` and no `repo.d.tmp.*`; from
 /// it, `repo.d` with one marker whose version `$ROOT/repo` copies, listing
 /// the feature, and no `repo.d.tmp.*`.
@@ -239,7 +239,7 @@ pub fn end_state_defect(
     };
     let repo_d = storage_root.join(REPO_D);
     match direction {
-        Direction::ToStandard => {
+        Direction::ToObjectStore => {
             if exists(&repo_d)? {
                 return Ok(Some("repo.d exists".to_owned()));
             }
@@ -259,7 +259,7 @@ pub fn end_state_defect(
                 }
             })
         }
-        Direction::FromStandard => {
+        Direction::FromObjectStore => {
             if !exists(&repo_d)? {
                 return Ok(Some("there is no repo.d".to_owned()));
             }
@@ -298,7 +298,7 @@ pub fn end_state_defect(
     }
 }
 
-/// Whether the storage root is as a rerun of the conversion to the standard
+/// Whether the storage root is as a rerun of the conversion to the object store
 /// layout leaves it when its listing of the storage root misses `repo.d`
 /// (an accepted limit): `repo.d` is there, its current version, that of its
 /// highest marker, lacks the feature, and `$ROOT/repo` is a copy of it.
@@ -336,10 +336,10 @@ pub fn left_by_stale_root_listing(storage_root: &Path) -> anyhow::Result<bool> {
     Ok(current == mirror && matches!(layout_v1::lists_feature(&mirror), Ok(false)))
 }
 
-/// C5: what shows that something overwrote the standard repository after a
-/// conversion to the standard layout: a `repo.d`, or a `$ROOT/repo` that is
-/// missing or lists the feature.
-pub fn standard_overwritten(storage_root: &Path) -> anyhow::Result<Option<String>> {
+/// C5: what shows that something overwrote the repository after a conversion
+/// to the object store layout: a `repo.d`, or a `$ROOT/repo` that is missing
+/// or lists the feature.
+pub fn object_store_overwritten(storage_root: &Path) -> anyhow::Result<Option<String>> {
     if exists(&storage_root.join(REPO_D))? {
         return Ok(Some("repo.d exists".to_owned()));
     }
@@ -353,7 +353,7 @@ pub fn standard_overwritten(storage_root: &Path) -> anyhow::Result<Option<String
     })
 }
 
-/// C6, after any run of a conversion to the standard layout, finished or
+/// C6, after any run of a conversion to the object store layout, finished or
 /// not: once `repo.d` is gone, `$ROOT/repo` must be that conversion's
 /// version without the feature: it lists no feature, its newest entry is a
 /// status change, and it names a backup of a version with the feature.
@@ -386,17 +386,17 @@ pub fn deleted_history(storage_root: &Path) -> anyhow::Result<Option<String>> {
 }
 
 /// C7: what is wrong with the outcome of a writer attempt during an
-/// interrupted conversion to the standard layout, which must be refused with
+/// interrupted conversion to the object store layout, which must be refused with
 /// the error that names the conversion to rerun.
 pub fn writer_defect(result: Option<&OpResult>) -> Option<String> {
     match result {
         Some(OpResult::ConversionInProgress { message })
-            if message.contains(TO_STANDARD_RERUN) =>
+            if message.contains(TO_OBJECT_STORE_RERUN) =>
         {
             None
         }
         Some(OpResult::ConversionInProgress { message }) => {
-            Some(format!("refused without naming {TO_STANDARD_RERUN}: {message}"))
+            Some(format!("refused without naming {TO_OBJECT_STORE_RERUN}: {message}"))
         }
         Some(result) if result.landed().is_some() => Some("it landed".to_owned()),
         Some(result) => Some(format!("it failed otherwise: {result:?}")),
@@ -413,8 +413,9 @@ mod tests {
 
     use super::*;
 
-    /// A standard repository in `root` with one commit on `main`.
-    async fn standard(root: &Path) {
+    /// A repository in the object store layout in `root` with one commit on
+    /// `main`.
+    async fn object_store_repo(root: &Path) {
         let storage = new_local_filesystem_storage(root).await.unwrap();
         let repo = Repository::create(storage).execute().await.unwrap();
         let mut session = repo.writable_session("main").await.unwrap();
@@ -433,34 +434,34 @@ mod tests {
     async fn real_conversions_pass_c2_c3_c5_and_c6() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        standard(root).await;
-        assert_eq!(standard_overwritten(root).unwrap(), None);
+        object_store_repo(root).await;
+        assert_eq!(object_store_overwritten(root).unwrap(), None);
         let storage = FilesystemStorage::new(root).unwrap();
         storage.convert_to_filesystem_layout().await.unwrap();
         assert_eq!(
-            conversion_defect(Direction::FromStandard, &mirror(root), root).unwrap(),
+            conversion_defect(Direction::FromObjectStore, &mirror(root), root).unwrap(),
             None
         );
-        assert_eq!(end_state_defect(Direction::FromStandard, root).unwrap(), None);
-        assert!(end_state_defect(Direction::ToStandard, root).unwrap().is_some());
-        assert!(standard_overwritten(root).unwrap().is_some());
+        assert_eq!(end_state_defect(Direction::FromObjectStore, root).unwrap(), None);
+        assert!(end_state_defect(Direction::ToObjectStore, root).unwrap().is_some());
+        assert!(object_store_overwritten(root).unwrap().is_some());
         assert_eq!(deleted_history(root).unwrap(), None);
         assert!(!left_by_stale_root_listing(root).unwrap(), "repo lists the feature");
 
         let storage: Arc<FilesystemStorage> =
             Arc::new(FilesystemStorage::new(root).unwrap());
-        storage.convert_to_standard_layout().await.unwrap();
+        storage.convert_to_object_store_layout().await.unwrap();
         assert_eq!(
-            conversion_defect(Direction::ToStandard, &mirror(root), root).unwrap(),
+            conversion_defect(Direction::ToObjectStore, &mirror(root), root).unwrap(),
             None
         );
-        assert_eq!(end_state_defect(Direction::ToStandard, root).unwrap(), None);
-        assert_eq!(standard_overwritten(root).unwrap(), None);
+        assert_eq!(end_state_defect(Direction::ToObjectStore, root).unwrap(), None);
+        assert_eq!(object_store_overwritten(root).unwrap(), None);
         assert_eq!(deleted_history(root).unwrap(), None);
         assert!(!left_by_stale_root_listing(root).unwrap(), "no repo.d");
         // The wrong direction is a mismatch.
         assert!(
-            conversion_defect(Direction::FromStandard, &mirror(root), root)
+            conversion_defect(Direction::FromObjectStore, &mirror(root), root)
                 .unwrap()
                 .is_some()
         );
@@ -470,7 +471,7 @@ mod tests {
     async fn c2_wants_the_backup_and_nothing_else_changed() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        standard(root).await;
+        object_store_repo(root).await;
         FilesystemStorage::new(root)
             .unwrap()
             .convert_to_filesystem_layout()
@@ -484,7 +485,7 @@ mod tests {
         // A backup of another repo info: one with another ops log.
         let other = crate::fork::fork_bytes(&before, "repo.9.Z").unwrap();
         fs::write(&path, &other).unwrap();
-        let defect = conversion_defect(Direction::FromStandard, &after, root).unwrap();
+        let defect = conversion_defect(Direction::FromObjectStore, &after, root).unwrap();
         assert!(
             defect
                 .as_deref()
@@ -492,11 +493,11 @@ mod tests {
             "{defect:?}"
         );
         fs::remove_file(&path).unwrap();
-        let defect = conversion_defect(Direction::FromStandard, &after, root).unwrap();
+        let defect = conversion_defect(Direction::FromObjectStore, &after, root).unwrap();
         assert!(defect.as_deref().is_some_and(|d| d.contains("missing")), "{defect:?}");
         fs::write(&path, &before).unwrap();
         assert_eq!(
-            conversion_defect(Direction::FromStandard, &after, root).unwrap(),
+            conversion_defect(Direction::FromObjectStore, &after, root).unwrap(),
             None
         );
         // A repo info that changed a branch as well.
@@ -512,7 +513,7 @@ mod tests {
             )
             .unwrap();
         let tagged = repo_info_file::encode(&tagged, spec, 3).unwrap();
-        let defect = compare(Direction::FromStandard, &before, &tagged);
+        let defect = compare(Direction::FromObjectStore, &before, &tagged);
         assert!(defect.is_err(), "{defect:?}");
     }
 
@@ -520,7 +521,7 @@ mod tests {
     async fn c3_wants_the_target_layout_and_nothing_else() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        standard(root).await;
+        object_store_repo(root).await;
         FilesystemStorage::new(root)
             .unwrap()
             .convert_to_filesystem_layout()
@@ -532,7 +533,7 @@ mod tests {
         )]
         fs::create_dir(root.join(format!("{TMP_PREFIX}{}", uuid::Uuid::new_v4())))
             .unwrap();
-        let defect = end_state_defect(Direction::FromStandard, root).unwrap();
+        let defect = end_state_defect(Direction::FromObjectStore, root).unwrap();
         assert!(
             defect.as_deref().is_some_and(|d| d.contains("repo.d.tmp.")),
             "{defect:?}"
@@ -547,7 +548,7 @@ mod tests {
         let mirror_bytes = mirror(root);
         let other = crate::fork::fork_bytes(&mirror_bytes, "repo.9.Z").unwrap();
         fs::write(root.join(REPO_KEY), other).unwrap();
-        let defect = end_state_defect(Direction::FromStandard, root).unwrap();
+        let defect = end_state_defect(Direction::FromObjectStore, root).unwrap();
         assert!(defect.as_deref().is_some_and(|d| d.contains("copy")), "{defect:?}");
     }
 
@@ -557,7 +558,7 @@ mod tests {
     async fn c6_c3_and_c5_catch_repo_d_deleted_before_the_publication() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
-        standard(root).await;
+        object_store_repo(root).await;
         FilesystemStorage::new(root)
             .unwrap()
             .convert_to_filesystem_layout()
@@ -569,8 +570,8 @@ mod tests {
             defect.as_deref().is_some_and(|d| d.contains("still lists")),
             "{defect:?}"
         );
-        assert!(end_state_defect(Direction::ToStandard, root).unwrap().is_some());
-        assert!(standard_overwritten(root).unwrap().is_some());
+        assert!(end_state_defect(Direction::ToObjectStore, root).unwrap().is_some());
+        assert!(object_store_overwritten(root).unwrap().is_some());
     }
 
     #[test]
@@ -580,7 +581,7 @@ mod tests {
         };
         assert_eq!(
             writer_defect(Some(&refused(
-                "rerun convert_to_standard_layout() to complete it"
+                "rerun convert_to_object_store_layout() to complete it"
             ))),
             None
         );

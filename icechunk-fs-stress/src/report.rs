@@ -396,11 +396,13 @@ fn violation(v: &Violation) -> String {
         Violation::ConversionEndState { direction, detail } => {
             format!("ConversionEndState: {}: {detail}", conversion(*direction))
         }
-        Violation::OverwroteStandard { detail } => format!("OverwroteStandard: {detail}"),
+        Violation::OverwroteObjectStore { detail } => {
+            format!("OverwroteObjectStore: {detail}")
+        }
         Violation::DeletedHistory { detail } => format!("DeletedHistory: {detail}"),
         Violation::WriterDuringConversion { id, detail } => format!(
-            "WriterDuringConversion: {id}, during an interrupted conversion to the standard \
-             layout: {detail}"
+            "WriterDuringConversion: {id}, during an interrupted conversion to the object \
+             store layout: {detail}"
         ),
         Violation::ConversionRetried { direction, detail } => {
             conversion_retried(*direction, detail)
@@ -418,8 +420,8 @@ fn gc_after_fork(id: uuid::Uuid) -> String {
 
 fn conversion(direction: Direction) -> &'static str {
     match direction {
-        Direction::FromStandard => "convert_to_filesystem_layout()",
-        Direction::ToStandard => "convert_to_standard_layout()",
+        Direction::FromObjectStore => "convert_to_filesystem_layout()",
+        Direction::ToObjectStore => "convert_to_object_store_layout()",
     }
 }
 
@@ -510,7 +512,7 @@ fn warning(w: &Warning) -> String {
             conversion_retried(*direction, detail)
         }
         Warning::StaleRootListing { attempt, rerun_after_ms } => format!(
-            "StaleRootListing: run {attempt} of convert_to_standard_layout() returned \
+            "StaleRootListing: run {attempt} of convert_to_object_store_layout() returned \
              NothingToConvert and left repo.d, with repo its current version without the \
              feature: its listing of the storage root missed repo.d (an accepted limit); \
              running it again after {rerun_after_ms} ms"

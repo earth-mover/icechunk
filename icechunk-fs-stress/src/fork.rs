@@ -69,7 +69,7 @@ impl Fork {
 /// on `base`, naming `backup` on its newest entry: without writer features
 /// and without the gate. A `base` that lists the feature loses it, through
 /// the format's only way to change writer features, and then its status is
-/// set silently; a standard `base` gets the status change.
+/// set silently; a `base` in the object store layout gets the status change.
 pub fn fork_bytes(base: &[u8], backup: &str) -> anyhow::Result<Vec<u8>> {
     let format = |what: &'static str| {
         move |err: icechunk::format::IcechunkFormatError| {
@@ -319,9 +319,9 @@ mod tests {
             Some("repo.1.X")
         );
 
-        // A standard repo info gets a status change.
-        let standard = storage_mode::initial_repo_info(&[]).unwrap();
-        let fork = fork_bytes(&standard, "repo.2.Y").unwrap();
+        // A repo info in the object store layout gets a status change.
+        let object_store_info = storage_mode::initial_repo_info(&[]).unwrap();
+        let fork = fork_bytes(&object_store_info, "repo.2.Y").unwrap();
         assert!(!layout_v1::lists_feature(&fork).unwrap());
         assert_eq!(
             layout_v1::change_info(&fork)
@@ -331,7 +331,7 @@ mod tests {
                 .as_deref(),
             Some("repo.2.Y")
         );
-        assert_ne!(payload_etag(&fork), payload_etag(&standard));
+        assert_ne!(payload_etag(&fork), payload_etag(&object_store_info));
     }
 
     #[tokio::test]

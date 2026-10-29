@@ -123,7 +123,8 @@ def fs_storage(
 
 
 def readable_path(path: str, backend: str, tmp_path: Path) -> str:
-    """The filesystem backend refuses standard-layout repos: open a converted copy."""
+    """The filesystem backend refuses repos in the object store layout: open a
+    converted copy."""
     if backend != "filesystem":
         return path
     copy = tmp_path / "repo"

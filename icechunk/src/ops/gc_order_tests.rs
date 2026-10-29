@@ -492,10 +492,10 @@ async fn read_only_status_refuses_gc() -> TestResult {
     Ok(())
 }
 
-/// A standard repository: no change beyond dropping snapshots, and both hooks
-/// without a version, the first before the sweep.
+/// A repository in the object store layout: no change beyond dropping
+/// snapshots, and both hooks without a version, the first before the sweep.
 #[tokio_test]
-async fn standard_gc_calls_the_hooks_without_a_version() -> TestResult {
+async fn gc_in_the_object_store_layout_calls_the_hooks_without_a_version() -> TestResult {
     let storage = GcTestStorage::new(new_in_memory_storage().await?, false);
     let repo = repo_with_garbage(Arc::clone(&storage)).await?;
     storage.take_events();
@@ -509,7 +509,7 @@ async fn standard_gc_calls_the_hooks_without_a_version() -> TestResult {
     expected.push(Event::AfterDeletes(None));
     assert_eq!(events, expected);
 
-    // keeping snapshots, a standard GC changes nothing
+    // keeping snapshots, GC in the object store layout changes nothing
     let storage = GcTestStorage::new(new_in_memory_storage().await?, false);
     let repo = repo_with_garbage(Arc::clone(&storage)).await?;
     // the kept snapshots keep their chunks: give GC one to delete

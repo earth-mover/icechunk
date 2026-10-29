@@ -82,7 +82,7 @@ enum Search {
 /// Step 1 of a change: the new bytes list `filesystem-layout-v1`. Core adds
 /// the storage's required features at creation and copies them on every
 /// update, so bytes without it derive from a version that an interrupted
-/// conversion to the standard layout made current.
+/// conversion to the object store layout made current.
 pub(crate) fn check_change_bytes(bytes: Bytes) -> Result<ChangeBytes, ProtocolError> {
     let info = layout_v1::change_info(&bytes).map_err(|err| {
         ProtocolError::Other(format!(
@@ -92,7 +92,7 @@ pub(crate) fn check_change_bytes(bytes: Bytes) -> Result<ChangeBytes, ProtocolEr
     if !info.lists_feature {
         return Err(ProtocolError::ConversionInProgress(format!(
             "the new repo info doesn't list {}: it derives from a version that an \
-             interrupted conversion to the standard layout made current; nothing was \
+             interrupted conversion to the object store layout made current; nothing was \
              written",
             layout_v1::FEATURE
         )));
@@ -108,7 +108,7 @@ pub(crate) struct ChangeBytes {
 }
 
 impl ChangeBytes {
-    /// Without the check of step 1: the conversion to the standard layout
+    /// Without the check of step 1: the conversion to the object store layout
     /// writes bytes without the feature.
     pub(super) fn unchecked(bytes: Bytes) -> IcechunkResult<Self> {
         let attempt = layout_v1::change_info(&bytes)?.attempt;
@@ -168,7 +168,7 @@ impl RepoD<'_> {
 
     /// Steps 2 to 4 of a change, without the publication. The fsyncs here
     /// always run: a marker naming truncated bytes is the one state nothing
-    /// recovers from. The conversion to the standard layout calls it directly:
+    /// recovers from. The conversion to the object store layout calls it directly:
     /// it is the only caller that writes bytes without the feature.
     pub(super) fn attempt_change(
         &self,

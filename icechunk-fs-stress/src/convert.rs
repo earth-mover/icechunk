@@ -1,6 +1,6 @@
 //! The conversion scenario (`fs-stress convert-scenario`): on one storage
-//! root, in rounds, a repository in the standard layout is converted to the
-//! filesystem layout, stressed, converted back and written in the standard
+//! root, in rounds, a repository in the object store layout is converted to the
+//! filesystem layout, stressed, converted back and written in the object store
 //! layout again, while the converter is killed at random steps of both
 //! conversions and rerun. Each round is a phase with its own run root,
 //! `phase-<k>/`; the phases share `storage/`, and every check reads the logs
@@ -30,7 +30,7 @@ use icechunk_fs::{
     ConversionOutcome, FilesystemStorage,
     fault_injection::{
         ConversionStep, Point, ProtocolHooks, Sabotage as ProtocolSabotage,
-        ToStandardStep,
+        ToObjectStoreStep,
     },
 };
 use rand::{RngExt as _, rngs::StdRng};
@@ -51,7 +51,7 @@ use crate::{
         History, Verdict, Violation, Warning,
         conversion::{
             conversion_defect, deleted_history, end_state_defect,
-            left_by_stale_root_listing, standard_overwritten, writer_defect,
+            left_by_stale_root_listing, object_store_overwritten, writer_defect,
         },
         fork::check_forks,
         mirror::check_init_version,
@@ -77,27 +77,27 @@ pub struct ScenarioConfig {
     /// For each run of a conversion, the probability that its converter is
     /// killed at one of its steps, chosen at random.
     pub kill_probability: f64,
-    /// Commits in the standard layout before each conversion to the
+    /// Commits in the object store layout before each conversion to the
     /// filesystem layout.
-    pub standard_commits: u32,
+    pub object_store_commits: u32,
     pub fsync: bool,
     /// Set only by `selftest`, for the converters.
     #[serde(deserialize_with = "Option::deserialize")]
     pub sabotage: Option<Sabotage>,
-    /// Kills the first conversion from the standard layout after its
+    /// Kills the first conversion from the object store layout after its
     /// directory rename, then replaces `$ROOT/repo` as Icechunk 2.3 writes a
-    /// status change, before the rerun: a standard write during the
+    /// status change, before the rerun: an object-store-layout write during the
     /// interrupted conversion, which must stop the rerun.
-    pub plant_standard_write: bool,
-    /// Right after a conversion to the standard layout read the current
+    pub plant_object_store_write: bool,
+    /// Right after a conversion to the object store layout read the current
     /// version, a commit lands that publishes nothing: what a stale listing
     /// that hides it from the conversion shows. The conversion must convert
     /// it too.
     pub late_commit: bool,
-    /// The first run of each conversion is killed: from the standard layout
+    /// The first run of each conversion is killed: from the object store layout
     /// at a random step, to it right after its change or its publication,
     /// with a writer tried during the interruption (C7). The scenario fails
-    /// if no conversion from the standard layout was killed or C7 never ran.
+    /// if no conversion from the object store layout was killed or C7 never ran.
     pub guaranteed_kills: bool,
 }
 
@@ -144,13 +144,13 @@ impl ScenarioConfig {
 /// The converter's slot in a phase's logs.
 fn converter_slot(direction: Direction) -> &'static str {
     match direction {
-        Direction::FromStandard => "from-standard",
-        Direction::ToStandard => "to-standard",
+        Direction::FromObjectStore => "from-object-store",
+        Direction::ToObjectStore => "to-object-store",
     }
 }
 
 /// The slots of the scenario's other logs in a phase.
-const STANDARD_SLOT: &str = "standard";
+const OBJECT_STORE_SLOT: &str = "object-store";
 const WRITER_SLOT: &str = "writer";
 const PLANT_SLOT: &str = "plant";
 
@@ -158,7 +158,7 @@ const PLANT_SLOT: &str = "plant";
 /// killed.
 const MAX_RUNS: u32 = 12;
 const MAX_KILLS: u32 = 4;
-/// On a network filesystem, the reruns of a conversion to the standard
+/// On a network filesystem, the reruns of a conversion to the object store
 /// layout after runs that missed `repo.d` ([`Warning::StaleRootListing`]),
 /// on top of [`MAX_RUNS`]: the first after [`FIRST_STALE_ROOT_DELAY`], each
 /// later one after twice the delay before, at most [`MAX_STALE_ROOT_DELAY`].
@@ -186,18 +186,18 @@ fn stale_root_delay(k: u32) -> Duration {
 
 fn steps(direction: Direction) -> &'static [PointName] {
     match direction {
-        Direction::FromStandard => &[
-            PointName::FromStandardBackup,
-            PointName::FromStandardBuild,
-            PointName::FromStandardRenameDir,
-            PointName::FromStandardPublish,
+        Direction::FromObjectStore => &[
+            PointName::FromObjectStoreBackup,
+            PointName::FromObjectStoreBuild,
+            PointName::FromObjectStoreRenameDir,
+            PointName::FromObjectStorePublish,
         ],
-        Direction::ToStandard => &[
-            PointName::ToStandardForkCheck,
-            PointName::ToStandardChange,
-            PointName::ToStandardPublish,
-            PointName::ToStandardRenameDir,
-            PointName::ToStandardDeleteDir,
+        Direction::ToObjectStore => &[
+            PointName::ToObjectStoreForkCheck,
+            PointName::ToObjectStoreChange,
+            PointName::ToObjectStorePublish,
+            PointName::ToObjectStoreRenameDir,
+            PointName::ToObjectStoreDeleteDir,
         ],
     }
 }
@@ -213,14 +213,14 @@ struct Kills {
 }
 
 impl Kills {
-    /// With `guaranteed`: from the standard layout a random step; to it
+    /// With `guaranteed`: from the object store layout a random step; to it
     /// right after its change or its publication, where C7 runs.
     fn new(direction: Direction, guaranteed: bool, rng: &mut StdRng) -> Self {
         let guaranteed = guaranteed.then(|| {
             let steps = match direction {
-                Direction::FromStandard => steps(direction),
-                Direction::ToStandard => {
-                    &[PointName::ToStandardChange, PointName::ToStandardPublish][..]
+                Direction::FromObjectStore => steps(direction),
+                Direction::ToObjectStore => {
+                    &[PointName::ToObjectStoreChange, PointName::ToObjectStorePublish][..]
                 }
             };
             steps[rng.random_range(0..steps.len())]
@@ -261,8 +261,8 @@ impl ProtocolHooks for NoPublication {
 /// One run of a conversion in `direction`, the `attempt`th of the `round`,
 /// with `wrap` turning its fault hooks into the storage's: logs an intent
 /// and the outcome to `logs/scenario.<direction>.<attempt>.log`. With
-/// `late_commit`, the trigger at the conversion to the standard layout's
-/// fork-check step commits once.
+/// `late_commit`, the trigger at the fork-check step of the conversion to the
+/// object store layout commits once.
 async fn convert_with(
     root: &ScenarioRoot,
     config: &ScenarioConfig,
@@ -280,9 +280,10 @@ async fn convert_with(
     };
     let log = Arc::new(start_worker_log(&phase, &who)?);
     let mut hooks = FaultHooks::new(faults, config.sabotage, Arc::clone(&log));
-    if config.late_commit && direction == Direction::ToStandard {
-        let point =
-            Point::Conversion(ConversionStep::ToStandard(ToStandardStep::ForkCheck));
+    if config.late_commit && direction == Direction::ToObjectStore {
+        let point = Point::Conversion(ConversionStep::ToObjectStore(
+            ToObjectStoreStep::ForkCheck,
+        ));
         let trigger =
             Arc::new(Trigger::new(point, late_commit(&phase, config, &log, &who)));
         trigger.arm();
@@ -294,8 +295,8 @@ async fn convert_with(
     let id = uuid::Uuid::new_v4();
     log.append(&Record::Intent { t_ms: now_ms(), id, op: Op::Convert { direction } })?;
     let converted = match direction {
-        Direction::FromStandard => storage.convert_to_filesystem_layout().await,
-        Direction::ToStandard => storage.convert_to_standard_layout().await,
+        Direction::FromObjectStore => storage.convert_to_filesystem_layout().await,
+        Direction::ToObjectStore => storage.convert_to_object_store_layout().await,
     };
     let (result, run) = match converted {
         Ok(ConversionOutcome::Converted) => (
@@ -388,7 +389,7 @@ pub enum Converter {
     /// at the step, which leaves the files as a crash there does.
     #[cfg(test)]
     InProcess,
-    /// [`Converter::InProcess`], whose runs of the conversion to the standard
+    /// [`Converter::InProcess`], whose runs of the conversion to the object store
     /// layout numbered in `attempts` miss `repo.d`, as under a stale listing
     /// of the storage root: it is moved out of the storage root meanwhile.
     #[cfg(test)]
@@ -469,7 +470,7 @@ impl Converter {
             #[cfg(test)]
             Self::MissingRepoD { attempts } => {
                 let missing =
-                    direction == Direction::ToStandard && attempts.contains(&attempt);
+                    direction == Direction::ToObjectStore && attempts.contains(&attempt);
                 let repo_d = root.storage().join("repo.d");
                 let moved = root.root().join("repo.d.missed-by-a-stale-listing");
                 if missing {
@@ -527,14 +528,15 @@ impl Converter {
     }
 }
 
-/// What is wrong with the late commit the converters to the standard layout
+/// What is wrong with the late commit the converters to the object store layout
 /// logged in `logs`: it must have been acknowledged, or the case shows
 /// nothing.
 fn late_commit_defect(logs: &BTreeMap<LogName, Vec<Record>>) -> Option<String> {
     let records: Vec<&Record> = logs
         .iter()
         .filter(|(name, _)| {
-            name.tag == SCENARIO_TAG && name.slot == converter_slot(Direction::ToStandard)
+            name.tag == SCENARIO_TAG
+                && name.slot == converter_slot(Direction::ToObjectStore)
         })
         .flat_map(|(_, records)| records)
         .collect();
@@ -633,9 +635,9 @@ pub async fn convert_scenario(
     }
     let first = root.phase(1);
     first.create_dirs()?;
-    eprintln!("creating a repository in the standard layout");
-    create_standard(&first).await?;
-    scenario.standard_commits(&first).await?;
+    eprintln!("creating a repository in the object store layout");
+    create_object_store(&first).await?;
+    scenario.object_store_commits(&first).await?;
     let mut finished = true;
     for round in 1..=config.rounds {
         if round > 1 {
@@ -647,8 +649,8 @@ pub async fn convert_scenario(
         }
     }
     if finished {
-        eprintln!("checking every acknowledged change in the standard layout");
-        scenario.check_standard_side(None).await?;
+        eprintln!("checking every acknowledged change in the object store layout");
+        scenario.check_object_store_side(None).await?;
     }
     scenario.finish(finished)
 }
@@ -672,7 +674,7 @@ fn create_root(root: &ScenarioRoot, config: &ScenarioConfig) -> anyhow::Result<(
         .with_context(|| format!("writing {}", root.scenario_json().display()))
 }
 
-async fn create_standard(phase: &RunRoot) -> anyhow::Result<()> {
+async fn create_object_store(phase: &RunRoot) -> anyhow::Result<()> {
     let storage = new_local_filesystem_storage(&phase.storage()).await?;
     Repository::create(storage)
         .execute()
@@ -696,7 +698,7 @@ impl Scenario<'_> {
         let phase = self.root.phase(round);
         eprintln!("round {round}: converting to the filesystem layout");
         let t_before_ms = now_ms();
-        if !self.convert(round, Direction::FromStandard).await? {
+        if !self.convert(round, Direction::FromObjectStore).await? {
             return Ok(false);
         }
         let t_after_ms = now_ms();
@@ -734,25 +736,25 @@ impl Scenario<'_> {
             check_init_version(&history, &mut self.verdict);
         }
 
-        eprintln!("round {round}: converting to the standard layout");
-        if !self.convert(round, Direction::ToStandard).await? {
+        eprintln!("round {round}: converting to the object store layout");
+        if !self.convert(round, Direction::ToObjectStore).await? {
             return Ok(false);
         }
         // The last round's is the scenario's final check, after its commits.
         if round < self.config.rounds {
-            self.check_standard_side(Some(round)).await?;
+            self.check_object_store_side(Some(round)).await?;
         }
-        eprintln!("round {round}: commits in the standard layout");
-        self.standard_commits(&phase).await?;
-        if let Some(detail) = standard_overwritten(&self.root.storage())? {
-            self.verdict.violations.push(Violation::OverwroteStandard { detail });
+        eprintln!("round {round}: commits in the object store layout");
+        self.object_store_commits(&phase).await?;
+        if let Some(detail) = object_store_overwritten(&self.root.storage())? {
+            self.verdict.violations.push(Violation::OverwroteObjectStore { detail });
         }
         self.earlier.push(read_all_logs(&phase)?);
         Ok(true)
     }
 
     /// Runs a conversion until it finishes, killing some runs, and checks
-    /// it: C6 after every run of a conversion to the standard layout, C7
+    /// it: C6 after every run of a conversion to the object store layout, C7
     /// after one killed after its change, then C2 and C3. Whether it
     /// finished; a conversion that couldn't is a [`Violation::ConversionEndState`].
     async fn convert(
@@ -771,12 +773,12 @@ impl Scenario<'_> {
                 break;
             }
             let attempt = next_incarnation(&phase, converter_slot(direction));
-            let plant = self.config.plant_standard_write
-                && direction == Direction::FromStandard
+            let plant = self.config.plant_object_store_write
+                && direction == Direction::FromObjectStore
                 && round == 1
                 && run == 0;
             let kill_at = if plant {
-                Some(PointName::FromStandardRenameDir)
+                Some(PointName::FromObjectStoreRenameDir)
             } else if let Some(planned) = self.kill_plan.pop_front() {
                 planned
             } else {
@@ -784,7 +786,7 @@ impl Scenario<'_> {
             };
             let run =
                 self.converter.run(self.root, round, direction, attempt, kill_at).await?;
-            if direction == Direction::ToStandard
+            if direction == Direction::ToObjectStore
                 && let Some(detail) = deleted_history(&storage)?
             {
                 self.verdict.violations.push(Violation::DeletedHistory { detail });
@@ -798,7 +800,10 @@ impl Scenario<'_> {
                     eprintln!("  run {attempt} killed at {kill_at:?}; running it again");
                     if matches!(
                         kill_at,
-                        Some(PointName::ToStandardChange | PointName::ToStandardPublish)
+                        Some(
+                            PointName::ToObjectStoreChange
+                                | PointName::ToObjectStorePublish
+                        )
                     ) {
                         self.writer_during_conversion(round).await?;
                     }
@@ -827,7 +832,7 @@ impl Scenario<'_> {
             match result {
                 OpResult::Ack { .. }
                     if nothing_to_convert
-                        && direction == Direction::ToStandard
+                        && direction == Direction::ToObjectStore
                         && self.network_fs
                         && left_by_stale_root_listing(&storage)? =>
                 {
@@ -855,7 +860,7 @@ impl Scenario<'_> {
                 }
                 OpResult::Ack { .. } => {
                     self.check_converted(direction)?;
-                    if self.config.late_commit && direction == Direction::ToStandard {
+                    if self.config.late_commit && direction == Direction::ToObjectStore {
                         let logs = read_all_logs(&phase)?;
                         if let Some(detail) = late_commit_defect(&logs) {
                             self.verdict.violations.push(Violation::Harness { detail });
@@ -942,7 +947,7 @@ impl Scenario<'_> {
     }
 
     /// C7: a writer through the filesystem storage while the conversion to
-    /// the standard layout is interrupted after its change.
+    /// the object store layout is interrupted after its change.
     async fn writer_during_conversion(&mut self, round: u32) -> anyhow::Result<()> {
         let phase = self.root.phase(round);
         let who = WorkerId {
@@ -985,7 +990,7 @@ impl Scenario<'_> {
         Ok(())
     }
 
-    /// The planted standard write: `$ROOT/repo` replaced as Icechunk 2.3
+    /// The planted object-store-layout write: `$ROOT/repo` replaced as Icechunk 2.3
     /// writes a status change, logged as a fork. Returns its hash.
     fn plant(&self, round: u32) -> anyhow::Result<String> {
         let phase = self.root.phase(round);
@@ -1003,11 +1008,11 @@ impl Scenario<'_> {
         while now_ms() <= fork.t_after_ms {
             std::thread::sleep(Duration::from_millis(1));
         }
-        eprintln!("  planted a standard write in repo");
+        eprintln!("  planted an object-store-layout write in repo");
         Ok(fork.fork_hash)
     }
 
-    /// The rerun after the planted standard write must have stopped,
+    /// The rerun after the planted object-store-layout write must have stopped,
     /// leaving it in place; then the scenario can't go on, as recovery is
     /// manual. An erased planted write is logged as a fork's erasure, for
     /// F4.
@@ -1018,7 +1023,7 @@ impl Scenario<'_> {
         result: &OpResult,
     ) -> anyhow::Result<bool> {
         let phase = self.root.phase(round);
-        let direction = Direction::FromStandard;
+        let direction = Direction::FromObjectStore;
         if let Some(found) = erased(&phase.storage(), fork_hash) {
             let who = WorkerId {
                 tag: SCENARIO_TAG.to_owned(),
@@ -1033,7 +1038,7 @@ impl Scenario<'_> {
             self.verdict.violations.push(Violation::ConversionEndState {
                 direction,
                 detail: format!(
-                    "the rerun after a standard write to repo during the interrupted \
+                    "the rerun after an object-store-layout write to repo during the interrupted \
                      conversion ({result:?}) erased that write"
                 ),
             });
@@ -1041,14 +1046,14 @@ impl Scenario<'_> {
             self.verdict.violations.push(Violation::ConversionEndState {
                 direction,
                 detail:
-                    "the rerun after a standard write to repo during the interrupted \
+                    "the rerun after an object-store-layout write to repo during the interrupted \
                          conversion reported success"
                         .to_owned(),
             });
         } else {
             self.notes.push(format!(
-                "round {round}: the standard write planted during the interrupted conversion \
-                 stopped its rerun, as it must ({result:?}); recovery is manual, so the \
+                "round {round}: the object-store-layout write planted during the interrupted \
+                 conversion stopped its rerun, as it must ({result:?}); recovery is manual, so the \
                  scenario ends there"
             ));
         }
@@ -1057,10 +1062,13 @@ impl Scenario<'_> {
         Ok(false)
     }
 
-    /// C1 in the standard layout: the repository oracle, through the
-    /// standard local storage, over the logs of every phase, `round`'s
+    /// C1 in the object store layout: the repository oracle, through
+    /// `local_filesystem_storage`, over the logs of every phase, `round`'s
     /// included if given.
-    async fn check_standard_side(&mut self, round: Option<u32>) -> anyhow::Result<()> {
+    async fn check_object_store_side(
+        &mut self,
+        round: Option<u32>,
+    ) -> anyhow::Result<()> {
         let own = match round {
             Some(round) => read_all_logs(&self.root.phase(round))?,
             None => BTreeMap::new(),
@@ -1069,7 +1077,10 @@ impl Scenario<'_> {
             .after_earlier_phases(&self.earlier);
         let storage = new_local_filesystem_storage(&self.root.storage()).await?;
         let repo = Repository::open(storage).execute().await.map_err(|err| {
-            anyhow::anyhow!("opening the standard repository: {}", err.kind())
+            anyhow::anyhow!(
+                "opening the repository in the object store layout: {}",
+                err.kind()
+            )
         })?;
         let mut checked = Verdict::default();
         check_repo(
@@ -1086,26 +1097,31 @@ impl Scenario<'_> {
         Ok(())
     }
 
-    /// `standard_commits` commits to `main` in the standard layout, through
-    /// the standard local storage, logged in `phase`.
-    async fn standard_commits(&mut self, phase: &RunRoot) -> anyhow::Result<()> {
+    /// `object_store_commits` commits to `main` in the object store layout,
+    /// through `local_filesystem_storage`, logged in `phase`.
+    async fn object_store_commits(&mut self, phase: &RunRoot) -> anyhow::Result<()> {
         let who = WorkerId {
             tag: SCENARIO_TAG.to_owned(),
-            slot: STANDARD_SLOT.to_owned(),
-            incarnation: next_incarnation(phase, STANDARD_SLOT),
+            slot: OBJECT_STORE_SLOT.to_owned(),
+            incarnation: next_incarnation(phase, OBJECT_STORE_SLOT),
         };
         let log = Arc::new(start_worker_log(phase, &who)?);
         let storage = new_local_filesystem_storage(&phase.storage()).await?;
         let repo = Repository::open(storage).execute().await.map_err(|err| {
-            anyhow::anyhow!("opening the standard repository: {}", err.kind())
+            anyhow::anyhow!(
+                "opening the repository in the object store layout: {}",
+                err.kind()
+            )
         })?;
         let mut worker =
             RepoWorker::new(repo, log, &who, self.config.run_config().chunk_bytes)?;
-        for _ in 0..self.config.standard_commits {
+        for _ in 0..self.config.object_store_commits {
             let result = worker.logged_main_commit().await?;
             if result.landed().is_none() {
                 self.verdict.violations.push(Violation::Recovery {
-                    detail: format!("a commit in the standard layout failed: {result:?}"),
+                    detail: format!(
+                        "a commit in the object store layout failed: {result:?}"
+                    ),
                 });
             }
         }
@@ -1137,17 +1153,17 @@ impl Scenario<'_> {
             if !self
                 .killed
                 .iter()
-                .any(|(_, direction, _)| *direction == Direction::FromStandard)
+                .any(|(_, direction, _)| *direction == Direction::FromObjectStore)
             {
                 missing.push(
-                    "no run of a conversion from the standard layout was killed"
+                    "no run of a conversion from the object store layout was killed"
                         .to_owned(),
                 );
             }
             if self.c7_writers == 0 {
                 missing.push(
                     "C7 never ran: no writer was tried during an interrupted conversion to the \
-                     standard layout"
+                     object store layout"
                         .to_owned(),
                 );
             }
@@ -1403,7 +1419,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// Each round kills one conversion run from the standard layout and one
+    /// Each round kills one conversion run from the object store layout and one
     /// to it after its change or publication, with a C7 writer, and says so.
     #[tokio::test]
     async fn every_round_kills_both_conversions_and_runs_c7() {
@@ -1416,12 +1432,16 @@ pub(crate) mod tests {
             .find(|note| note.contains("converter runs killed at"))
             .unwrap();
         for round in 1..=config.rounds {
-            assert!(note.contains(&format!("round {round} from-standard: ")), "{note}");
             assert!(
-                note.contains(&format!("round {round} to-standard: to_standard_change"))
-                    || note.contains(&format!(
-                        "round {round} to-standard: to_standard_publish"
-                    )),
+                note.contains(&format!("round {round} from-object-store: ")),
+                "{note}"
+            );
+            assert!(
+                note.contains(&format!(
+                    "round {round} to-object-store: to_object_store_change"
+                )) || note.contains(&format!(
+                    "round {round} to-object-store: to_object_store_publish"
+                )),
                 "{note}"
             );
         }
@@ -1444,7 +1464,11 @@ pub(crate) mod tests {
             notes: vec![],
             earlier: vec![],
             rng: rand::make_rng(),
-            killed: vec![(1, Direction::ToStandard, PointName::ToStandardRenameDir)],
+            killed: vec![(
+                1,
+                Direction::ToObjectStore,
+                PointName::ToObjectStoreRenameDir,
+            )],
             c7_writers: 0,
             kill_plan: std::collections::VecDeque::new(),
         };
@@ -1460,16 +1484,13 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(details.len(), 2, "{details:?}");
         assert!(
-            details[0].contains("from the standard layout was killed"),
+            details[0].contains("from the object store layout was killed"),
             "{details:?}"
         );
         assert!(details[1].starts_with("C7 never ran"), "{details:?}");
-        assert!(
-            report
-                .notes
-                .iter()
-                .any(|note| note.contains("round 1 to-standard: to_standard_rename_dir"))
-        );
+        assert!(report.notes.iter().any(|note| {
+            note.contains("round 1 to-object-store: to_object_store_rename_dir")
+        }));
     }
 
     /// A storage root converted to the filesystem layout, and a scenario on it.
@@ -1478,9 +1499,9 @@ pub(crate) mod tests {
         create_root(&root, config).unwrap();
         let phase = root.phase(1);
         phase.create_dirs().unwrap();
-        create_standard(&phase).await.unwrap();
+        create_object_store(&phase).await.unwrap();
         let run = Converter::InProcess
-            .run(&root, 1, Direction::FromStandard, 0, None)
+            .run(&root, 1, Direction::FromObjectStore, 0, None)
             .await
             .unwrap();
         assert_eq!(run, Run::Finished(OpResult::Ack { snapshot: None }));
@@ -1531,7 +1552,7 @@ pub(crate) mod tests {
             .unwrap();
         fs::write(storage.join(REPO_KEY), ahead).unwrap();
         let Run::Finished(result) = Converter::InProcess
-            .run(&root, 1, Direction::ToStandard, 0, None)
+            .run(&root, 1, Direction::ToObjectStore, 0, None)
             .await
             .unwrap()
         else {
@@ -1544,7 +1565,7 @@ pub(crate) mod tests {
         for network_fs in [false, true] {
             let mut scenario = scenario(&root, &config, network_fs);
             assert!(scenario.as_under_stale_listings(&result).unwrap());
-            scenario.retried(Direction::ToStandard, "run 0".to_owned());
+            scenario.retried(Direction::ToObjectStore, "run 0".to_owned());
             let (violations, warnings) =
                 (scenario.verdict.violations.len(), scenario.verdict.warnings.len());
             assert_eq!((violations, warnings), if network_fs { (0, 1) } else { (1, 0) });
@@ -1576,12 +1597,12 @@ pub(crate) mod tests {
         let converter = Converter::MissingRepoD { attempts: missing };
         let mut scenario =
             Scenario { converter: &converter, ..scenario(root, config, network_fs) };
-        scenario.kill_plan = [Some(PointName::ToStandardPublish)].into();
-        let finished = scenario.convert(1, Direction::ToStandard).await.unwrap();
+        scenario.kill_plan = [Some(PointName::ToObjectStorePublish)].into();
+        let finished = scenario.convert(1, Direction::ToObjectStore).await.unwrap();
         (finished, scenario.verdict)
     }
 
-    /// A rerun of the conversion to the standard layout whose listing of the
+    /// A rerun of the conversion to the object store layout whose listing of the
     /// storage root misses `repo.d` returns `NothingToConvert` and leaves it:
     /// on a network filesystem a warning, and the conversion runs again; on a
     /// local one a violation.
@@ -1600,7 +1621,7 @@ pub(crate) mod tests {
             [Warning::StaleRootListing { attempt: 1, rerun_after_ms: first }]
         );
         assert_eq!(
-            end_state_defect(Direction::ToStandard, &root.storage()).unwrap(),
+            end_state_defect(Direction::ToObjectStore, &root.storage()).unwrap(),
             None
         );
 
@@ -1642,7 +1663,7 @@ pub(crate) mod tests {
         assert!(
             matches!(
                 &verdict.violations[..],
-                [Violation::ConversionEndState { direction: Direction::ToStandard, detail }]
+                [Violation::ConversionEndState { direction: Direction::ToObjectStore, detail }]
                     if detail.contains("repo.d exists") && detail.contains("never")
             ),
             "{:?}",
@@ -1654,7 +1675,7 @@ pub(crate) mod tests {
     fn the_late_commit_must_be_acknowledged() {
         let name = LogName {
             tag: SCENARIO_TAG.to_owned(),
-            slot: "to-standard".to_owned(),
+            slot: "to-object-store".to_owned(),
             incarnation: Some(0),
         };
         let id = uuid::Uuid::new_v4();
@@ -1689,7 +1710,7 @@ pub(crate) mod tests {
         create_root(&root, &config).unwrap();
         let mut early = scenario(&root, &config, false);
         let found = Violation::ConversionEndState {
-            direction: Direction::FromStandard,
+            direction: Direction::FromObjectStore,
             detail: "boom".to_owned(),
         };
         early.verdict.violations.push(found.clone());
@@ -1712,13 +1733,13 @@ pub(crate) mod tests {
     #[test]
     fn a_guaranteed_kill_waits_for_a_run_killed_at_it() {
         let mut rng: StdRng = rand::make_rng();
-        for direction in [Direction::FromStandard, Direction::ToStandard] {
+        for direction in [Direction::FromObjectStore, Direction::ToObjectStore] {
             let mut kills = Kills::new(direction, true, &mut rng);
             let step = kills.choose(&mut rng, 0.0).unwrap();
-            if direction == Direction::ToStandard {
+            if direction == Direction::ToObjectStore {
                 assert!(matches!(
                     step,
-                    PointName::ToStandardChange | PointName::ToStandardPublish
+                    PointName::ToObjectStoreChange | PointName::ToObjectStorePublish
                 ));
             }
             // Run 0 ended before reaching it: run 1 inherits it.
@@ -1727,7 +1748,7 @@ pub(crate) mod tests {
             assert_eq!(kills.choose(&mut rng, 0.0), None);
             assert!(kills.choose(&mut rng, 1.0).is_some());
         }
-        let mut kills = Kills::new(Direction::ToStandard, false, &mut rng);
+        let mut kills = Kills::new(Direction::ToObjectStore, false, &mut rng);
         assert_eq!(kills.choose(&mut rng, 0.0), None);
         for _ in 0..MAX_KILLS {
             let step = kills.choose(&mut rng, 1.0).unwrap();
@@ -1744,7 +1765,7 @@ pub(crate) mod tests {
             Record::Intent {
                 t_ms: 1,
                 id: convert,
-                op: Op::Convert { direction: Direction::ToStandard },
+                op: Op::Convert { direction: Direction::ToObjectStore },
             },
             Record::Intent { t_ms: 2, id: late, op: Op::MainCommit },
             Record::Outcome { t_ms: 3, id: late, result: OpResult::Conflict },
@@ -1764,10 +1785,10 @@ pub(crate) mod tests {
             stress: None,
             workers: 1,
             kill_probability: 0.0,
-            standard_commits: 2,
+            object_store_commits: 2,
             fsync: false,
             sabotage: None,
-            plant_standard_write: false,
+            plant_object_store_write: false,
             late_commit: false,
             guaranteed_kills: false,
         }
@@ -1799,9 +1820,9 @@ pub(crate) mod tests {
         let (_dir, root, report) = run(&config()).await;
         assert!(report.passed, "{}", report.summary());
         assert_eq!(Report::load(&root.top()).unwrap(), report);
-        assert_eq!(standard_overwritten(&root.storage()).unwrap(), None);
-        // Two commits in each of the three standard eras, and two conversions
-        // per round, every one checked.
+        assert_eq!(object_store_overwritten(&root.storage()).unwrap(), None);
+        // Two commits in each of the three eras in the object store layout, and
+        // two conversions per round, every one checked.
         assert_eq!(report.verdict.stats.acks, 3 * 2 + 2 * 2, "{}", report.summary());
     }
 
@@ -1819,9 +1840,9 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_planted_standard_write_stops_the_rerun() {
+    async fn a_planted_object_store_write_stops_the_rerun() {
         let mut config = config();
-        config.plant_standard_write = true;
+        config.plant_object_store_write = true;
         let (_dir, _root, report) = run(&config).await;
         assert!(report.passed, "{}", report.summary());
         assert!(
@@ -1829,7 +1850,7 @@ pub(crate) mod tests {
             "{:?}",
             report.notes
         );
-        config.sabotage = Some(Sabotage::FromStandardWithoutProvenance);
+        config.sabotage = Some(Sabotage::FromObjectStoreWithoutProvenance);
         let (_dir, _root, report) = run(&config).await;
         let kinds = kinds(&report);
         assert!(kinds.contains(&"ConversionEndState".to_owned()), "{}", report.summary());
@@ -1844,7 +1865,7 @@ pub(crate) mod tests {
         config.late_commit = true;
         let (_dir, _root, report) = run(&config).await;
         assert!(report.passed, "{}", report.summary());
-        config.sabotage = Some(Sabotage::ToStandardWithoutChange);
+        config.sabotage = Some(Sabotage::ToObjectStoreWithoutChange);
         let (_dir, _root, report) = run(&config).await;
         assert_eq!(kinds(&report), ["LostUpdate"], "{}", report.summary());
     }
@@ -1858,7 +1879,7 @@ pub(crate) mod tests {
         assert!(kinds.contains(&"DeletedHistory".to_owned()), "{}", report.summary());
         assert!(kinds.contains(&"ConversionEndState".to_owned()), "{}", report.summary());
         // Counted over the logs of the round it stopped in: two commits and
-        // the conversion from the standard layout.
+        // the conversion from the object store layout.
         assert_eq!(report.verdict.stats.acks, 3, "{}", report.summary());
     }
 
@@ -1881,7 +1902,7 @@ pub(crate) mod tests {
         assert!(written.success());
         let root = ScenarioRoot::new(dir.path().to_path_buf());
         let run = Converter::Process(exe)
-            .run(&root, 1, Direction::FromStandard, 0, None)
+            .run(&root, 1, Direction::FromObjectStore, 0, None)
             .await
             .unwrap();
         assert_eq!(run, Run::Hung { exited: true });
@@ -1895,7 +1916,7 @@ pub(crate) mod tests {
         create_root(&root, &config).unwrap();
         let phase = root.phase(1);
         phase.create_dirs().unwrap();
-        create_standard(&phase).await.unwrap();
+        create_object_store(&phase).await.unwrap();
         let mut scenario = Scenario {
             root: &root,
             config: &config,
@@ -1909,10 +1930,16 @@ pub(crate) mod tests {
             c7_writers: 0,
             kill_plan: std::collections::VecDeque::new(),
         };
-        assert!(scenario.convert(1, Direction::FromStandard).await.unwrap());
-        scenario.kill_plan = [Some(PointName::ToStandardPublish)].into();
+        assert!(scenario.convert(1, Direction::FromObjectStore).await.unwrap());
+        scenario.kill_plan = [Some(PointName::ToObjectStorePublish)].into();
         let run = Converter::InProcess
-            .run(&root, 1, Direction::ToStandard, 0, Some(PointName::ToStandardChange))
+            .run(
+                &root,
+                1,
+                Direction::ToObjectStore,
+                0,
+                Some(PointName::ToObjectStoreChange),
+            )
             .await
             .unwrap();
         assert_eq!(run, Run::Killed);
@@ -1928,7 +1955,7 @@ pub(crate) mod tests {
         );
         // The reruns, the first killed after its publication, which also
         // tries a writer, finish the conversion.
-        assert!(scenario.convert(1, Direction::ToStandard).await.unwrap());
+        assert!(scenario.convert(1, Direction::ToObjectStore).await.unwrap());
         assert_eq!(scenario.verdict.violations, []);
         assert!(
             phase.worker_log(SCENARIO_TAG, WRITER_SLOT, 1).exists(),

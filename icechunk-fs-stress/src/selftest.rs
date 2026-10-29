@@ -47,8 +47,8 @@ pub const SABOTAGES: [Sabotage; 18] = [
     Sabotage::CommitWithoutPublish,
     Sabotage::GcWithoutForkCheck,
     Sabotage::GcPublishesListed,
-    Sabotage::FromStandardWithoutProvenance,
-    Sabotage::ToStandardWithoutChange,
+    Sabotage::FromObjectStoreWithoutProvenance,
+    Sabotage::ToObjectStoreWithoutChange,
     Sabotage::DeleteDirBeforePublish,
 ];
 
@@ -72,7 +72,7 @@ pub fn detected_by(sabotage: Sabotage) -> &'static [&'static str] {
         | Sabotage::UnlinkBaseBeforeRename
         | Sabotage::LinkAfterRename
         | Sabotage::DeleteWinnerFile => &["LostUpdate", "BrokenHistory"],
-        Sabotage::AckSupersededWithoutProof | Sabotage::ToStandardWithoutChange => {
+        Sabotage::AckSupersededWithoutProof | Sabotage::ToObjectStoreWithoutChange => {
             &["LostUpdate"]
         }
         Sabotage::PublishWithoutForkCheck => &["SilentForkLoss"],
@@ -80,7 +80,7 @@ pub fn detected_by(sabotage: Sabotage) -> &'static [&'static str] {
         Sabotage::CommitWithoutPublish => &["ReadOnlyMirrorMismatch"],
         Sabotage::GcWithoutForkCheck => &["GcAfterFork"],
         Sabotage::GcPublishesListed => &["MirrorStale", "MirrorDangling"],
-        Sabotage::FromStandardWithoutProvenance => {
+        Sabotage::FromObjectStoreWithoutProvenance => {
             &["ConversionEndState", "SilentForkLoss"]
         }
         Sabotage::DeleteDirBeforePublish => {
@@ -96,8 +96,8 @@ pub fn modes(sabotage: Sabotage) -> &'static [Mode] {
         Sabotage::CommitWithoutPublish
         | Sabotage::GcWithoutForkCheck
         | Sabotage::GcPublishesListed
-        | Sabotage::FromStandardWithoutProvenance
-        | Sabotage::ToStandardWithoutChange
+        | Sabotage::FromObjectStoreWithoutProvenance
+        | Sabotage::ToObjectStoreWithoutChange
         | Sabotage::DeleteDirBeforePublish => &[Mode::Repository],
         _ => &[Mode::Storage, Mode::Repository],
     }
@@ -243,8 +243,10 @@ pub fn sabotage_name(sabotage: Sabotage) -> &'static str {
         Sabotage::CommitWithoutPublish => "commit-without-publish",
         Sabotage::GcWithoutForkCheck => "gc-without-fork-check",
         Sabotage::GcPublishesListed => "gc-publishes-listed",
-        Sabotage::FromStandardWithoutProvenance => "from-standard-without-provenance",
-        Sabotage::ToStandardWithoutChange => "to-standard-without-change",
+        Sabotage::FromObjectStoreWithoutProvenance => {
+            "from-object-store-without-provenance"
+        }
+        Sabotage::ToObjectStoreWithoutChange => "to-object-store-without-change",
         Sabotage::DeleteDirBeforePublish => "delete-dir-before-publish",
     }
 }
@@ -350,11 +352,11 @@ pub fn scenario_config(sabotage: Sabotage, workers: u32) -> ScenarioConfig {
         stress: None,
         workers,
         kill_probability: 0.0,
-        standard_commits: 3,
+        object_store_commits: 3,
         fsync: true,
         sabotage: Some(sabotage),
-        plant_standard_write: sabotage == Sabotage::FromStandardWithoutProvenance,
-        late_commit: sabotage == Sabotage::ToStandardWithoutChange,
+        plant_object_store_write: sabotage == Sabotage::FromObjectStoreWithoutProvenance,
+        late_commit: sabotage == Sabotage::ToObjectStoreWithoutChange,
         guaranteed_kills: false,
     }
 }
@@ -659,7 +661,7 @@ mod tests {
             },
             "GcAfterFork" => Violation::GcAfterFork { id },
             "ConversionEndState" => Violation::ConversionEndState {
-                direction: Direction::ToStandard,
+                direction: Direction::ToObjectStore,
                 detail: detail(),
             },
             "DeletedHistory" => Violation::DeletedHistory { detail: detail() },
@@ -840,10 +842,10 @@ mod tests {
             assert_eq!(config.fault_floor, FaultFloor::ZERO);
             assert_eq!(config.gc, None);
         }
-        let plant = scenario_config(Sabotage::FromStandardWithoutProvenance, 8);
-        assert!(plant.plant_standard_write && !plant.late_commit);
-        let late = scenario_config(Sabotage::ToStandardWithoutChange, 8);
-        assert!(late.late_commit && !late.plant_standard_write);
+        let plant = scenario_config(Sabotage::FromObjectStoreWithoutProvenance, 8);
+        assert!(plant.plant_object_store_write && !plant.late_commit);
+        let late = scenario_config(Sabotage::ToObjectStoreWithoutChange, 8);
+        assert!(late.late_commit && !late.plant_object_store_write);
     }
 
     #[test]

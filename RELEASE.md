@@ -14,6 +14,16 @@ All internal crates are versioned in lockstep with the JS package: bump every wo
 1. Commit all changes and make a PR.
 1. Once CI passes on the PR merge it.
 
+## When a release introduces a new spec version
+
+The current spec page (`icechunk-python/docs/docs/reference/spec-vX-Y.md`) embeds the flatbuffers schemas from `icechunk-format/flatbuffers/` and links to them on `main`. Before the new spec changes those schemas, freeze the previous spec page:
+
+1. Copy the `.fbs` files into `icechunk-python/docs/docs/reference/flatbuffers-vX-Y/`, with an `index.md` like the one in `flatbuffers-v2-1/`.
+1. Point the page's `--8<--` includes at the copies.
+1. Pin the page's GitHub links to the last release tag that used it as the current spec (for example `blob/v2.3.0/...`).
+1. In `icechunk-python/docs/docs/reference/version-policy.md`, add a row for the new spec to the Spec versions table and move "(current)".
+1. In `icechunk-python/docs/mkdocs.yml`, add the new page to the Spec nav and point the `reference/spec.md` and `spec.md` redirects at it.
+
 ## (Optional) Issuing a icechunk rust library release
 
 1. (Optional: Iff changes to core icechunk rust crate) Go to the [`publish rust library` github action](https://github.com/earth-mover/icechunk/actions/workflows/publish-rust-library.yml). Click `Run workflow`, select the branch (`main` for a normal release, `support/v1.x` for a V1 support release), and click the green `Run workflow` button to launch.

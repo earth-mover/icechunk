@@ -47,7 +47,7 @@ shorter [testing guide](TESTING.md) instead of this README.
   whose fork check came before it may erase it, and both histories must
   survive for a manual recovery.
 - **Conversions**, with `convert-scenario`: both conversions between the
-  standard and the filesystem layout, killed at every step and rerun, keep
+  object store layout and the filesystem layout, killed at every step and rerun, keep
   every acknowledged change and leave only the target layout. See
   [Conversion scenario](#conversion-scenario).
 - **Sweeping.** After the run, `verify` plants entries the sweep and GC must
@@ -630,7 +630,7 @@ any host is on a network filesystem, the whole run is judged as one.
 - **`ForkDamaged`**: after a run whose fork persisted, the fork, its backup
   or (repository mode) the objects it references are gone, so a recovery
   that keeps `repo` is no longer possible.
-- **`ConversionMismatch`**, **`ConversionEndState`**, **`OverwroteStandard`**,
+- **`ConversionMismatch`**, **`ConversionEndState`**, **`OverwroteObjectStore`**,
   **`DeletedHistory`**, **`WriterDuringConversion`**, **`ConversionRetried`**:
   the conversion scenario's, see [Conversion scenario](#conversion-scenario).
 - **`Harness`**: the tool itself failed: malformed logs, a missing `done/`
@@ -721,7 +721,7 @@ any host is on a network filesystem, the whole run is judged as one.
   wrong bytes, are still violations. A larger `--gc-margin` avoids this
   warning.
 - **`StaleRootListing`**: the conversion scenario's, on a network filesystem
-  only: a rerun of `convert_to_standard_layout()` returned `NothingToConvert`
+  only: a rerun of `convert_to_object_store_layout()` returned `NothingToConvert`
   and left `repo.d/`, with `repo` its current version without the feature,
   because its listing of the storage root missed `repo.d/`. That is an
   accepted limit (see "Rerun misses `repo.d`" in the
@@ -771,9 +771,9 @@ both) that can detect it. Each case names the violations that detect it:
 | `commit-without-publish`: a change returns without publishing, the status toggler's `ReadOnly` change included, every 3 s for 1 s | repository | `ReadOnlyMirrorMismatch` |
 | `gc-without-fork-check`: GC's hook before its deletes doesn't check for a fork, with a fork written by the GC worker once GC's change is published, before the hook | repository | `GcAfterFork` |
 | `gc-publishes-listed`: GC's hook publishes the version its listing shows, not the one GC's change made | repository | `MirrorStale`, `MirrorDangling` |
-| `from-standard-without-provenance`: the rerun of an interrupted conversion from the standard layout publishes without the provenance check | repository | `ConversionEndState`, `SilentForkLoss` |
-| `to-standard-without-change`: the conversion to the standard layout publishes the version it read, converted, without its change | repository | `LostUpdate` |
-| `delete-dir-before-publish`: the conversion to the standard layout deletes `repo.d` before publishing | repository | `ConversionEndState`, `DeletedHistory`, `LostUpdate` |
+| `from-object-store-without-provenance`: the rerun of an interrupted conversion from the object store layout publishes without the provenance check | repository | `ConversionEndState`, `SilentForkLoss` |
+| `to-object-store-without-change`: the conversion to the object store layout publishes the version it read, converted, without its change | repository | `LostUpdate` |
+| `delete-dir-before-publish`: the conversion to the object store layout deletes `repo.d` before publishing | repository | `ConversionEndState`, `DeletedHistory`, `LostUpdate` |
 
 Writers pause before the rename, so that others commit in between, and the
 supervisor restarts killed workers. A broken-protocol case is *detected* when
@@ -813,9 +813,9 @@ update. Notes on some cases:
   if a listing lags in that window.
 - The three conversion cases run the [conversion scenario](#conversion-scenario)
   for one round without a stress phase or kills, with what makes their
-  sabotage matter: `from-standard-without-provenance` kills the first run
+  sabotage matter: `from-object-store-without-provenance` kills the first run
   after its directory rename and replaces `repo` as Icechunk 2.3 writes a
-  status change before the rerun, which must then stop; `to-standard-without-change`
+  status change before the rerun, which must then stop; `to-object-store-without-change`
   lands a commit right after the conversion read the current version, a
   commit that publishes nothing, as a stale listing would hide it from the
   conversion on a network filesystem.
@@ -834,28 +834,28 @@ fs-stress convert-scenario --root /path/on/fs/convert-1
 
 On this host only, on one repository, in rounds (`--rounds`, default 2):
 
-1. In round 1, it creates a repository in the standard layout through
-   `local_filesystem_storage` and commits to it (`--standard-commits`, default
+1. In round 1, it creates a repository in the object store layout through
+   `local_filesystem_storage` and commits to it (`--object-store-commits`, default
    3).
 2. It converts it to the filesystem layout with
    `convert_to_filesystem_layout()`.
 3. A stress phase in repository mode with GC, `--workers` (default 8) for
    `--duration` (default `1m`; `0s` for none), checked by `verify` as any
    run, with every earlier round's operations.
-4. It converts it to the standard layout with `convert_to_standard_layout()`.
-5. It commits to it in the standard layout again.
+4. It converts it to the object store layout with `convert_to_object_store_layout()`.
+5. It commits to it in the object store layout again.
 
 Each run of a conversion is a child process (`fs-stress conversion`), run
 again after a kill until it finishes. In every round each conversion has one
-guaranteed kill with `SIGKILL`: from the standard layout at one of its steps,
-chosen at random; to the standard layout right after its change or its
+guaranteed kill with `SIGKILL`: from the object store layout at one of its steps,
+chosen at random; to the object store layout right after its change or its
 publication, chosen at random, so that C7 runs. Once that kill landed, every
 later run is killed at a random step with probability `--conversion-kill-p`
 (default `0.3`). The
 summary's notes list the steps runs were killed at and how many writers C7
 tried. A run can end before its guaranteed step (a rerun that fails as under
 stale listings); the next run of that conversion then gets the same step. A
-scenario that finished in which no conversion from the standard layout was
+scenario that finished in which no conversion from the object store layout was
 killed or C7 never ran fails with a `Harness` violation; one that ended early
 on a violation says so in a note instead. Only the conversions run
 during a conversion, as they require. A stress phase's `run.json` names the
@@ -864,35 +864,35 @@ run root, use it. It checks:
 
 - **C1**: no acknowledged change is lost: the stress phase's `verify`, and the
   repository oracle through `local_filesystem_storage` after each conversion
-  to the standard layout, over the logs of every round so far.
+  to the object store layout, over the logs of every round so far.
 - **C2** (`ConversionMismatch`): a conversion changes only the writer feature,
   the gate and the ops log: the repo info it wrote is the one it backed up,
   named on its new ops-log entry, with the feature added or removed and one
   status change on top.
 - **C3** (`ConversionEndState`): a finished conversion leaves the target
-  layout and nothing else: to the standard layout, a `repo` without writer
+  layout and nothing else: to the object store layout, a `repo` without writer
   features or gate, no `repo.d/` and no `repo.d.tmp.*`; from it, `repo.d/`
   with one marker whose version `repo` copies, and no `repo.d.tmp.*`. A
   conversion that can't finish is a `ConversionEndState` too, and ends the
   scenario.
-- **C4** (`InitialVersion`): the first version a conversion from the standard
+- **C4** (`InitialVersion`): the first version a conversion from the object store
   layout builds is numbered by the time of the conversion.
-- **C5** (`OverwroteStandard`): after the commits in the standard layout,
+- **C5** (`OverwroteObjectStore`): after the commits in the object store layout,
   nothing has made `repo` list the feature again or created `repo.d/`.
-- **C6** (`DeletedHistory`): after every run of a conversion to the standard
+- **C6** (`DeletedHistory`): after every run of a conversion to the object store
   layout, killed or not, `repo.d/` is gone only if `repo` holds that
   conversion's version without the feature.
 - **C7** (`WriterDuringConversion`): after a run of the conversion to the
-  standard layout killed right after its change or its publication, while the
+  object store layout killed right after its change or its publication, while the
   current version lacks the feature, a writer through `filesystem_storage`
-  must fail with the error that says to rerun `convert_to_standard_layout()`.
+  must fail with the error that says to rerun `convert_to_object_store_layout()`.
   Runs killed at later steps, once `repo.d/` is renamed aside, try no writer.
 - **Reruns** (`ConversionRetried`): a rerun that fails as only stale listings
   make it fail (relisting ran out, or a fork reported while `repo` holds the
   bytes of a version of `repo.d/`) is retried; that is a warning on a network
   filesystem and a violation on a local one.
 - **Reruns that miss `repo.d/`** (`StaleRootListing`): on a network
-  filesystem, a rerun of the conversion to the standard layout whose listing
+  filesystem, a rerun of the conversion to the object store layout whose listing
   of the storage root misses `repo.d/` returns `NothingToConvert` and leaves
   it, with `repo` the conversion's version without the feature. That is an
   accepted limit, cured by running the conversion again once the listing
@@ -1002,10 +1002,10 @@ R/phase-<k>/        round k: a run root on R/storage/ (run.json, control, go,
                     hosts/, done/, report.json and summary.txt for its
                     stress phase) whose logs/ also hold
                     scenario.<slot>.<n>.log: the converters
-                    (from-standard, to-standard, n counting runs), the
-                    commits in the standard layout (standard), the writers
-                    during an interrupted conversion (writer) and a planted
-                    standard write (plant)
+                    (from-object-store, to-object-store, n counting runs), the
+                    commits in the object store layout (object-store), the
+                    writers during an interrupted conversion (writer) and a
+                    planted object-store-layout write (plant)
 R/report.json       the scenario's report
 R/summary.txt       what the scenario printed
 ```

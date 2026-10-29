@@ -555,7 +555,7 @@ const MAX_N: u64 = 999_999_999_999_999;
 
 /// `repo.d` after the sweep: exactly one marker `latest.<K>.<N>.<h>` with `K`
 /// the 15-digit complement of `N`, its version `<N>.<h>`, which lists the
-/// layout's writer feature (else a conversion to the standard layout was
+/// layout's writer feature (else a conversion to the object store layout was
 /// interrupted); other versions, `stage.<id>`, `mirror.<id>` and staging
 /// files are leftovers; anything else is unknown. A missing `repo.d`, a
 /// number of markers other than one, or a marker without its version is a
@@ -600,8 +600,8 @@ fn check_repo_d(
             Ok(false) => verdict.violations.push(Violation::FeatureMissing {
                 what: "the current version".to_owned(),
                 detail: format!(
-                    "{REPO_D}/{version} doesn't list {}: a conversion to the standard \
-                     layout was interrupted",
+                    "{REPO_D}/{version} doesn't list {}: a conversion to the object \
+                     store layout was interrupted",
                     layout_v1::FEATURE
                 ),
             }),
@@ -1034,7 +1034,7 @@ mod tests {
     }
 
     /// A current version without the layout's feature: a conversion to the
-    /// standard layout was interrupted after its change.
+    /// object store layout was interrupted after its change.
     #[tokio::test]
     async fn a_featureless_current_version_is_an_interrupted_conversion() {
         let (_dir, root, config) = initialized(Mode::Storage).await;

@@ -226,8 +226,8 @@ pub const VERIFY_TAG: &str = "verify";
 pub const INIT_TAG: &str = "init";
 
 /// Reserved for the conversion scenario's own logs in a phase: its
-/// converters, its writers in the standard layout and during an interrupted
-/// conversion, and its planted standard write.
+/// converters, its writers in the object store layout and during an
+/// interrupted conversion, and its planted object-store-layout write.
 pub const SCENARIO_TAG: &str = "scenario";
 
 /// Host tags are `[A-Za-z0-9._-]+`.

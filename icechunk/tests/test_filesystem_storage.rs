@@ -330,16 +330,16 @@ fn files(root: &std::path::Path) -> Result<Files, Box<dyn Error>> {
     Ok(files)
 }
 
-/// A checked-in repository in the standard layout is refused with a pointer
+/// A checked-in repository in the object store layout is refused with a pointer
 /// to `convert_to_filesystem_layout()`; once converted it opens with the same
 /// history, and takes commits.
 #[tokio_test]
-async fn standard_repo_open_names_convert() -> Result<(), Box<dyn Error>> {
+async fn object_store_repo_open_names_convert() -> Result<(), Box<dyn Error>> {
     let source =
         std::env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
     let options = fs_extra::dir::CopyOptions::new().content_only(true);
-    let standard = tempfile::tempdir()?;
-    fs_extra::dir::copy(&source, standard.path(), &options)?;
+    let object_store_dir = tempfile::tempdir()?;
+    fs_extra::dir::copy(&source, object_store_dir.path(), &options)?;
     let dir = tempfile::tempdir()?;
     fs_extra::dir::copy(&source, dir.path(), &options)?;
 
@@ -359,12 +359,16 @@ async fn standard_repo_open_names_convert() -> Result<(), Box<dyn Error>> {
     assert_eq!(outcome, ConversionOutcome::Converted);
     let converted =
         Repository::open(new_filesystem_storage(dir.path()).await?).execute().await?;
-    let standard = Repository::open(new_local_filesystem_storage(standard.path()).await?)
-        .execute()
-        .await?;
-    assert_eq!(converted.list_branches().await?, standard.list_branches().await?);
-    assert_eq!(converted.list_tags().await?, standard.list_tags().await?);
-    let ancestry = main_ancestry(&standard).await?;
+    let object_store_repo =
+        Repository::open(new_local_filesystem_storage(object_store_dir.path()).await?)
+            .execute()
+            .await?;
+    assert_eq!(
+        converted.list_branches().await?,
+        object_store_repo.list_branches().await?
+    );
+    assert_eq!(converted.list_tags().await?, object_store_repo.list_tags().await?);
+    let ancestry = main_ancestry(&object_store_repo).await?;
     assert_eq!(main_ancestry(&converted).await?, ancestry);
 
     let snapshot = commit_group(&converted, "/after_conversion").await?;
@@ -390,9 +394,9 @@ fn sorted_files(root: &std::path::Path) -> Result<Files, Box<dyn Error>> {
     Ok(files)
 }
 
-/// A standard repository listing a writer feature `FilesystemStorage`
-/// doesn't implement, or with a malformed shape, is refused before anything
-/// is written.
+/// A repository in the object store layout listing a writer feature
+/// `FilesystemStorage` doesn't implement, or with a malformed shape, is
+/// refused before anything is written.
 #[tokio_test]
 async fn conversion_refuses_unimplemented_features_and_malformed_repo_infos()
 -> Result<(), Box<dyn Error>> {
@@ -466,9 +470,9 @@ fn assert_malformed(err: &StorageError, defects: &[&str]) {
 }
 
 /// Writers commit between a crash after the conversion's directory rename and
-/// its rerun. That state is the converted repository with the standard repo
+/// its rerun. That state is the converted repository with the original repo
 /// info back in `$ROOT/repo`, which a writer's publication reports as a fork:
-/// its commit is durable and the standard `$ROOT/repo` stays. With one update
+/// its commit is durable and the original `$ROOT/repo` stays. With one update
 /// per ops-log file, the rerun finds the conversion's backup after one commit
 /// and publishes; after two, it is past the three files the provenance check
 /// reads and the rerun stops.
@@ -485,13 +489,13 @@ async fn commits_before_the_rerun_of_an_interrupted_conversion()
             .config(config)
             .execute()
             .await?;
-        let standard = std::fs::read(dir.path().join("repo"))?;
+        let object_store_info = std::fs::read(dir.path().join("repo"))?;
         let converter = FilesystemStorage::new(dir.path())?;
         assert_eq!(
             converter.convert_to_filesystem_layout().await?,
             ConversionOutcome::Converted
         );
-        std::fs::write(dir.path().join("repo"), &standard)?;
+        std::fs::write(dir.path().join("repo"), &object_store_info)?;
 
         let repo =
             Repository::open(new_filesystem_storage(dir.path()).await?).execute().await?;
@@ -499,7 +503,7 @@ async fn commits_before_the_rerun_of_an_interrupted_conversion()
             let snapshot =
                 commit_reporting_a_fork(&repo, &format!("/commit_{commit}")).await?;
             assert_eq!(main_ancestry(&reopen(dir.path()).await?).await?[0], snapshot);
-            assert_eq!(std::fs::read(dir.path().join("repo"))?, standard);
+            assert_eq!(std::fs::read(dir.path().join("repo"))?, object_store_info);
         }
         let (n, h) = repo_version(&repo).await?;
         let current = std::fs::read(dir.path().join("repo.d").join(format!("{n}.{h}")))?;
@@ -520,7 +524,7 @@ async fn commits_before_the_rerun_of_an_interrupted_conversion()
                 matches!(&err.kind, StorageErrorKind::Other(msg) if msg.contains("manual recovery")),
                 "{err:?}"
             );
-            assert_eq!(std::fs::read(dir.path().join("repo"))?, standard);
+            assert_eq!(std::fs::read(dir.path().join("repo"))?, object_store_info);
         }
     }
     Ok(())
@@ -873,7 +877,7 @@ async fn an_unreadable_mirror_is_left_alone_and_refuses_gc() -> Result<(), Box<d
 }
 
 /// A current version without the feature, as an interrupted conversion to the
-/// standard layout leaves it: every change and GC refuse, naming the
+/// object store layout leaves it: every change and GC refuse, naming the
 /// conversion to rerun; reads work; nothing is deleted.
 #[tokio_test]
 async fn a_featureless_current_version_refuses_every_change() -> Result<(), Box<dyn Error>>
@@ -933,7 +937,7 @@ async fn a_featureless_current_version_refuses_every_change() -> Result<(), Box<
     }
     refusals.push(("gc", gc(&repo).await.err().ok_or("collected")?.to_string()));
     for (op, msg) in refusals {
-        assert!(msg.contains("convert_to_standard_layout()"), "{op}: {msg}");
+        assert!(msg.contains("convert_to_object_store_layout()"), "{op}: {msg}");
     }
 
     assert_eq!(main_ancestry(&repo).await?[0], first);
@@ -961,11 +965,11 @@ async fn plant_current_version(
     Ok(())
 }
 
-/// A repository converted to the standard layout keeps its history, tags,
+/// A repository converted to the object store layout keeps its history, tags,
 /// branches and status, opens with `new_local_filesystem_storage` and takes
 /// commits there, and converts back.
 #[tokio_test]
-async fn conversion_to_the_standard_layout_keeps_the_repository()
+async fn conversion_to_the_object_store_layout_keeps_the_repository()
 -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let root = dir.path();
@@ -978,11 +982,12 @@ async fn conversion_to_the_standard_layout_keeps_the_repository()
     repo.set_status(&read_only()).await?;
     let current = current_bytes(&repo, root).await?;
 
-    let outcome = FilesystemStorage::new(root)?.convert_to_standard_layout().await?;
+    let outcome = FilesystemStorage::new(root)?.convert_to_object_store_layout().await?;
     assert_eq!(outcome, ConversionOutcome::Converted);
     assert!(!root_names(root)?.iter().any(|name| name.starts_with("repo.d")));
-    let standard = mirror(root)?;
-    let attempt = layout_v1::change_info(&standard)?.attempt.ok_or("no attempt")?.id;
+    let object_store_info = mirror(root)?;
+    let attempt =
+        layout_v1::change_info(&object_store_info)?.attempt.ok_or("no attempt")?.id;
     assert_eq!(std::fs::read(root.join("overwritten").join(attempt))?, current);
 
     let local =
@@ -1012,7 +1017,7 @@ async fn conversion_to_the_standard_layout_keeps_the_repository()
 /// A current version whose own status is `Offline`, which reads as
 /// `ReadOnly` with a synthetic reason, is written as such.
 #[tokio_test]
-async fn conversion_to_the_standard_layout_persists_offline_as_read_only()
+async fn conversion_to_the_object_store_layout_persists_offline_as_read_only()
 -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let root = dir.path();
@@ -1037,12 +1042,12 @@ async fn conversion_to_the_standard_layout_persists_offline_as_read_only()
     let read_as = repo_info_file::decode(&offline)?.status()?;
     assert_eq!(read_as.availability, RepoAvailability::ReadOnly);
 
-    let outcome = FilesystemStorage::new(root)?.convert_to_standard_layout().await?;
+    let outcome = FilesystemStorage::new(root)?.convert_to_object_store_layout().await?;
     assert_eq!(outcome, ConversionOutcome::Converted);
-    let standard = repo_info_file::decode(&mirror(root)?)?;
-    assert_eq!(standard.status()?, read_as);
+    let object_store_info = repo_info_file::decode(&mirror(root)?)?;
+    assert_eq!(object_store_info.status()?, read_as);
     assert_eq!(
-        standard.raw_status()?,
+        object_store_info.raw_status()?,
         StoredRepoStatus::for_tests(
             generated::RepoAvailability::ReadOnly,
             read_as.set_at,
@@ -1059,7 +1064,7 @@ async fn conversion_to_the_standard_layout_persists_offline_as_read_only()
 /// A current version that also lists a feature `FilesystemStorage` doesn't
 /// implement is refused before anything is written.
 #[tokio_test]
-async fn conversion_to_the_standard_layout_refuses_unimplemented_features()
+async fn conversion_to_the_object_store_layout_refuses_unimplemented_features()
 -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let root = dir.path();
@@ -1079,7 +1084,7 @@ async fn conversion_to_the_standard_layout_refuses_unimplemented_features()
     let before = sorted_files(root)?;
 
     let err = FilesystemStorage::new(root)?
-        .convert_to_standard_layout()
+        .convert_to_object_store_layout()
         .await
         .err()
         .ok_or("converted")?;
@@ -1097,7 +1102,7 @@ async fn conversion_to_the_standard_layout_refuses_unimplemented_features()
 /// A current version with a malformed shape is refused before anything is
 /// written.
 #[tokio_test]
-async fn conversion_to_the_standard_layout_refuses_a_malformed_repo_info()
+async fn conversion_to_the_object_store_layout_refuses_a_malformed_repo_info()
 -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let root = dir.path();
@@ -1120,7 +1125,7 @@ async fn conversion_to_the_standard_layout_refuses_a_malformed_repo_info()
     let before = sorted_files(root)?;
 
     let err = FilesystemStorage::new(root)?
-        .convert_to_standard_layout()
+        .convert_to_object_store_layout()
         .await
         .err()
         .ok_or("converted")?;
@@ -1135,12 +1140,12 @@ async fn conversion_to_the_standard_layout_refuses_a_malformed_repo_info()
     Ok(())
 }
 
-/// A conversion to the standard layout stopped after its change: every
+/// A conversion to the object store layout stopped after its change: every
 /// change and GC through another `FilesystemStorage` refuse, naming the
 /// conversion to rerun; the rerun finishes, and the repository opens in the
-/// standard layout.
+/// object store layout.
 #[tokio_test]
-async fn an_interrupted_conversion_to_the_standard_layout_refuses_changes_until_rerun()
+async fn an_interrupted_conversion_to_the_object_store_layout_refuses_changes_until_rerun()
 -> Result<(), Box<dyn Error>> {
     use std::os::unix::fs::PermissionsExt as _;
     let dir = tempfile::tempdir()?;
@@ -1154,12 +1159,13 @@ async fn an_interrupted_conversion_to_the_standard_layout_refuses_changes_until_
     // The publication can't rename onto `$ROOT/repo`: the conversion stops
     // after its change.
     std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o555))?;
-    let interrupted = FilesystemStorage::new(root)?.convert_to_standard_layout().await;
+    let interrupted =
+        FilesystemStorage::new(root)?.convert_to_object_store_layout().await;
     std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o755))?;
     // Root renames anyway: nothing to test.
     let Err(err) = interrupted else { return Ok(()) };
     assert!(
-        matches!(&err.kind, StorageErrorKind::Other(msg) if msg.contains("rerun convert_to_standard_layout()")),
+        matches!(&err.kind, StorageErrorKind::Other(msg) if msg.contains("rerun convert_to_object_store_layout()")),
         "{err:?}"
     );
     let before = data_files(root)?;
@@ -1172,11 +1178,11 @@ async fn an_interrupted_conversion_to_the_standard_layout_refuses_changes_until_
         gc(&other).await.err().ok_or("collected")?.to_string(),
     ];
     for msg in refusals {
-        assert!(msg.contains("convert_to_standard_layout()"), "{msg}");
+        assert!(msg.contains("convert_to_object_store_layout()"), "{msg}");
     }
     assert!(data_files(root)?.is_superset(&before));
 
-    let outcome = FilesystemStorage::new(root)?.convert_to_standard_layout().await?;
+    let outcome = FilesystemStorage::new(root)?.convert_to_object_store_layout().await?;
     assert_eq!(outcome, ConversionOutcome::Converted);
     let local =
         Repository::open(new_local_filesystem_storage(root).await?).execute().await?;

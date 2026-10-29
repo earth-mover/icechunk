@@ -435,18 +435,21 @@ mod tests {
 
     #[test]
     fn conversion_steps_are_fault_points() {
-        use icechunk_fs::fault_injection::{ConversionStep, ToStandardStep};
+        use icechunk_fs::fault_injection::{ConversionStep, ToObjectStoreStep};
         let dir = tempfile::tempdir().unwrap();
         let config = FaultConfig {
-            points: vec![PointName::ToStandardChange],
+            points: vec![PointName::ToObjectStoreChange],
             pause_probability: 1.0,
             ..no_faults()
         };
         let (hooks, path) = hooks(dir.path(), &config, None);
-        hooks
-            .at(Point::Conversion(ConversionStep::ToStandard(ToStandardStep::ForkCheck)));
-        hooks.at(Point::Conversion(ConversionStep::ToStandard(ToStandardStep::Change)));
-        assert_eq!(faults(&path), [(FaultAction::Pause, PointName::ToStandardChange)]);
+        hooks.at(Point::Conversion(ConversionStep::ToObjectStore(
+            ToObjectStoreStep::ForkCheck,
+        )));
+        hooks.at(Point::Conversion(ConversionStep::ToObjectStore(
+            ToObjectStoreStep::Change,
+        )));
+        assert_eq!(faults(&path), [(FaultAction::Pause, PointName::ToObjectStoreChange)]);
     }
 
     #[test]
