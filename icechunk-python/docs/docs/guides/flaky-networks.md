@@ -29,14 +29,18 @@ config.storage.retries = icechunk.StorageRetriesSettings(
 
 ## Timeouts: [`StorageTimeoutSettings`](../reference/storage.md#icechunk.storage.StorageTimeoutSettings)
 
-Controls connect, read, and operation timeouts for the underlying S3 client. All values are in milliseconds. By default, these are unset and the [AWS SDK defaults](https://docs.aws.amazon.com/sdk-for-rust/latest/dg/timeouts.html) apply.
+Controls connect, read, and operation timeouts for storage requests. All values are in milliseconds. A value of 0 disables the timeout, including the default. A request that times out is retried according to the retry settings.
 
-| Parameter                      | Description                                                        |
-|--------------------------------|--------------------------------------------------------------------|
-| `connect_timeout_ms`           | Time allowed to establish a TCP connection                         |
-| `read_timeout_ms`              | Time allowed to read a single response                             |
-| `operation_timeout_ms`         | Total time allowed for an entire operation (including all retries) |
-| `operation_attempt_timeout_ms` | Time allowed for a single attempt of an operation                  |
+| Parameter                      | S3 default | `object_store` default | Description                                                              |
+|--------------------------------|------------|------------------------|--------------------------------------------------------------------------|
+| `connect_timeout_ms`           | 3.1 s      | 5 s                    | Time allowed to establish a TCP connection                               |
+| `read_timeout_ms`              | none       | not supported          | Time from sending a request, including its body, until the response headers arrive |
+| `operation_timeout_ms`         | none       | not supported          | Total time allowed for an entire operation (including all retries)       |
+| `operation_attempt_timeout_ms` | 10 min     | 30 s                   | Time allowed for a single attempt of an operation                        |
+
+The S3 column applies to `s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`. The `object_store` column applies to `gcs_storage`, `azure_storage`, `http_storage` and `s3_object_store_storage`. For these, the values set here take precedence over the same options passed in the backend `config`.
+
+The per-attempt timeout includes uploading the request body. Concurrent requests share the network, so with many concurrent writes on a slow connection a single upload can take much longer than its size alone suggests. Set the per-attempt timeout to allow for that. For the S3 client the per-attempt timeout does not include downloading a response body; the stalled stream detection below covers that. For the `object_store` backends it does.
 
 ```python
 config.storage.timeouts = icechunk.StorageTimeoutSettings(

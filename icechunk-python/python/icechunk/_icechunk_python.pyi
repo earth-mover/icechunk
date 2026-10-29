@@ -1276,9 +1276,13 @@ class StorageRetriesSettings:
 
 @final
 class StorageTimeoutSettings:
-    """Configuration for AWS SDK timeout settings.
+    """Configuration for storage request timeouts.
 
-    Controls connect, read, and operation timeouts for the underlying S3 client."""
+    All four timeouts apply to the S3 client used by `s3_storage`, `r2_storage`,
+    `tigris_storage` and `hf_storage`. The `object_store` based backends
+    (`gcs_storage`, `azure_storage`, `http_storage` and `s3_object_store_storage`)
+    honor only `connect_timeout_ms` and `operation_attempt_timeout_ms`, and these
+    take precedence over the same options in the backend `config`."""
 
     def __new__(
         cls,
@@ -1290,31 +1294,39 @@ class StorageTimeoutSettings:
         """
         Create a new `StorageTimeoutSettings` object
 
-        All timeouts default to None, meaning the underlying
-        `AWS SDK default <https://docs.aws.amazon.com/sdk-for-rust/latest/dg/timeouts.html>`_
-        is used.
+        Unset timeouts use the client defaults. For the S3 client these are a
+        3.1 second connect timeout and a 10 minute per-attempt timeout, with no
+        read or operation timeout. For the `object_store` backends they are a
+        5 second connect timeout and a 30 second per-attempt timeout. A value of
+        0 disables the timeout, including the client default.
 
         Parameters
         ----------
         connect_timeout_ms: int | None
             The timeout for establishing a connection in milliseconds.
-            Default: None (AWS SDK default)
+            Default: None (3.1 s for S3, 5 s for `object_store` backends)
         read_timeout_ms: int | None
-            The timeout for reading a response in milliseconds.
-            Default: None (AWS SDK default)
+            The time allowed from sending a request, including its body, until
+            the response headers arrive, in milliseconds. S3 client only.
+            Default: None (no timeout)
         operation_timeout_ms: int | None
             The timeout for the entire operation (including retries) in milliseconds.
-            Default: None (AWS SDK default)
+            S3 client only.
+            Default: None (no timeout)
         operation_attempt_timeout_ms: int | None
             The timeout for a single attempt of an operation in milliseconds.
-            Default: None (AWS SDK default)
+            It includes uploading the request body, so it must allow for the
+            slowest upload, given how many requests share the network. For the
+            S3 client it excludes downloading a response body; for the
+            `object_store` backends it includes it.
+            Default: None (10 min for S3, 30 s for `object_store` backends)
         """
     @property
     def connect_timeout_ms(self) -> int | None:
         """
         The timeout for establishing a connection in milliseconds.
 
-        Default: None (AWS SDK default)
+        Default: None (3.1 s for S3, 5 s for `object_store` backends)
 
         Returns
         -------
@@ -1326,9 +1338,10 @@ class StorageTimeoutSettings:
     @property
     def read_timeout_ms(self) -> int | None:
         """
-        The timeout for reading a response in milliseconds.
+        The time allowed from sending a request until the response headers
+        arrive, in milliseconds. S3 client only.
 
-        Default: None (AWS SDK default)
+        Default: None (no timeout)
 
         Returns
         -------
@@ -1341,8 +1354,9 @@ class StorageTimeoutSettings:
     def operation_timeout_ms(self) -> int | None:
         """
         The timeout for the entire operation (including retries) in milliseconds.
+        S3 client only.
 
-        Default: None (AWS SDK default)
+        Default: None (no timeout)
 
         Returns
         -------
@@ -1356,7 +1370,7 @@ class StorageTimeoutSettings:
         """
         The timeout for a single attempt of an operation in milliseconds.
 
-        Default: None (AWS SDK default)
+        Default: None (10 min for S3, 30 s for `object_store` backends)
 
         Returns
         -------
@@ -1502,8 +1516,8 @@ class StorageSettings:
             Default: 104,857,600 (100 MB)
 
         timeouts: StorageTimeoutSettings | None
-            The configuration for AWS SDK timeout settings. When None, all
-            timeouts use the AWS SDK defaults.
+            The configuration for storage request timeouts. When None, all
+            timeouts use the client defaults.
             Default: None
         """
     def _repr_html_(self, /) -> str: ...
@@ -1540,9 +1554,9 @@ class StorageSettings:
     @property
     def timeouts(self) -> StorageTimeoutSettings | None:
         """
-        The configuration for AWS SDK timeout settings.
+        The configuration for storage request timeouts.
 
-        Default: None (all timeouts use the AWS SDK defaults)
+        Default: None (all timeouts use the client defaults)
 
         Returns
         -------

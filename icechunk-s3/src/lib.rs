@@ -10,8 +10,10 @@ use std::{
 
 use async_trait::async_trait;
 use aws_config::{
-    BehaviorVersion, meta::region::RegionProviderChain, retry::RetryConfig,
-    timeout::TimeoutConfig,
+    BehaviorVersion,
+    meta::region::RegionProviderChain,
+    retry::RetryConfig,
+    timeout::{TimeoutConfig, TimeoutConfigBuilder},
 };
 use aws_credential_types::provider::error::CredentialsError;
 use aws_sdk_s3::{
@@ -46,7 +48,7 @@ pub use icechunk_storage::s3_config::{
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
     Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    VersionInfo, VersionedUpdateResult, obj_not_found_res, obj_store_error,
+    Timeout, VersionInfo, VersionedUpdateResult, obj_not_found_res, obj_store_error,
     obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
@@ -260,6 +262,24 @@ fn endpoint_with_bucket_separator(endpoint_url: &str) -> Cow<'_, str> {
     }
 }
 
+/// Bounds a request the server accepted but never answers, which the SDK
+/// otherwise waits on forever. Generous because an attempt includes uploading
+/// the request body, over a link shared by every concurrent request.
+const DEFAULT_OPERATION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+fn with_timeout(
+    builder: TimeoutConfigBuilder,
+    timeout: Timeout,
+    set: fn(TimeoutConfigBuilder, Duration) -> TimeoutConfigBuilder,
+    disable: fn(TimeoutConfigBuilder) -> TimeoutConfigBuilder,
+) -> TimeoutConfigBuilder {
+    match timeout {
+        Timeout::Unset => builder,
+        Timeout::Disabled => disable(builder),
+        Timeout::After(duration) => set(builder, duration),
+    }
+}
+
 /// The SDK default HTTPS client, with `pem` as the only trust roots. `None` trusts nothing.
 fn https_client_with_roots(pem: Option<Vec<u8>>) -> aws_sdk_s3::config::SharedHttpClient {
     use aws_smithy_http_client::{Builder, ConnectorBuilder, proxy::ProxyConfig, tls};
@@ -369,26 +389,38 @@ pub async fn mk_client(
             settings.retries().max_backoff_ms() as u64
         ));
 
-    if let Some(timeouts) = settings.timeouts() {
-        let mut timeout_builder = TimeoutConfig::builder();
-        if let Some(ms) = timeouts.connect_timeout_ms {
-            timeout_builder =
-                timeout_builder.connect_timeout(Duration::from_millis(ms as u64));
-        }
-        if let Some(ms) = timeouts.read_timeout_ms {
-            timeout_builder =
-                timeout_builder.read_timeout(Duration::from_millis(ms as u64));
-        }
-        if let Some(ms) = timeouts.operation_timeout_ms {
-            timeout_builder =
-                timeout_builder.operation_timeout(Duration::from_millis(ms as u64));
-        }
-        if let Some(ms) = timeouts.operation_attempt_timeout_ms {
-            timeout_builder = timeout_builder
-                .operation_attempt_timeout(Duration::from_millis(ms as u64));
-        }
-        aws_config = aws_config.timeout_config(timeout_builder.build());
-    }
+    let timeouts = settings.timeouts().copied().unwrap_or_default();
+    let attempt_timeout = match timeouts.operation_attempt_timeout() {
+        Timeout::Unset => Timeout::After(DEFAULT_OPERATION_ATTEMPT_TIMEOUT),
+        timeout => timeout,
+    };
+    let timeout_builder = TimeoutConfig::builder();
+    let timeout_builder = with_timeout(
+        timeout_builder,
+        timeouts.connect_timeout(),
+        TimeoutConfigBuilder::connect_timeout,
+        TimeoutConfigBuilder::disable_connect_timeout,
+    );
+    let timeout_builder = with_timeout(
+        timeout_builder,
+        timeouts.read_timeout(),
+        TimeoutConfigBuilder::read_timeout,
+        TimeoutConfigBuilder::disable_read_timeout,
+    );
+    let timeout_builder = with_timeout(
+        timeout_builder,
+        timeouts.operation_timeout(),
+        TimeoutConfigBuilder::operation_timeout,
+        TimeoutConfigBuilder::disable_operation_timeout,
+    );
+    let timeout_builder = with_timeout(
+        timeout_builder,
+        attempt_timeout,
+        TimeoutConfigBuilder::operation_attempt_timeout,
+        TimeoutConfigBuilder::disable_operation_attempt_timeout,
+    );
+    // Unset fields keep the SDK defaults.
+    aws_config = aws_config.timeout_config(timeout_builder.build());
 
     let mut s3_builder = Builder::from(&aws_config.load().await)
         .force_path_style(config.force_path_style)
@@ -1973,10 +2005,68 @@ pub fn tigris_storage(
 #[cfg(test)]
 mod tests {
     use icechunk_macros::tokio_test;
+    use icechunk_storage::TimeoutSettings;
 
     use super::*;
 
     // Readback classification is unit-tested in `icechunk_storage::readback`.
+
+    async fn client_timeouts(settings: &Settings) -> TimeoutConfig {
+        let options = S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url("http://localhost:4200");
+        let credentials = S3Credentials::Static(S3StaticCredentials {
+            access_key_id: "key".to_string(),
+            secret_access_key: "secret".to_string(),
+            session_token: None,
+            expires_after: None,
+        });
+        let client = mk_client(&options, credentials, vec![], vec![], settings).await;
+        client.config().timeout_config().cloned().expect("timeout config is always set")
+    }
+
+    #[tokio_test]
+    async fn default_timeouts_bound_each_attempt() {
+        let timeouts = client_timeouts(&Settings::default()).await;
+        assert_eq!(
+            timeouts.operation_attempt_timeout(),
+            Some(DEFAULT_OPERATION_ATTEMPT_TIMEOUT)
+        );
+        assert_eq!(timeouts.connect_timeout(), Some(Duration::from_millis(3100)));
+        assert_eq!(timeouts.read_timeout(), None);
+        assert_eq!(timeouts.operation_timeout(), None);
+    }
+
+    #[tokio_test]
+    async fn user_timeouts_override_defaults_field_by_field() {
+        let settings = Settings {
+            timeouts: Some(TimeoutSettings {
+                read_timeout_ms: Some(2_000),
+                operation_attempt_timeout_ms: Some(5_000),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let timeouts = client_timeouts(&settings).await;
+        assert_eq!(timeouts.operation_attempt_timeout(), Some(Duration::from_secs(5)));
+        assert_eq!(timeouts.read_timeout(), Some(Duration::from_secs(2)));
+        assert_eq!(timeouts.connect_timeout(), Some(Duration::from_millis(3100)));
+        assert_eq!(timeouts.operation_timeout(), None);
+    }
+
+    #[tokio_test]
+    async fn zero_disables_timeouts_including_defaults() {
+        let settings = Settings {
+            timeouts: Some(TimeoutSettings {
+                connect_timeout_ms: Some(0),
+                read_timeout_ms: Some(0),
+                operation_timeout_ms: Some(0),
+                operation_attempt_timeout_ms: Some(0),
+            }),
+            ..Default::default()
+        };
+        assert!(!client_timeouts(&settings).await.has_timeouts());
+    }
 
     const TEST_CA: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/ca.pem");
 

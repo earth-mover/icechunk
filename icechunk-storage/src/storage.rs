@@ -18,6 +18,7 @@ use std::{
     ops::Range,
     pin::Pin,
     sync::{Arc, Mutex, OnceLock},
+    time::Duration,
 };
 use tokio::io::AsyncBufRead;
 use tokio_util::io::StreamReader;
@@ -181,6 +182,8 @@ impl RetriesSettings {
     }
 }
 
+/// Request timeouts in milliseconds. `None` keeps the client default and
+/// `Some(0)` disables the timeout.
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone, Copy, Default)]
 pub struct TimeoutSettings {
     pub connect_timeout_ms: Option<u32>,
@@ -189,7 +192,42 @@ pub struct TimeoutSettings {
     pub operation_attempt_timeout_ms: Option<u32>,
 }
 
+/// A [`TimeoutSettings`] field, decoded.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Timeout {
+    /// Use the client default.
+    Unset,
+    Disabled,
+    After(Duration),
+}
+
+impl From<Option<u32>> for Timeout {
+    fn from(ms: Option<u32>) -> Self {
+        match ms {
+            None => Timeout::Unset,
+            Some(0) => Timeout::Disabled,
+            Some(ms) => Timeout::After(Duration::from_millis(ms.into())),
+        }
+    }
+}
+
 impl TimeoutSettings {
+    pub fn connect_timeout(&self) -> Timeout {
+        self.connect_timeout_ms.into()
+    }
+
+    pub fn read_timeout(&self) -> Timeout {
+        self.read_timeout_ms.into()
+    }
+
+    pub fn operation_timeout(&self) -> Timeout {
+        self.operation_timeout_ms.into()
+    }
+
+    pub fn operation_attempt_timeout(&self) -> Timeout {
+        self.operation_attempt_timeout_ms.into()
+    }
+
     pub fn merge(&self, other: Self) -> Self {
         Self {
             connect_timeout_ms: other.connect_timeout_ms.or(self.connect_timeout_ms),
