@@ -725,10 +725,11 @@ mod tests {
             external_kills: 0,
             progress: None,
         };
-        pool.spawn("0".to_owned(), 0).unwrap();
-        pool.spawn("1".to_owned(), 0).unwrap();
-        for worker in &mut pool.children {
-            assert!(!worker.child.wait().unwrap().success());
+        // One worker at a time: sh writes its message in several writes, so
+        // concurrent workers interleave them.
+        for (i, slot) in ["0", "1"].into_iter().enumerate() {
+            pool.spawn(slot.to_owned(), 0).unwrap();
+            assert!(!pool.children[i].child.wait().unwrap().success());
         }
         let stderr = fs::read_to_string(root.workers_stderr("h")).unwrap();
         assert_eq!(
