@@ -558,10 +558,7 @@ async fn put_to_hung_server(
     port: u16,
     attempt_timeout_ms: u32,
     wait: Duration,
-) -> Result<
-    Option<icechunk::storage::StorageResult<icechunk::storage::VersionedUpdateResult>>,
-    Box<dyn std::error::Error>,
-> {
+) -> Result<Option<icechunk::storage::StorageResult<()>>, Box<dyn std::error::Error>> {
     let (client, proxy_name) = setup_toxiproxy(proxy_label, port).await?;
     let storage = build_proxied_storage(backend, proxy_label, port).await?;
     let settings = icechunk::storage::Settings {
@@ -597,7 +594,7 @@ async fn put_to_hung_server(
             Bytes::from_static(b"data"),
             None,
             Default::default(),
-            None,
+            icechunk::storage::WriteHint::Atomic,
         ),
     )
     .await;
@@ -672,13 +669,13 @@ async fn zero_byte_conditional_put_lost_response()
         |storage, settings, toxic_remover| async move {
             let ctx = StorageContext::unattributed(&settings);
             let result = storage
-                .put_object(
+                .put_object_conditional(
                     &ctx,
                     "zero-byte-test",
                     Bytes::new(),
                     None,
                     Default::default(),
-                    Some(&icechunk::storage::VersionInfo::for_creation()),
+                    icechunk::storage::PutCondition::Create,
                 )
                 .await;
             toxic_remover.await??;

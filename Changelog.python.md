@@ -4,6 +4,8 @@
 
 ### Features
 
+- New experimental `icechunk.filesystem_storage`: filesystem storage that is safe for concurrent writers on filesystems that meet the requirements (hard links, atomic rename and exclusive directory rename). It is opt-in; `local_filesystem_storage` is unchanged and still not safe for concurrent commits. `FilesystemStorage.convert_to_filesystem_layout()` converts a repository created with `local_filesystem_storage` or another backend, which `filesystem_storage` requires before opening it, and `FilesystemStorage.convert_to_object_store_layout()` converts back. See [Filesystem Storage](https://icechunk.io/en/stable/guides/storage/#filesystem-storage) in the storage guide.
+- Spec 2.2: repositories can list *writer features*, format features that a library must implement to modify them. A library refuses to modify a repository that lists a writer feature it doesn't implement. See the [version policy](https://icechunk.io/en/stable/reference/version-policy/).
 - Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
   - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.
   - A commit or flush checks the flags for its session content before it uploads data.
@@ -17,6 +19,9 @@
 
 ### Fixes
 
+- Icechunk opens repositories whose configuration holds settings it doesn't know or can't decode, such as keys added by later versions or virtual chunk containers for storage it doesn't support, ignores them, and keeps them unchanged when it changes the configuration.
+- Garbage collection deletes only files whose names are exactly the encoding of an object id of the right size; other files in `snapshots/`, `manifests/`, `transactions/` and `chunks/` are kept.
+- Reading a malformed repo info file, such as one whose snapshot parents are out of range or form a cycle, raises an error instead of crashing or hanging.
 - The S3 client (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) has a default per-attempt timeout of 10 minutes. A server that accepted a request and never answered used to make the request wait forever. Now the attempt fails and is retried. Set `operation_attempt_timeout_ms` to change the limit, or to 0 to disable it.
 
 ## Python Icechunk Library 2.3.1

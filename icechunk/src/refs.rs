@@ -21,7 +21,10 @@ use crate::{
     Storage, StorageError,
     error::ICError,
     format::{SnapshotId, V1_REFS_FILE_PATH},
-    storage::{StorageContext, StorageErrorKind, VersionInfo, VersionedUpdateResult},
+    storage::{
+        GetModifiedResult, PutCondition, StorageContext, StorageErrorKind, VersionInfo,
+        VersionedUpdateResult,
+    },
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
@@ -165,13 +168,13 @@ pub async fn create_tag(
     let data = RefData { snapshot };
     let content = serde_json::to_vec(&data).capture()?;
     match storage
-        .put_object(
+        .put_object_conditional(
             ctx,
             path.as_str(),
             Bytes::from_owner(content),
             Some("application/json"),
             Default::default(),
-            Some(&VersionInfo::for_creation()),
+            PutCondition::Create,
         )
         .await
     {
@@ -193,10 +196,8 @@ pub async fn update_branch(
     current_snapshot: Option<&SnapshotId>,
 ) -> RefResult<VersionInfo> {
     let (ref_data, version) = match fetch_branch(storage, ctx, name).await {
-        Ok((ref_data, version)) => (Some(ref_data), version),
-        Err(RefError { kind: RefErrorKind::RefNotFound(..), .. }) => {
-            (None, VersionInfo::for_creation())
-        }
+        Ok((ref_data, version)) => (Some(ref_data), Some(version)),
+        Err(RefError { kind: RefErrorKind::RefNotFound(..), .. }) => (None, None),
         Err(err) => {
             return Err(err);
         }
@@ -215,13 +216,13 @@ pub async fn update_branch(
     let data = RefData { snapshot: new_snapshot };
     let content = serde_json::to_vec(&data).capture()?;
     match storage
-        .put_object(
+        .put_object_conditional(
             ctx,
             path.as_str(),
             Bytes::from_owner(content),
             Some("application/json"),
             Default::default(),
-            Some(&version),
+            version.as_ref().map_or(PutCondition::Create, PutCondition::IfVersion),
         )
         .await
     {
@@ -364,13 +365,13 @@ pub async fn delete_tag(
     let key = tag_delete_marker_key(tag)?;
     let path = format!("{V1_REFS_FILE_PATH}/{key}");
     match storage
-        .put_object(
+        .put_object_conditional(
             ctx,
             path.as_str(),
             Bytes::new(),
             None,
             Default::default(),
-            Some(&VersionInfo::for_creation()),
+            PutCondition::Create,
         )
         .await
     {
@@ -403,7 +404,7 @@ pub async fn fetch_tag(
     let fut1 = async move {
         let path = format!("{V1_REFS_FILE_PATH}/{ref_path}");
         match storage.get_object(ctx, path.as_str(), None).await {
-            Ok((result, ..)) => Ok(async_read_to_bytes(result).await?),
+            Ok(result) => Ok(async_read_to_bytes(result).await?),
             Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
                 Err(RefError::capture(RefErrorKind::RefNotFound(name.to_string())))
             }
@@ -450,12 +451,16 @@ async fn fetch_branch(
 ) -> RefResult<(RefData, VersionInfo)> {
     let ref_key = branch_key(name)?;
     let path = format!("{V1_REFS_FILE_PATH}/{ref_key}");
-    match storage.get_object(ctx, path.as_str(), None).await {
-        Ok((result, version)) => {
-            let bytes = async_read_to_bytes(result).await?;
+    match storage.get_object_conditional(ctx, path.as_str(), None).await {
+        Ok(GetModifiedResult::Modified { data, new_version }) => {
+            let bytes = async_read_to_bytes(data).await?;
             let data = serde_json::from_slice(bytes.as_ref()).capture()?;
-            Ok((data, version))
+            Ok((data, new_version))
         }
+        Ok(GetModifiedResult::OnLatestVersion) => Err(icechunk_storage::other_error(
+            "backend returned \"on latest version\" for a conditional get without a previous version",
+        )
+        .inject()),
         Err(StorageError { kind: StorageErrorKind::ObjectNotFound, .. }) => {
             Err(RefError::capture(RefErrorKind::RefNotFound(name.to_string())))
         }

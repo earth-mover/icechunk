@@ -5,7 +5,7 @@ title: Specification
 
 !!! Note
 
-    This is the spec for the original Icechunk on-disk format (spec version 1), used by Icechunk 1.x. The current format is [spec version 2.1](./spec-v2-1.md), used by Icechunk 2.1.x.
+    This is the spec for the original Icechunk on-disk format (spec version 1). See [Spec versions](./version-policy.md#spec-versions) for the current version and the releases of the reference implementation that implement each.
 
 !!! Note
 

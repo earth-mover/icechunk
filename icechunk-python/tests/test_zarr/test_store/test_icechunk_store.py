@@ -9,8 +9,9 @@ import numpy as np
 import pytest
 
 import zarr
-from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
+from icechunk import IcechunkError, IcechunkStore
 from icechunk.repository import Repository
+from tests.conftest import fs_storage
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
 from zarr.core.sync import _collect_aiterator, collect_aiterator, sync
@@ -46,17 +47,22 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         return self.buffer_cls.from_bytes(result)
 
     @pytest.fixture
-    def store_kwargs(self, tmpdir: Path) -> dict[str, Any]:
+    def store_kwargs(self, tmpdir: Path, fs_backend: str) -> dict[str, Any]:
         kwargs = {
-            "storage": local_filesystem_storage(f"{tmpdir}/store_test"),
+            "storage": fs_storage(fs_backend, f"{tmpdir}/store_test"),
             "read_only": False,
         }
         return kwargs
 
     @pytest.fixture(params=[1, 2])
     async def store(
-        self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
+        self,
+        request: pytest.FixtureRequest,
+        store_kwargs: dict[str, Any],
+        fs_backend: str,
     ) -> IcechunkStore:  # type: ignore[override, unused-ignore]
+        if fs_backend == "filesystem" and request.param == 1:
+            pytest.skip("FilesystemStorage refuses IC1 repos")
         read_only = store_kwargs.pop("read_only")
         repo = Repository.open_or_create(**store_kwargs, create_version=request.param)
         if read_only:
@@ -67,8 +73,13 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     @pytest.fixture(params=[1, 2])
     async def store_not_open(  # type: ignore[override, unused-ignore]
-        self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
+        self,
+        request: pytest.FixtureRequest,
+        store_kwargs: dict[str, Any],
+        fs_backend: str,
     ) -> IcechunkStore:
+        if fs_backend == "filesystem" and request.param == 1:
+            pytest.skip("FilesystemStorage refuses IC1 repos")
         read_only = store_kwargs.pop("read_only")
         repo = Repository.open_or_create(**store_kwargs, create_version=request.param)
         if read_only:

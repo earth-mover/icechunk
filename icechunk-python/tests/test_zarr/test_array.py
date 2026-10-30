@@ -8,8 +8,8 @@ from typing import Any, Literal
 import numpy as np
 import pytest
 
-from icechunk import IcechunkStore
-from tests.conftest import parse_repo
+from icechunk import IcechunkStore, Repository
+from tests.conftest import fs_storage
 from zarr import Group, create_array
 from zarr.core.buffer import default_buffer_prototype
 from zarr.core.common import ZarrFormat
@@ -26,21 +26,20 @@ except ImportError:
     _has_rectilinear = False
 
 
-# @pytest.fixture(params=["local"])
 @pytest.fixture
 def store(
-    request: pytest.FixtureRequest, tmpdir: Path, any_spec_version: int | None
+    tmpdir: Path,
+    any_spec_version: int | None,
+    fs_backend: str,
 ) -> IcechunkStore:
-    repo = parse_repo(
-        "local",
-        str(tmpdir),
+    repo = Repository.create(
+        storage=fs_storage(fs_backend, str(tmpdir), any_spec_version),
         spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     return session.store
 
 
-@pytest.mark.parametrize("store", ["memory"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
 @pytest.mark.parametrize("overwrite", [True, False])
 @pytest.mark.parametrize("extant_node", ["array", "group"])
@@ -92,7 +91,6 @@ def test_array_creation_existing_node(
 
 ### We should test serializability in many ways
 @pytest.mark.skip("icechunk requires opting-in to pickling at the session level")
-@pytest.mark.parametrize("store", ["local"], indirect=["store"])
 @pytest.mark.parametrize("zarr_format", [3])
 def test_serializable_sync_array(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
     expected = create_array(
@@ -110,7 +108,6 @@ def test_serializable_sync_array(store: IcechunkStore, zarr_format: ZarrFormat) 
 
 ### We should definitely test our fill_value handling since that uses custom
 ### serialization logic
-@pytest.mark.parametrize("store", ["memory"], indirect=True)
 @pytest.mark.parametrize(
     ("dtype_str", "fill_value"),
     [("bool", True), ("uint8", 99), ("float32", -99.9), ("complex64", 3 + 4j)],
@@ -132,7 +129,6 @@ def test_array_v3_fill_value(
     assert arr.fill_value.dtype == arr.dtype
 
 
-@pytest.mark.parametrize("store", ["memory"], indirect=True)
 async def test_array_v3_nan_fill_value(store: IcechunkStore) -> None:
     shape = (10,)
     arr = create_array(
@@ -162,7 +158,6 @@ async def test_array_v3_nan_fill_value(store: IcechunkStore) -> None:
         (math.inf, ["Infinity", 0.0]),
     ],
 )
-@pytest.mark.parametrize("store", ["memory"], indirect=True)
 async def test_special_complex_fill_values_roundtrip(
     store: IcechunkStore, fill_value: Any, expected: list[Any]
 ) -> None:

@@ -31,6 +31,10 @@ use icechunk_types::sealed;
 
 /// User attributes stored on arrays and groups.
 pub mod attributes;
+/// The header and zstd frame every metadata file shares.
+pub mod envelope;
+/// The filesystem layout of the `repo.d` protocol.
+pub mod layout_v1;
 /// Chunk reference tables.
 pub mod manifest;
 
@@ -41,12 +45,16 @@ pub mod flatbuffers;
 
 /// Repository metadata (version, properties).
 pub mod repo_info;
+/// The repo info file: [`envelope`] around a [`repo_info::RepoInfo`].
+pub mod repo_info_file;
 /// Flatbuffer serialization.
 pub mod serializers;
 /// Repository state at a point in time.
 pub mod snapshot;
 /// Change records for commits.
 pub mod transaction_log;
+/// Writer features listed in the repo info.
+pub mod writer_features;
 
 pub const CONFIG_FILE_PATH: &str = "config.yaml";
 pub const REPO_INFO_FILE_PATH: &str = "repo";
@@ -197,6 +205,16 @@ impl<const SIZE: usize, T: FileTypeTag> TryFrom<&str> for ObjectId<SIZE, T> {
         let bytes = base32::decode(base32::Alphabet::Crockford, value);
         let Some(bytes) = bytes else { return Err("Invalid ObjectId string") };
         Self::try_from(bytes.as_slice())
+    }
+}
+
+impl<const SIZE: usize, T: FileTypeTag> ObjectId<SIZE, T> {
+    /// Parses only the canonical encoding, the one [`Display`] writes.
+    /// `TryFrom<&str>` also accepts lowercase, the `I`, `L` and `O` aliases
+    /// and nonzero trailing bits, all names Icechunk never writes.
+    pub fn from_canonical_str(value: &str) -> Option<Self> {
+        let id = Self::try_from(value).ok()?;
+        (String::from(&id) == value).then_some(id)
     }
 }
 
@@ -419,6 +437,18 @@ pub enum IcechunkFormatErrorKind {
     InvalidArrayMetadata(String),
     #[error("Move operation missing required field '{0}'")]
     MissingRequiredField(String),
+    #[error(
+        "invalid writer feature name `{name}`: names use only lowercase ASCII letters, digits and `-` and end in `-v<n>`; names with `.` are reserved"
+    )]
+    InvalidWriterFeatureName { name: String },
+    #[error("invalid writer feature change: {0}")]
+    InvalidWriterFeatureChange(String),
+    #[error(
+        "this repo info has spec version {found} in its Repo table, but a spec 2.x repo info must have 2"
+    )]
+    InvalidRepoInfoSpecVersion { found: u8 },
+    #[error("malformed repo info: {0}")]
+    MalformedRepoInfo(String),
 }
 
 pub type IcechunkFormatError = ICError<IcechunkFormatErrorKind>;
@@ -527,7 +557,6 @@ pub mod format_constants {
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum CompressionAlgorithmBin {
-        None = 0u8,
         Zstd = 1u8,
     }
 
@@ -536,9 +565,6 @@ pub mod format_constants {
 
         fn try_from(value: u8) -> Result<Self, Self::Error> {
             match value {
-                n if n == CompressionAlgorithmBin::None as u8 => {
-                    Ok(CompressionAlgorithmBin::None)
-                }
                 n if n == CompressionAlgorithmBin::Zstd as u8 => {
                     Ok(CompressionAlgorithmBin::Zstd)
                 }
@@ -747,6 +773,29 @@ mod tests {
     }
 
     #[icechunk_macros::test]
+    fn only_the_canonical_encoding_parses_strictly() {
+        let id = SnapshotId::new([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        let canonical = "000G40R40M30E209185G";
+        assert_eq!(SnapshotId::from_canonical_str(canonical), Some(id.clone()));
+        for alias in [
+            "000g40r40m30e209185g",
+            "OOOG40R40M30E209185G",
+            "000G40R40M30E2O9I85G",
+            "000G40R40M30E2O9L85G",
+            // the last character's low 4 bits are padding
+            "000G40R40M30E209185H",
+        ] {
+            assert_eq!(SnapshotId::try_from(alias), Ok(id.clone()), "{alias}");
+            assert_eq!(SnapshotId::from_canonical_str(alias), None, "{alias}");
+        }
+        for wrong in
+            ["", &canonical[1..], &format!("{canonical}0"), "000G40R40M30E209185U"]
+        {
+            assert_eq!(SnapshotId::from_canonical_str(wrong), None, "{wrong}");
+        }
+    }
+
+    #[icechunk_macros::test]
     fn test_object_id_first_chars_are_every_possible_first_char() {
         // The first character encodes the top 5 bits of the first byte.
         let first_chars: HashSet<char> = (0..=u8::MAX)
@@ -795,8 +844,8 @@ mod tests {
     }
 
     /// Build a binary file header with an arbitrary impl string (right-padded to
-    /// `ICECHUNK_IMPL_NAME_LEN`, mirroring `binary_file_header` in the `icechunk`
-    /// crate), so tests can exercise `parse_file_header` directly.
+    /// `ICECHUNK_IMPL_NAME_LEN`, mirroring [`envelope::binary_file_header`]),
+    /// so tests can exercise `parse_file_header` directly.
     fn make_header(impl_name: &str, spec: u8, file_type: u8, compression: u8) -> Vec<u8> {
         use format_constants::*;
         let mut buf = Vec::with_capacity(ICECHUNK_FILE_HEADER_LEN);
@@ -838,7 +887,7 @@ mod tests {
             "ic-9.9.9",
             SpecVersionBin::V1 as u8,
             FileTypeBin::Manifest as u8,
-            CompressionAlgorithmBin::None as u8,
+            CompressionAlgorithmBin::Zstd as u8,
         );
         let header = parse_file_header(&buf).unwrap();
         assert_eq!(header.impl_name, "ic-9.9.9");
@@ -846,7 +895,7 @@ mod tests {
         assert_eq!(header.app_version.as_deref(), Some("9.9.9"));
         assert_eq!(header.spec_version, SpecVersionBin::V1);
         assert_eq!(header.file_type, FileTypeBin::Manifest);
-        assert_eq!(header.compression, CompressionAlgorithmBin::None);
+        assert_eq!(header.compression, CompressionAlgorithmBin::Zstd);
     }
 
     #[icechunk_macros::test]
@@ -917,6 +966,55 @@ mod tests {
         assert!(matches!(
             err.kind(),
             IcechunkFormatErrorKind::UnknownFileType { got: 99 }
+        ));
+    }
+
+    #[icechunk_macros::test]
+    fn test_file_type_7_is_unknown() {
+        use format_constants::*;
+        assert!(FileTypeBin::try_from(7).is_err());
+        let buf = make_header(
+            "ic-1.0.0",
+            SpecVersionBin::V2 as u8,
+            7,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        let err = parse_file_header(&buf).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            IcechunkFormatErrorKind::UnknownFileType { got: 7 }
+        ));
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_compression_zero() {
+        use format_constants::*;
+        let buf = make_header(
+            "ic-1.0.0",
+            SpecVersionBin::V2 as u8,
+            FileTypeBin::RepoInfo as u8,
+            0,
+        );
+        let err = parse_file_header(&buf).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            IcechunkFormatErrorKind::InvalidCompressionAlgorithm
+        ));
+    }
+
+    #[icechunk_macros::test]
+    fn test_parse_file_header_first_unassigned_file_type() {
+        use format_constants::*;
+        let buf = make_header(
+            "ic-1.0.0",
+            SpecVersionBin::V2 as u8,
+            8,
+            CompressionAlgorithmBin::Zstd as u8,
+        );
+        let err = parse_file_header(&buf).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            IcechunkFormatErrorKind::UnknownFileType { got: 8 }
         ));
     }
 

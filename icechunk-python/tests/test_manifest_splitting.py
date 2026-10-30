@@ -13,6 +13,7 @@ import zarr
 from icechunk import ManifestSplitCondition, ManifestSplitDimCondition
 from icechunk.testing.strategies import splitting_configs
 from icechunk.xarray import to_icechunk
+from tests.conftest import fs_storage
 from zarr.testing.strategies import arrays as zarr_arrays
 
 SHAPE = (3, 4, 17)
@@ -31,7 +32,9 @@ def test_splitting_config_dict_roundtrip(data: st.DataObject) -> None:
     assert ic.ManifestSplittingConfig.from_dict(config.to_dict()) == config
 
 
-def test_manifest_splitting_appends(any_spec_version: int | None) -> None:
+def test_manifest_splitting_appends(
+    any_spec_version: int | None, fs_backend: str
+) -> None:
     array_condition = ManifestSplitCondition.or_conditions(
         [
             ManifestSplitCondition.name_matches("temperature"),
@@ -46,7 +49,7 @@ def test_manifest_splitting_appends(any_spec_version: int | None) -> None:
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
-        storage = ic.local_filesystem_storage(tmpdir)
+        storage = fs_storage(fs_backend, tmpdir, any_spec_version)
         repo = ic.Repository.create(storage, config=config, spec_version=any_spec_version)
         assert repo.config.manifest
         assert repo.config.manifest.splitting is not None
@@ -125,7 +128,7 @@ def test_manifest_splitting_appends(any_spec_version: int | None) -> None:
 
 
 def test_manifest_overwrite_splitting_config_on_read(
-    any_spec_version: int | None,
+    any_spec_version: int | None, fs_backend: str
 ) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
@@ -151,7 +154,7 @@ def test_manifest_overwrite_splitting_config_on_read(
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
-        storage = ic.local_filesystem_storage(tmpdir)
+        storage = fs_storage(fs_backend, tmpdir, any_spec_version)
         repo = ic.Repository.create(
             storage,
             config=config,
@@ -195,7 +198,9 @@ def test_manifest_overwrite_splitting_config_on_read(
         assert len(os.listdir(f"{tmpdir}/manifests")) == nmanifests
 
 
-def test_manifest_splitting_sparse_regions(any_spec_version: int | None) -> None:
+def test_manifest_splitting_sparse_regions(
+    any_spec_version: int | None, fs_backend: str
+) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {
             ManifestSplitCondition.name_matches("temperature"): {
@@ -208,7 +213,7 @@ def test_manifest_splitting_sparse_regions(any_spec_version: int | None) -> None
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
-        storage = ic.local_filesystem_storage(tmpdir)
+        storage = fs_storage(fs_backend, tmpdir, any_spec_version)
         repo = ic.Repository.create(
             storage,
             config=config,
@@ -284,6 +289,7 @@ def test_manifest_splitting_complex_config(
     config: ic.config.ManifestSplitValues,
     expected_split_sizes: tuple[int, int, int],
     any_spec_version: int | None,
+    fs_backend: str,
 ) -> None:
     sconfig = ic.ManifestSplittingConfig.from_dict(
         {ManifestSplitCondition.AnyArray(): config}
@@ -293,7 +299,7 @@ def test_manifest_splitting_complex_config(
     )
     with tempfile.TemporaryDirectory() as tmpdir:
         ### simple create repo with manifest splitting
-        storage = ic.local_filesystem_storage(tmpdir)
+        storage = fs_storage(fs_backend, tmpdir, any_spec_version)
         repo = ic.Repository.create(
             storage,
             config=repo_config,

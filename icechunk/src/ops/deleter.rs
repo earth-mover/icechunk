@@ -686,23 +686,16 @@ async fn run_deletes(
 /// tests.
 #[cfg(test)]
 pub(crate) mod testing {
-    use std::{
-        ops::Range,
-        pin::Pin,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use bytes::Bytes;
-    use chrono::{DateTime, Utc};
     use futures::stream::BoxStream;
-    use icechunk_storage::sealed::Sealed;
 
     use super::*;
     #[cfg(not(feature = "shuttle"))]
     use crate::format::format_constants::SpecVersionBin;
     use crate::storage::{
-        GetModifiedResult, RepositoryCreation, Settings, StorageErrorKind, StorageInfo,
-        StorageResult, VersionInfo, VersionedUpdateResult,
+        StorageErrorKind, StorageResult,
+        intercepting::{Intercept, InterceptingStorage},
     };
 
     /// How `FlakyDeletes::delete_batch` misbehaves under the failing prefix.
@@ -731,12 +724,10 @@ pub(crate) mod testing {
         ReportOneFewer,
     }
 
-    /// Delegates everything; `delete_batch` fails according to the mode, and
+    /// Intercepts a storage: `delete_batch` fails according to the mode, and
     /// listings under `list_error_prefix` break after their first item.
-    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    #[derive(Debug)]
     pub(crate) struct FlakyDeletes {
-        backend: Arc<dyn Storage + Send + Sync>,
-        #[serde(skip)]
         pub(crate) calls: AtomicUsize,
         /// prefix whose deletes misbehave (`None` = every prefix)
         failing_prefix: Option<String>,
@@ -744,17 +735,13 @@ pub(crate) mod testing {
         /// prefix whose listings yield an `Err` after their first item
         list_error_prefix: Option<String>,
         /// permits `FailMode::Gated` deletes wait on; ignored by every other mode
-        #[serde(skip, default = "closed_gate")]
         pub(crate) gate: Arc<tokio::sync::Semaphore>,
         /// `delete_batch` calls running right now, and the most ever at once:
         /// the deleter's in-flight limit as the store sees it
-        #[serde(skip)]
         in_flight: AtomicUsize,
-        #[serde(skip)]
         peak_in_flight: AtomicUsize,
         /// what to report from `lists_id_prefixes_natively`: `None` defers to
         /// the backend, `Some` picks which `AssetManager` listing path runs
-        #[serde(default)]
         native_id_prefixes: Option<bool>,
     }
 
@@ -819,63 +806,15 @@ pub(crate) mod testing {
         }
     }
 
-    impl std::fmt::Display for FlakyDeletes {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "FlakyDeletes({})", self.backend)
-        }
-    }
-    impl Sealed for FlakyDeletes {}
-
     #[async_trait::async_trait]
-    #[typetag::serde]
-    impl Storage for FlakyDeletes {
-        fn storage_info(&self) -> StorageInfo {
-            self.backend.storage_info()
-        }
-
-        async fn default_settings(&self) -> StorageResult<Settings> {
-            self.backend.default_settings().await
-        }
-
-        async fn can_write(&self) -> StorageResult<bool> {
-            self.backend.can_write().await
-        }
-
-        async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
-            self.backend.can_create_repository().await
-        }
-
-        async fn put_object(
-            &self,
-            ctx: &StorageContext<'_>,
-            path: &str,
-            bytes: Bytes,
-            content_type: Option<&str>,
-            metadata: Vec<(String, String)>,
-            previous_version: Option<&VersionInfo>,
-        ) -> StorageResult<VersionedUpdateResult> {
-            self.backend
-                .put_object(ctx, path, bytes, content_type, metadata, previous_version)
-                .await
-        }
-
-        async fn copy_object(
-            &self,
-            ctx: &StorageContext<'_>,
-            from: &str,
-            to: &str,
-            content_type: Option<&str>,
-            version: &VersionInfo,
-        ) -> StorageResult<VersionedUpdateResult> {
-            self.backend.copy_object(ctx, from, to, content_type, version).await
-        }
-
+    impl Intercept for FlakyDeletes {
         async fn list_objects<'a>(
-            &'a self,
+            &self,
+            backend: &'a (dyn Storage + Send + Sync),
             ctx: &StorageContext<'_>,
             prefix: &str,
         ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-            let listing = self.backend.list_objects(ctx, prefix).await?;
+            let listing = backend.list_objects(ctx, prefix).await?;
             if self.list_error_prefix.as_deref() != Some(prefix) {
                 return Ok(listing);
             }
@@ -883,15 +822,14 @@ pub(crate) mod testing {
         }
 
         async fn list_objects_with_id_prefixes<'a>(
-            &'a self,
+            &self,
+            backend: &'a (dyn Storage + Send + Sync),
             ctx: &StorageContext<'_>,
             prefix: &str,
             id_prefixes: &[String],
         ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
-            let listing = self
-                .backend
-                .list_objects_with_id_prefixes(ctx, prefix, id_prefixes)
-                .await?;
+            let listing =
+                backend.list_objects_with_id_prefixes(ctx, prefix, id_prefixes).await?;
             // Fail a worker's listing, never the probe: the probe asks for the
             // single two-character prefix `"00"`, workers for one-character ones.
             // Breaking the probe would abort before any worker ran.
@@ -903,13 +841,17 @@ pub(crate) mod testing {
             Ok(listing.take(1).chain(injected_listing_failure()).boxed())
         }
 
-        fn lists_id_prefixes_natively(&self) -> bool {
+        fn lists_id_prefixes_natively(
+            &self,
+            backend: &(dyn Storage + Send + Sync),
+        ) -> bool {
             self.native_id_prefixes
-                .unwrap_or_else(|| self.backend.lists_id_prefixes_natively())
+                .unwrap_or_else(|| backend.lists_id_prefixes_natively())
         }
 
         async fn delete_batch(
             &self,
+            backend: &(dyn Storage + Send + Sync),
             ctx: &StorageContext<'_>,
             prefix: &str,
             batch: Vec<(String, u64)>,
@@ -924,10 +866,10 @@ pub(crate) mod testing {
                         StorageError::capture(StorageErrorKind::Other(err.to_string()))
                     })?
                     .forget();
-                return self.backend.delete_batch(ctx, prefix, batch).await;
+                return backend.delete_batch(ctx, prefix, batch).await;
             }
             match self.injected(prefix) {
-                Injected::Nothing => self.backend.delete_batch(ctx, prefix, batch).await,
+                Injected::Nothing => backend.delete_batch(ctx, prefix, batch).await,
                 Injected::Fail => Err(StorageError::capture(StorageErrorKind::Other(
                     "injected delete failure".to_string(),
                 ))),
@@ -941,42 +883,13 @@ pub(crate) mod testing {
                 // which is what S3 does from the caller's point of view when
                 // one key in the batch errors
                 Injected::ReportOneFewer => {
-                    let result = self.backend.delete_batch(ctx, prefix, batch).await?;
+                    let result = backend.delete_batch(ctx, prefix, batch).await?;
                     Ok(DeleteObjectsResult {
                         deleted_objects: result.deleted_objects.saturating_sub(1),
                         deleted_bytes: result.deleted_bytes,
                     })
                 }
             }
-        }
-
-        async fn get_object_last_modified(
-            &self,
-            ctx: &StorageContext<'_>,
-            path: &str,
-        ) -> StorageResult<DateTime<Utc>> {
-            self.backend.get_object_last_modified(ctx, path).await
-        }
-
-        async fn get_object_conditional(
-            &self,
-            ctx: &StorageContext<'_>,
-            path: &str,
-            previous_version: Option<&VersionInfo>,
-        ) -> StorageResult<GetModifiedResult> {
-            self.backend.get_object_conditional(ctx, path, previous_version).await
-        }
-
-        async fn get_object_range(
-            &self,
-            ctx: &StorageContext<'_>,
-            path: &str,
-            range: Option<&Range<u64>>,
-        ) -> StorageResult<(
-            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-            VersionInfo,
-        )> {
-            self.backend.get_object_range(ctx, path, range).await
         }
     }
 
@@ -1019,7 +932,6 @@ pub(crate) mod testing {
         native_id_prefixes: Option<bool>,
     ) -> (Arc<AssetManager>, Arc<FlakyDeletes>) {
         let flaky = Arc::new(FlakyDeletes {
-            backend: Arc::clone(backend),
             calls: AtomicUsize::new(0),
             failing_prefix: failing_prefix.map(str::to_string),
             mode,
@@ -1029,7 +941,8 @@ pub(crate) mod testing {
             peak_in_flight: AtomicUsize::new(0),
             native_id_prefixes,
         });
-        let storage: Arc<dyn Storage + Send + Sync> = Arc::clone(&flaky) as _;
+        let storage: Arc<dyn Storage + Send + Sync> =
+            InterceptingStorage::new(Arc::clone(backend), Arc::clone(&flaky) as _);
         let am = Arc::new(AssetManager::new_no_cache(
             storage,
             repo.storage_settings().clone(),
