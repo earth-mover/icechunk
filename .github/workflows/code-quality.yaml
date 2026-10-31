@@ -1,0 +1,117 @@
+name: Code Quality Checks
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  merge_group:
+  push:
+    branches:
+      - main
+      - 'support/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # don't cancel main runs: the post-job cache saves only happen there
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTFLAGS: "-D warnings"
+  RUSTUP_MAX_RETRIES: 10
+  PIXI_VERSION: "v0.82.1"
+
+jobs:
+  rust-lint:
+    name: Code Quality (rust)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      # Runs after setup-pixi so the cache key hashes the pixi-pinned rustc,
+      # not the runner image's drifting rustup stable
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # The rust cache includes a dep on the Python version (when building icechunk-python)
+          # so we need to bump the version here whenever Python version is updated
+          # Currently: 3.12
+          prefix-key: "rust-py312"
+          shared-key: "code-quality"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run formatting checks
+        run: |
+          just format --check
+
+      - name: Run clippy linting
+        run: |
+          just profile=ci lint
+
+  python-lint:
+    name: Code Quality (python)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Check pixi version pins
+        run: |
+          just check-pixi-version
+
+      # mypy reads the source tree and the .pyi stubs, so it needs no built extension
+      - name: Python mypy type checking
+        run: |
+          just mypy
+
+      - name: Run pre-commit checks (skip Rust)
+        run: |
+          just py-pre-commit
+
+  # Keeps the required "Code Quality" check name. A skipped required check
+  # counts as passing, so this fails unless both lint jobs succeeded.
+  code-quality:
+    name: Code Quality
+    if: always()
+    needs: [rust-lint, python-lint]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all lint jobs passed
+        env:
+          RUST_RESULT: ${{ needs.rust-lint.result }}
+          PYTHON_RESULT: ${{ needs.python-lint.result }}
+        run: |
+          if [ "$RUST_RESULT" != "success" ] || [ "$PYTHON_RESULT" != "success" ]; then
+            echo "::error::One or more lint jobs failed"
+            exit 1
+          fi

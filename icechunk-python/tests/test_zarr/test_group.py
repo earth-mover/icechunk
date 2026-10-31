@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import operator
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 import pytest
@@ -23,8 +23,8 @@ from zarr.storage._common import make_store_path
 
 
 @pytest.fixture(params=["memory"])
-def store(request: pytest.FixtureRequest) -> IcechunkStore:
-    repo = parse_repo(request.param, "test")
+def store(request: pytest.FixtureRequest, any_spec_version: int | None) -> IcechunkStore:
+    repo = parse_repo(request.param, "test", any_spec_version)
     session = repo.writable_session("main")
     return session.store
 
@@ -110,7 +110,7 @@ def test_group_members(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
 
     path = "group"
     group = Group.from_store(store=store, zarr_format=zarr_format)
-    members_expected: dict[str, Array | Group] = {}
+    members_expected: dict[str, Array[Any] | Group] = {}
 
     members_expected["subgroup"] = group.create_group("subgroup")
     # make a sub-sub-subgroup, to ensure that the children calculation doesn't go
@@ -332,7 +332,7 @@ def test_group_setitem(store: IcechunkStore, zarr_format: ZarrFormat) -> None:
         a = group[key]
         assert isinstance(a, Array)
         assert a.shape == (3, 5)
-        np.testing.assert_array_equal(a, arr)  # type: ignore [arg-type]
+        np.testing.assert_array_equal(a, arr)
 
 
 def test_group_contains(store: IcechunkStore, zarr_format: ZarrFormat) -> None:

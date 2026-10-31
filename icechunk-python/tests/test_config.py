@@ -1,5 +1,4 @@
 import os
-import re
 from collections.abc import Generator
 from pathlib import Path
 
@@ -7,16 +6,20 @@ import pytest
 
 import icechunk
 import zarr
+from icechunk._icechunk_python import RepoUpdateRetryConfig
 
 
 @pytest.fixture(scope="function")
-def tmp_store(tmpdir: Path) -> Generator[tuple[icechunk.IcechunkStore, str]]:
+def tmp_store(
+    tmpdir: Path, any_spec_version: int | None
+) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     repo_path = f"{tmpdir}"
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
         storage=icechunk.local_filesystem_storage(repo_path),
         config=config,
+        create_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -25,27 +28,31 @@ def tmp_store(tmpdir: Path) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     yield store, repo_path
 
 
-def test_config_fetch() -> None:
+def test_config_fetch(any_spec_version: int | None) -> None:
+    storage = icechunk.in_memory_storage()
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
-    storage = icechunk.in_memory_storage()
+    config.storage = storage.default_settings()
     repo = icechunk.Repository.create(
         storage=storage,
         config=config,
+        spec_version=any_spec_version,
     )
 
     assert repo.config == config
     assert icechunk.Repository.fetch_config(storage) == config
 
 
-def test_config_save() -> None:
-    config = icechunk.RepositoryConfig.default()
+def test_config_save(any_spec_version: int | None) -> None:
     storage = icechunk.in_memory_storage()
+    config = icechunk.RepositoryConfig.default()
     repo = icechunk.Repository.create(
         storage=storage,
+        spec_version=any_spec_version,
     )
 
     config.inline_chunk_threshold_bytes = 5
+    config.storage = storage.default_settings()
     repo = icechunk.Repository.open(
         storage=storage,
         config=config,
@@ -126,10 +133,14 @@ def test_virtual_chunk_containers() -> None:
     )
     container = icechunk.VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
-    assert re.match(
-        r"RepositoryConfig\(inline_chunk_threshold_bytes=None, get_partial_values_concurrency=None, compression=None, caching=None, storage=None, manifest=.*\)",
-        repr(config),
-    )
+    repr_str = repr(config)
+    assert "icechunk.config.RepositoryConfig(" in repr_str
+    assert "inline_chunk_threshold_bytes=None" in repr_str
+    assert "caching=None" in repr_str
+    assert "compression=None" in repr_str
+    assert "storage=None" in repr_str
+    assert "manifest=None" in repr_str
+    assert "repo_update_retries=None" in repr_str
     assert config.virtual_chunk_containers
     assert len(config.virtual_chunk_containers) == 1
     assert config.virtual_chunk_containers["s3://testbucket/"] == container
@@ -142,10 +153,11 @@ def test_virtual_chunk_containers() -> None:
     assert config.virtual_chunk_containers["s3://testbucket/"] == container
 
 
-def test_can_change_deep_config_values() -> None:
+def test_can_change_deep_config_values(any_spec_version: int | None) -> None:
     storage = icechunk.in_memory_storage()
     repo = icechunk.Repository.create(
         storage=storage,
+        spec_version=any_spec_version,
     )
     config = icechunk.RepositoryConfig(
         inline_chunk_threshold_bytes=11,
@@ -166,17 +178,39 @@ def test_can_change_deep_config_values() -> None:
     config.storage.storage_class = "STANDARD_IA"
     config.manifest = icechunk.ManifestConfig()
     config.manifest.preload = icechunk.ManifestPreloadConfig(max_total_refs=42)
+    config.manifest.max_concurrent_manifest_fetches_during_commit = 16
+    config.max_concurrent_requests = 10
+    config.max_concurrent_decodes = 4
+    config.num_updates_per_repo_info_file = 50
+    config.repo_update_retries = RepoUpdateRetryConfig(
+        default=icechunk.StorageRetriesSettings(
+            max_tries=200, initial_backoff_ms=100, max_backoff_ms=60_000
+        )
+    )
     config.manifest.preload.preload_if = icechunk.ManifestPreloadCondition.and_conditions(
         [
             icechunk.ManifestPreloadCondition.true(),
             icechunk.ManifestPreloadCondition.name_matches("foo"),
         ]
     )
-
-    assert re.match(
-        r"RepositoryConfig\(inline_chunk_threshold_bytes=5, get_partial_values_concurrency=42, compression=CompressionConfig\(algorithm=None, level=2\), caching=CachingConfig\(num_snapshot_nodes=None, num_chunk_refs=8, num_transaction_changes=None, num_bytes_attributes=None, num_bytes_chunks=None\), storage=StorageSettings\(concurrency=StorageConcurrencySettings\(max_concurrent_requests_for_object=5, ideal_concurrent_request_size=1000000\), retries=StorageRetriesSettings\(max_tries=42, initial_backoff_ms=500, max_backoff_ms=600\), unsafe_use_conditional_create=None, unsafe_use_conditional_update=None, unsafe_use_metadata=None, storage_class=\"STANDARD_IA\", metadata_storage_class=None, chunks_storage_class=None\), manifest=.*\)",
-        repr(config),
+    config.manifest.virtual_chunk_location_compression = (
+        icechunk.ManifestVirtualChunkLocationCompressionConfig(
+            min_num_chunks=500,
+            dictionary_max_training_samples=200,
+            dictionary_max_size_bytes=4096,
+            compression_level=5,
+        )
     )
+
+    repr_str = repr(config)
+    assert "icechunk.config.RepositoryConfig(" in repr_str
+    assert "inline_chunk_threshold_bytes=5" in repr_str
+    assert "get_partial_values_concurrency=42" in repr_str
+    assert "icechunk.config.CachingConfig(" in repr_str
+    assert "num_chunk_refs=8" in repr_str
+    assert "icechunk.config.CompressionConfig(" in repr_str
+    assert "icechunk.storage.StorageSettings(" in repr_str
+    assert "icechunk.config.ManifestConfig(" in repr_str
     repo = icechunk.Repository.open(
         storage=storage,
         config=config,
@@ -186,8 +220,12 @@ def test_can_change_deep_config_values() -> None:
     stored_config = icechunk.Repository.fetch_config(storage)
     assert stored_config
     assert stored_config.inline_chunk_threshold_bytes == 5
+    assert stored_config.get_partial_values_concurrency == 42
     assert stored_config.compression
     assert stored_config.compression.level == 2
+    assert stored_config.max_concurrent_requests == 10
+    assert stored_config.max_concurrent_decodes == 4
+    assert stored_config.num_updates_per_repo_info_file == 50
     assert stored_config.caching
     assert stored_config.caching.num_chunk_refs == 8
     assert stored_config.storage
@@ -197,11 +235,18 @@ def test_can_change_deep_config_values() -> None:
     assert stored_config.storage.retries.max_tries == 42
     assert stored_config.storage.retries.initial_backoff_ms == 500
     assert stored_config.storage.retries.max_backoff_ms == 600
+    assert stored_config.storage.storage_class == "STANDARD_IA"
+    assert stored_config.repo_update_retries
+    assert stored_config.repo_update_retries.default
+    assert stored_config.repo_update_retries.default.max_tries == 200
+    assert stored_config.repo_update_retries.default.initial_backoff_ms == 100
+    assert stored_config.repo_update_retries.default.max_backoff_ms == 60_000
     assert stored_config.manifest
+    assert stored_config.manifest.max_concurrent_manifest_fetches_during_commit == 16
     assert stored_config.manifest.preload
-    assert config.manifest.preload.max_total_refs == 42
+    assert stored_config.manifest.preload.max_total_refs == 42
     assert (
-        config.manifest.preload.preload_if
+        stored_config.manifest.preload.preload_if
         == icechunk.ManifestPreloadCondition.and_conditions(
             [
                 icechunk.ManifestPreloadCondition.true(),
@@ -209,6 +254,12 @@ def test_can_change_deep_config_values() -> None:
             ]
         )
     )
+    assert stored_config.manifest.virtual_chunk_location_compression
+    vlc = stored_config.manifest.virtual_chunk_location_compression
+    assert vlc.min_num_chunks == 500
+    assert vlc.dictionary_max_training_samples == 200
+    assert vlc.dictionary_max_size_bytes == 4096
+    assert vlc.compression_level == 5
 
 
 def test_manifest_preload_magic_methods() -> None:
@@ -236,3 +287,124 @@ def test_manifest_preload_magic_methods() -> None:
 
 def test_spec_version() -> None:
     assert icechunk.spec_version() >= 1
+
+
+def test_config_from_store(any_spec_version: int | None) -> None:
+    storage = icechunk.in_memory_storage()
+    config = icechunk.RepositoryConfig.default()
+    config.inline_chunk_threshold_bytes = 5
+    config.storage = storage.default_settings()
+
+    store_config = icechunk.s3_store(region="us-east-1")
+    container = icechunk.VirtualChunkContainer("s3://example/", store_config)
+    config.set_virtual_chunk_container(container)
+
+    repo = icechunk.Repository.create(
+        storage=storage,
+        config=config,
+        spec_version=any_spec_version,
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    assert store.session.config == config
+    assert store.session.config.virtual_chunk_containers is not None
+    assert store.session.config.virtual_chunk_containers.keys() == {"s3://example/"}
+
+
+def test_s3_storage_options() -> None:
+    _storage = icechunk.s3_storage(
+        region="us-east-1",
+        endpoint_url="http://localhost:9000",
+        allow_http=True,
+        force_path_style=True,
+        bucket="testbucket",
+        prefix="this-repo-does-not-exist",
+        scatter_initial_credentials=True,
+        network_stream_timeout_seconds=50,
+    )
+    # TODO: add accessors and verify values
+    # currently this is only testing we can construct
+
+
+def test_hf_storage_options() -> None:
+    storage = icechunk.hf_storage(
+        bucket="testbucket",
+        prefix="this-repo-does-not-exist",
+        namespace="my-namespace",
+        access_key_id="HFAKnotreal",
+        secret_access_key="notreal",
+    )
+    rendered = str(storage)
+    # the gateway scopes operations to the namespace in the endpoint path
+    assert "endpoint_url: https://s3.hf.co/my-namespace" in rendered
+    assert "force_path_style: True" in rendered
+    assert "region: us-east-1" in rendered
+
+
+def test_clear_virtual_chunk_containers_persists_through_reopen() -> None:
+    """Test that clearing VCCs is respected by reopen().
+
+    Regression test for: https://github.com/earth-mover/icechunk/issues/XXX
+    """
+    storage = icechunk.in_memory_storage()
+
+    # Create repo and add a VCC
+    repo = icechunk.Repository.create(storage=storage)
+    config = repo.config
+    store_config = icechunk.s3_store(region="us-east-1")
+    container = icechunk.VirtualChunkContainer("s3://testbucket/", store_config)
+    config.set_virtual_chunk_container(container)
+    repo = repo.reopen(config=config)
+    repo.save_config()
+
+    vccs = repo.config.virtual_chunk_containers or {}
+    assert "s3://testbucket/" in vccs
+
+    # Clear VCCs and reopen
+    config = repo.config
+    config.clear_virtual_chunk_containers()
+    assert config.virtual_chunk_containers == {}
+
+    repo = repo.reopen(config=config)
+
+    # VCCs should be cleared after reopen
+    reopened_vccs = repo.config.virtual_chunk_containers or {}
+    assert reopened_vccs == {}, (
+        f"Expected no VCCs after reopen, got: {list(reopened_vccs.keys())}"
+    )
+
+
+def test_http_vcc_config_persistence(any_spec_version: int | None) -> None:
+    """Test that an HTTP VCC with opts survives a save_config/reopen roundtrip.
+
+    Covers both spec v1 (YAML path) and v2 (FlexBuffers path) via any_spec_version.
+    """
+    storage = icechunk.in_memory_storage()
+    config = icechunk.RepositoryConfig.default()
+
+    store_config = icechunk.http_store(opts={"allow_http": "true"})
+    container = icechunk.VirtualChunkContainer("http://example.com/", store_config)
+    config.set_virtual_chunk_container(container)
+
+    repo = icechunk.Repository.create(
+        storage=storage,
+        config=config,
+        spec_version=any_spec_version,
+    )
+    repo.save_config()
+
+    # Reopen with no in-memory config override — must load persisted config from storage
+    repo2 = icechunk.Repository.open(storage=storage)
+    vccs = repo2.config.virtual_chunk_containers or {}
+
+    assert "http://example.com/" in vccs, (
+        f"Expected 'http://example.com/' in VCCs, got: {list(vccs.keys())}"
+    )
+    vcc = vccs["http://example.com/"]
+    assert isinstance(vcc.store, icechunk.config.ObjectStoreConfig.Http), (
+        f"Expected ObjectStoreConfig.Http, got: {type(vcc.store)}"
+    )
+    assert "allow_http" in repr(vcc.store), (
+        f"Expected 'allow_http' in repr of Http store, got: {vcc.store!r}"
+    )

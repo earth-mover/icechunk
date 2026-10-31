@@ -1,0 +1,53 @@
+name: Dependency Check
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  merge_group:
+  push:
+    branches:
+      - main
+      - 'support/**'
+  schedule:
+    # Run weekly on Sundays to check for new advisories
+    - cron: '0 0 * * 0'
+
+concurrency:
+  # event_name keeps a push to main from cancelling the running weekly check
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CI: 1
+  RUST_BACKTRACE: short
+  RUSTUP_MAX_RETRIES: 10
+  PIXI_VERSION: "v0.82.1"
+
+permissions:
+  contents: read
+
+jobs:
+  check-dependencies:
+    name: Check Dependencies
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Run dependency checks
+        run: |
+          just check-deps

@@ -16,12 +16,15 @@ p = zarr.core.buffer.default_buffer_prototype()
 PLOT = False
 SPLIT_EVERY = 128
 DIMS = ("x", "y")
-IC_STORAGE = ic.local_filesystem_storage(
-    f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now()).split(' ')[-1]}",
-)
 
 
-def do_test(scheduler) -> None:
+def mk_ic_storage() -> ic.Storage:
+    return ic.local_filesystem_storage(
+        f"/tmp/test/icechunk_data_corrupted/{str(datetime.datetime.now(datetime.UTC)).split(' ')[-1]}",
+    )
+
+
+def do_test(scheduler: str, spec_version: int | None = None) -> None:
     # Writing the initial dataset
     if scheduler in ["processes", "sync"]:
         CHUNKX = 3
@@ -41,7 +44,7 @@ def do_test(scheduler) -> None:
     def plot() -> None:
         if not PLOT:
             return
-        import matplotlib.pyplot as plt
+        import matplotlib.pyplot as plt  # type: ignore[import-not-found]
 
         # kwargs = dict(ylim=(X - CHUNKX, X + dX + 1), xlim=(Y - CHUNKY // 10, Y + dY + 1))
         plt.pcolor(
@@ -69,8 +72,10 @@ def do_test(scheduler) -> None:
         }
     ).chunk(x=CHUNKX, y=CHUNKY)
 
-    repo = ic.Repository.open_or_create(IC_STORAGE)
+    repo = ic.Repository.open_or_create(mk_ic_storage(), create_version=spec_version)
     session = repo.writable_session("main")
+    print("starting initial write")
+    print("-=====================")
     with dask.config.set(scheduler=scheduler):
         to_icechunk(initial, session=session, mode="w", split_every=SPLIT_EVERY)
     plot()
@@ -97,7 +102,6 @@ def do_test(scheduler) -> None:
             x_append_data, session=session, append_dim="x", split_every=SPLIT_EVERY
         )
     plot()
-    session.commit("append along x")
     assert (xr.open_zarr(session.store, consolidated=False)["a"] >= 1).all()
 
     print("-======================")
@@ -113,19 +117,17 @@ def do_test(scheduler) -> None:
             ),
         }
     ).chunk(x=CHUNKX, y=-1)
-    session = repo.writable_session("main")
     with dask.config.set(scheduler=scheduler):
         to_icechunk(
             y_append_data, session=session, append_dim="y", split_every=SPLIT_EVERY
         )
     plot()
-    session.commit("append along y")
     assert (xr.open_zarr(session.store, consolidated=False)["a"] >= 1).all()
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_distributed_appends(scheduler) -> None:
-    do_test(scheduler)
+def test_dask_distributed_appends(scheduler: str, any_spec_version: int | None) -> None:
+    do_test(scheduler, spec_version=any_spec_version)
 
 
 if __name__ == "__main__":

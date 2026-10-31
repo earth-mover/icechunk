@@ -5,6 +5,7 @@ from typing import cast
 
 from icechunk._icechunk_python import (
     AzureCredentials,
+    AzureRefreshableCredential,
     AzureStaticCredentials,
     Credentials,
     GcsBearerCredential,
@@ -13,6 +14,42 @@ from icechunk._icechunk_python import (
     S3Credentials,
     S3StaticCredentials,
 )
+
+__all__ = [
+    "AnyAzureCredential",
+    "AnyAzureStaticCredential",
+    "AnyCredential",
+    "AnyGcsCredential",
+    "AnyGcsStaticCredential",
+    "AnyS3Credential",
+    "AzureCredentials",
+    "AzureRefreshableCredential",
+    "AzureStaticCredentials",
+    "Credentials",
+    "GcsBearerCredential",
+    "GcsCredentials",
+    "GcsStaticCredentials",
+    "HttpAccess",
+    "LocalFileSystemAccess",
+    "S3Credentials",
+    "S3StaticCredentials",
+    "azure_anonymous_credentials",
+    "azure_credentials",
+    "azure_from_env_credentials",
+    "azure_refreshable_credentials",
+    "azure_static_credentials",
+    "containers_credentials",
+    "gcs_anonymous_credentials",
+    "gcs_credentials",
+    "gcs_from_env_credentials",
+    "gcs_refreshable_credentials",
+    "gcs_static_credentials",
+    "s3_anonymous_credentials",
+    "s3_credentials",
+    "s3_from_env_credentials",
+    "s3_refreshable_credentials",
+    "s3_static_credentials",
+]
 
 AnyS3Credential = (
     S3Credentials.Static
@@ -29,7 +66,10 @@ AnyGcsStaticCredential = (
 )
 
 AnyGcsCredential = (
-    GcsCredentials.FromEnv | GcsCredentials.Static | GcsCredentials.Refreshable
+    GcsCredentials.Anonymous
+    | GcsCredentials.FromEnv
+    | GcsCredentials.Static
+    | GcsCredentials.Refreshable
 )
 
 AnyAzureStaticCredential = (
@@ -38,10 +78,31 @@ AnyAzureStaticCredential = (
     | AzureStaticCredentials.BearerToken
 )
 
-AnyAzureCredential = AzureCredentials.FromEnv | AzureCredentials.Static
+AnyAzureCredential = (
+    AzureCredentials.FromEnv
+    | AzureCredentials.Anonymous
+    | AzureCredentials.Static
+    | AzureCredentials.Refreshable
+)
 
 
-AnyCredential = Credentials.S3 | Credentials.Gcs | Credentials.Azure
+AnyCredential = (
+    Credentials.S3
+    | Credentials.Gcs
+    | Credentials.Azure
+    | Credentials.LocalFileSystemAccess
+    | Credentials.HttpAccess
+)
+
+#: Explicit sentinel authorizing access to a ``file://`` virtual chunk container,
+#: which requires no credentials. Use this instead of ``None`` for local-filesystem
+#: containers.
+LocalFileSystemAccess = Credentials.LocalFileSystemAccess()
+
+#: Explicit sentinel authorizing access to an ``http://``/``https://`` virtual chunk
+#: container, which requires no credentials. Use this instead of ``None`` for HTTP
+#: containers.
+HttpAccess = Credentials.HttpAccess()
 
 
 def s3_refreshable_credentials(
@@ -236,6 +297,11 @@ def gcs_refreshable_credentials(
     return GcsCredentials.Refreshable(pickle.dumps(get_credentials), current)
 
 
+def gcs_anonymous_credentials() -> GcsCredentials.Anonymous:
+    """Create anonymous credentials for Google Cloud Storage object store."""
+    return GcsCredentials.Anonymous()
+
+
 def gcs_from_env_credentials() -> GcsCredentials.FromEnv:
     """Instruct Google Cloud Storage object store to fetch credentials from the operative system environment."""
     return GcsCredentials.FromEnv()
@@ -248,6 +314,7 @@ def gcs_credentials(
     application_credentials: str | None = None,
     bearer_token: str | None = None,
     from_env: bool | None = None,
+    anonymous: bool | None = None,
     get_credentials: Callable[[], GcsBearerCredential] | None = None,
     scatter_initial_credentials: bool = False,
 ) -> AnyGcsCredential:
@@ -255,6 +322,9 @@ def gcs_credentials(
 
     If all arguments are None, credentials are fetched from the operative system environment.
     """
+    if anonymous is not None and anonymous:
+        return gcs_anonymous_credentials()
+
     if (from_env is None or from_env) and (
         service_account_file is None
         and service_account_key is None
@@ -306,9 +376,36 @@ def azure_static_credentials(
     )
 
 
+def azure_refreshable_credentials(
+    get_credentials: Callable[[], AzureRefreshableCredential],
+    scatter_initial_credentials: bool = False,
+) -> AzureCredentials.Refreshable:
+    """Create refreshable credentials for Azure Blob Storage object store.
+
+    Parameters
+    ----------
+    get_credentials: Callable[[], AzureRefreshableCredential]
+        Use this function to get and refresh the credentials. The function must be picklable.
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    """
+
+    current = get_credentials() if scatter_initial_credentials else None
+    return AzureCredentials.Refreshable(pickle.dumps(get_credentials), current)
+
+
 def azure_from_env_credentials() -> AzureCredentials.FromEnv:
     """Instruct Azure Blob Storage object store to fetch credentials from the operative system environment."""
     return AzureCredentials.FromEnv()
+
+
+def azure_anonymous_credentials() -> AzureCredentials.Anonymous:
+    """Create anonymous credentials for Azure Blob Storage object store."""
+    return AzureCredentials.Anonymous()
 
 
 def azure_credentials(
@@ -317,11 +414,23 @@ def azure_credentials(
     sas_token: str | None = None,
     bearer_token: str | None = None,
     from_env: bool | None = None,
+    anonymous: bool | None = None,
+    get_credentials: Callable[[], AzureRefreshableCredential] | None = None,
+    scatter_initial_credentials: bool = False,
 ) -> AnyAzureCredential:
     """Create credentials Azure Blob Storage object store.
 
     If all arguments are None, credentials are fetched from the operative system environment.
     """
+    if anonymous is not None and anonymous:
+        return azure_anonymous_credentials()
+
+    if get_credentials is not None:
+        return azure_refreshable_credentials(
+            get_credentials,
+            scatter_initial_credentials=scatter_initial_credentials,
+        )
+
     if (from_env is None or from_env) and (
         access_key is None and sas_token is None and bearer_token is None
     ):
@@ -342,14 +451,27 @@ def azure_credentials(
 
 
 def containers_credentials(
-    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | None],
+    m: Mapping[
+        str,
+        AnyS3Credential
+        | AnyGcsCredential
+        | AnyAzureCredential
+        | Credentials.LocalFileSystemAccess
+        | Credentials.HttpAccess
+        | None,
+    ],
 ) -> dict[str, AnyCredential | None]:
     """Build a map of credentials for virtual chunk containers.
 
     Parameters
     ----------
-    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential ]
-        A mapping from container url prefixes to credentials.
+    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | Credentials.LocalFileSystemAccess | Credentials.HttpAccess | None]
+        A mapping from container url prefixes to credentials. Each key must equal a
+        configured container's ``url_prefix`` exactly (trailing slash included).
+        For backends that need no authentication, use the explicit
+        ``LocalFileSystemAccess`` (``file://``) or ``HttpAccess`` (``http(s)://``)
+        sentinels. Passing ``None`` is deprecated and will be unsupported in a
+        future release.
 
     Examples
     --------
@@ -361,7 +483,7 @@ def containers_credentials(
 
     virtual_store_config = ic.s3_store(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         s3_compatible=True,
         force_path_style=True,
@@ -384,16 +506,24 @@ def containers_credentials(
     for name, cred in m.items():
         if cred is None:
             res[name] = None
+        elif isinstance(cred, Credentials.LocalFileSystemAccess | Credentials.HttpAccess):
+            res[name] = cred
         elif isinstance(cred, AnyS3Credential):
             res[name] = Credentials.S3(cred)
-        elif (
-            isinstance(cred, GcsCredentials.FromEnv)
-            or isinstance(cred, GcsCredentials.Static)
-            or isinstance(cred, GcsCredentials.Refreshable)
+        elif isinstance(
+            cred,
+            GcsCredentials.FromEnv
+            | GcsCredentials.Static
+            | GcsCredentials.Refreshable
+            | GcsCredentials.Anonymous,
         ):
             res[name] = Credentials.Gcs(cast(GcsCredentials, cred))
-        elif isinstance(cred, AzureCredentials.FromEnv) or isinstance(
-            cred, AzureCredentials.Static
+        elif isinstance(
+            cred,
+            AzureCredentials.FromEnv
+            | AzureCredentials.Anonymous
+            | AzureCredentials.Static
+            | AzureCredentials.Refreshable,
         ):
             res[name] = Credentials.Azure(cast(AzureCredentials, cred))
         else:

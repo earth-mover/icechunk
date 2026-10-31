@@ -1,33 +1,58 @@
-#![allow(dead_code)]
+pub(crate) mod capture;
+
 use std::{env, sync::Arc};
 
-use chrono::Utc;
+use chrono::{DateTime, TimeDelta, Utc};
+use futures::TryStreamExt as _;
 use icechunk::{
-    Storage,
+    Repository, Storage,
     config::{S3Credentials, S3Options, S3StaticCredentials},
+    format::SnapshotId,
     new_s3_storage,
-    storage::{new_r2_storage, new_tigris_storage},
+    storage::{
+        ListInfo, Settings, mk_client, new_hf_storage, new_r2_storage,
+        new_tigris_storage, r2_storage, s3_storage, tigris_storage,
+    },
 };
+
+pub(crate) enum Permission {
+    #[expect(dead_code)]
+    ReadOnly, // GetObject
+    Modify, // {Get,Put,Delete}Object, ListBucket
+}
+
+impl Permission {
+    pub(crate) fn keys(&self) -> (&str, &str) {
+        match self {
+            Permission::Modify => ("modify", "modifydata"),
+            Permission::ReadOnly => ("readonly", "basicuser"),
+        }
+    }
+}
 
 pub(crate) fn make_minio_integration_storage(
     prefix: String,
+    permission: &Permission,
 ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+    let (access_key_id, secret_access_key) = permission.keys();
+
     let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: Some("http://localhost:9000".to_string()),
-            allow_http: true,
-            anonymous: false,
-            force_path_style: true,
-        },
+        S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true)
+            .with_force_path_style(true),
         "testbucket".to_string(),
         Some(prefix),
         Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
             session_token: None,
             expires_after: None,
         })),
+        Vec::new(),
+        Vec::new(),
+        None,
     )?;
     Ok(storage)
 }
@@ -45,17 +70,14 @@ pub(crate) fn make_tigris_integration_storage(
     let region = env::var("TIGRIS_REGION")?;
 
     let storage: Arc<dyn Storage + Send + Sync> = new_tigris_storage(
-        S3Options {
-            region: Some(region),
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-        },
+        S3Options::default().with_region(region),
         bucket,
         Some(prefix),
         Some(credentials),
         false,
+        Vec::new(),
+        Vec::new(),
+        None,
     )?;
     Ok(storage)
 }
@@ -72,17 +94,38 @@ pub(crate) fn make_r2_integration_storage(
     let bucket = env::var("R2_BUCKET")?;
 
     let storage: Arc<dyn Storage + Send + Sync> = new_r2_storage(
-        S3Options {
-            region: None,
-            endpoint_url: None,
-            anonymous: false,
-            allow_http: false,
-            force_path_style: false,
-        },
+        S3Options::default(),
         Some(bucket),
         Some(prefix),
         Some(env::var("R2_ACCOUNT_ID")?),
         Some(credentials),
+        Vec::new(),
+        Vec::new(),
+        None,
+    )?;
+    Ok(storage)
+}
+
+pub(crate) fn make_hf_integration_storage(
+    prefix: String,
+) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+    let credentials = S3Credentials::Static(S3StaticCredentials {
+        access_key_id: env::var("HF_ACCESS_KEY_ID")?,
+        secret_access_key: env::var("HF_SECRET_ACCESS_KEY")?,
+        session_token: None,
+        expires_after: None,
+    });
+    let bucket = env::var("HF_BUCKET")?;
+
+    let storage: Arc<dyn Storage + Send + Sync> = new_hf_storage(
+        S3Options::default(),
+        bucket,
+        Some(prefix),
+        &env::var("HF_NAMESPACE")?,
+        Some(credentials),
+        Vec::new(),
+        Vec::new(),
+        None,
     )?;
     Ok(storage)
 }
@@ -108,13 +151,7 @@ pub(crate) fn get_aws_integration_credentials()
 
 pub(crate) fn get_aws_integration_options()
 -> Result<S3Options, Box<dyn std::error::Error>> {
-    let res = S3Options {
-        region: Some(get_aws_integration_region()?),
-        endpoint_url: None,
-        anonymous: false,
-        allow_http: false,
-        force_path_style: false,
-    };
+    let res = S3Options::default().with_region(get_aws_integration_region()?);
     Ok(res)
 }
 
@@ -126,11 +163,237 @@ pub(crate) fn make_aws_integration_storage(
         get_aws_integration_bucket()?,
         Some(prefix),
         Some(get_aws_integration_credentials()?),
+        Vec::new(),
+        Vec::new(),
+        None,
     )?;
     Ok(storage)
+}
+
+/// A real (non-local) object store configured from environment variables, used by
+/// the `#[ignore]` integration tests that run in the nightly / `workflow_dispatch`
+/// CI job. `options`/`credentials` are the *resolved* values (endpoint, region,
+/// path-style already filled in) so they drive both the icechunk storage and a raw
+/// client for cleanup.
+pub(crate) struct RealStore {
+    options: S3Options,
+    credentials: S3Credentials,
+    bucket: String,
+    kind: RealStoreKind,
+}
+
+pub(crate) enum RealStoreKind {
+    Aws,
+    R2,
+    Tigris,
+}
+
+impl RealStore {
+    /// Native-S3 storage at the bucket root (empty prefix), optionally forcing the
+    /// legacy leading-slash layout. Goes through each store's real constructor.
+    ///
+    /// Empty-prefix creation is normally refused; these tests deliberately need it,
+    /// so the escape hatch is applied before erasing the concrete storage type.
+    pub(crate) fn rooted_storage(
+        &self,
+        legacy_rooted_keys: bool,
+    ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+        let prefix = Some(String::new());
+        let creds = Some(self.credentials.clone());
+        let storage: Arc<dyn Storage + Send + Sync> = match self.kind {
+            RealStoreKind::Aws => Arc::new(
+                s3_storage(
+                    self.options.clone(),
+                    self.bucket.clone(),
+                    prefix,
+                    creds,
+                    Vec::new(),
+                    Vec::new(),
+                    legacy_rooted_keys.then_some(true),
+                )?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
+            RealStoreKind::R2 => Arc::new(
+                r2_storage(
+                    self.options.clone(),
+                    Some(self.bucket.clone()),
+                    prefix,
+                    None, // endpoint already resolved into options
+                    creds,
+                    Vec::new(),
+                    Vec::new(),
+                    legacy_rooted_keys.then_some(true),
+                )?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
+            RealStoreKind::Tigris => Arc::new(
+                tigris_storage(
+                    self.options.clone(),
+                    self.bucket.clone(),
+                    prefix,
+                    creds,
+                    false,
+                    Vec::new(),
+                    Vec::new(),
+                    legacy_rooted_keys.then_some(true),
+                )?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
+        };
+        Ok(storage)
+    }
+
+    pub(crate) fn options(&self) -> &S3Options {
+        &self.options
+    }
+
+    pub(crate) fn credentials(&self) -> &S3Credentials {
+        &self.credentials
+    }
+
+    pub(crate) fn bucket(&self) -> &str {
+        &self.bucket
+    }
+
+    /// Native-S3 storage at `prefix` carrying the given write headers, through
+    /// each store's real constructor. Used by the header round-trip tests.
+    pub(crate) fn write_header_storage(
+        &self,
+        prefix: String,
+        write_headers: Vec<(String, String)>,
+    ) -> Result<Arc<dyn Storage + Send + Sync>, Box<dyn std::error::Error>> {
+        let creds = Some(self.credentials.clone());
+        let prefix = Some(prefix);
+        let storage: Arc<dyn Storage + Send + Sync> = match self.kind {
+            RealStoreKind::Aws => new_s3_storage(
+                self.options.clone(),
+                self.bucket.clone(),
+                prefix,
+                creds,
+                Vec::new(),
+                write_headers,
+                None,
+            )?,
+            RealStoreKind::R2 => new_r2_storage(
+                self.options.clone(),
+                Some(self.bucket.clone()),
+                prefix,
+                None, // endpoint already resolved into options
+                creds,
+                Vec::new(),
+                write_headers,
+                None,
+            )?,
+            RealStoreKind::Tigris => new_tigris_storage(
+                self.options.clone(),
+                self.bucket.clone(),
+                prefix,
+                creds,
+                false,
+                Vec::new(),
+                write_headers,
+                None,
+            )?,
+        };
+        Ok(storage)
+    }
+
+    /// Delete every object whose key starts with `/`. A legacy-rooted repository
+    /// lives entirely under `/...`, so this makes the shared bucket reusable across
+    /// runs without disturbing other tests' (non-slash-prefixed) objects.
+    pub(crate) async fn cleanup_rooted_keys(
+        &self,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let client = mk_client(
+            &self.options,
+            self.credentials.clone(),
+            vec![],
+            vec![],
+            &Settings::default(),
+        )
+        .await;
+        let resp =
+            client.list_objects_v2().bucket(&self.bucket).prefix("/").send().await?;
+        for obj in resp.contents() {
+            if let Some(key) = obj.key() {
+                client.delete_object().bucket(&self.bucket).key(key).send().await?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `None` when the AWS env vars are not set.
+pub(crate) fn aws_real_store() -> Option<RealStore> {
+    let bucket = env::var("AWS_BUCKET").ok().filter(|s| !s.is_empty())?;
+    Some(RealStore {
+        options: S3Options::default().with_region(env::var("AWS_REGION").ok()?),
+        credentials: S3Credentials::Static(S3StaticCredentials {
+            access_key_id: env::var("AWS_ACCESS_KEY_ID").ok()?,
+            secret_access_key: env::var("AWS_SECRET_ACCESS_KEY").ok()?,
+            session_token: None,
+            expires_after: None,
+        }),
+        bucket,
+        kind: RealStoreKind::Aws,
+    })
+}
+
+/// `None` when the R2 env vars are not set.
+pub(crate) fn r2_real_store() -> Option<RealStore> {
+    let bucket = env::var("R2_BUCKET").ok().filter(|s| !s.is_empty())?;
+    let account_id = env::var("R2_ACCOUNT_ID").ok()?;
+    Some(RealStore {
+        options: S3Options::default()
+            .with_region("auto")
+            .with_endpoint_url(format!("https://{account_id}.r2.cloudflarestorage.com"))
+            .with_force_path_style(true),
+        credentials: S3Credentials::Static(S3StaticCredentials {
+            access_key_id: env::var("R2_ACCESS_KEY_ID").ok()?,
+            secret_access_key: env::var("R2_SECRET_ACCESS_KEY").ok()?,
+            session_token: None,
+            expires_after: None,
+        }),
+        bucket,
+        kind: RealStoreKind::R2,
+    })
+}
+
+/// `None` when the Tigris env vars are not set.
+pub(crate) fn tigris_real_store() -> Option<RealStore> {
+    let bucket = env::var("TIGRIS_BUCKET").ok().filter(|s| !s.is_empty())?;
+    Some(RealStore {
+        options: S3Options::default()
+            .with_region(env::var("TIGRIS_REGION").ok()?)
+            .with_endpoint_url("https://t3.storage.dev"),
+        credentials: S3Credentials::Static(S3StaticCredentials {
+            access_key_id: env::var("TIGRIS_ACCESS_KEY_ID").ok()?,
+            secret_access_key: env::var("TIGRIS_SECRET_ACCESS_KEY").ok()?,
+            session_token: None,
+            expires_after: None,
+        }),
+        bucket,
+        kind: RealStoreKind::Tigris,
+    })
 }
 
 pub(crate) fn get_random_prefix(base: &str) -> String {
     let suffix: u64 = rand::random();
     format!("{}_{}_{}", base, Utc::now().timestamp_micros(), suffix)
+}
+
+/// Cutoff past every listed snapshot, from the store clock.
+/// The extra second covers whole-second listings.
+pub(crate) async fn cutoff_after_all_listed(
+    repo: &Repository,
+) -> Result<DateTime<Utc>, Box<dyn std::error::Error>> {
+    let listed = listed_snapshots(repo).await?;
+    let newest = listed.iter().map(|s| s.created_at).max().expect("snapshots listed");
+    Ok(newest + TimeDelta::seconds(1))
+}
+
+pub(crate) async fn listed_snapshots(
+    repo: &Repository,
+) -> Result<Vec<ListInfo<SnapshotId>>, Box<dyn std::error::Error>> {
+    Ok(repo.asset_manager().list_snapshots().await?.try_collect().await?)
 }

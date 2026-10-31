@@ -1,13 +1,21 @@
+//! Manifest optimization and rebuilding.
+
 use crate::{
     Repository,
-    format::{SnapshotId, snapshot::SnapshotProperties},
-    session::SessionError,
+    format::{
+        SnapshotId, format_constants::SpecVersionBin, snapshot::SnapshotProperties,
+    },
+    session::{CommitMethod, SessionError},
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum ManifestOpsError {
     #[error("error rewriting manifests")]
     ManifestRewriteError(#[from] Box<SessionError>),
+    #[error(
+        "amend is not supported for spec version 1 repositories, use new commit instead"
+    )]
+    AmendNotSupportedForV1,
 }
 
 pub type ManifestOpsResult<A> = Result<A, ManifestOpsError>;
@@ -16,15 +24,33 @@ pub async fn rewrite_manifests(
     repository: &Repository,
     branch: &str,
     message: &str,
+    max_concurrent_manifests: Option<usize>,
     properties: Option<SnapshotProperties>,
+    commit_method: CommitMethod,
 ) -> ManifestOpsResult<SnapshotId> {
+    if commit_method == CommitMethod::Amend
+        && repository.spec_version() < SpecVersionBin::V2
+    {
+        return Err(ManifestOpsError::AmendNotSupportedForV1);
+    }
+
     let mut session = repository
         .writable_session(branch)
         .await
-        .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.into())))?;
+        .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e.inject())))?;
 
-    session
-        .rewrite_manifests(message, properties)
+    let mut builder = session.commit(message).rewrite_manifests();
+    if let Some(n) = max_concurrent_manifests {
+        builder = builder.max_concurrent_nodes(n);
+    }
+    if commit_method == CommitMethod::Amend {
+        builder = builder.amend();
+    }
+    if let Some(props) = properties {
+        builder = builder.properties(props);
+    }
+    builder
+        .execute()
         .await
         .map_err(|e| ManifestOpsError::ManifestRewriteError(Box::new(e)))
 }

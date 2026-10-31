@@ -1,147 +1,171 @@
-use futures::{StreamExt, TryStream, TryStreamExt, future::ready, stream};
+//! Repository statistics (chunk counts, sizes, etc.).
+
 use std::{
     collections::HashSet,
     num::{NonZeroU16, NonZeroUsize},
-    sync::{Arc, Mutex},
+    ops::Add,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
-use tokio::task;
-use tracing::trace;
+
+use tracing::{instrument, trace};
 
 use crate::{
-    Storage,
     asset_manager::AssetManager,
     format::{
-        ChunkId, SnapshotId,
-        manifest::{ChunkPayload, Manifest},
-        snapshot::ManifestFileInfo,
+        ChunkLength, ChunkOffset,
+        manifest::{ChunkPayload, Manifest, VirtualChunkLocation},
     },
-    ops::pointed_snapshots,
+    ops::{
+        pointed_snapshots,
+        sharded_set::{ChunkIdSet, ShardedSet},
+        walk_peak_requests,
+        walker::{ManifestConsumer, WalkLimits, walk_manifests},
+        warn_on_low_fd_limit,
+    },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage,
-    stream_utils::{StreamLimiter, try_unique_stream},
 };
+use icechunk_types::error::ICResultCtxExt as _;
 
-fn calculate_manifest_storage(
-    manifest: Arc<Manifest>,
-    seen_chunks: Arc<Mutex<HashSet<ChunkId>>>,
-) -> RepositoryResult<u64> {
-    trace!(manifest_id = %manifest.id(), "Processing manifest");
-    let mut size = 0;
-    for payload in manifest.chunk_payloads() {
-        match payload {
-            Ok(ChunkPayload::Ref(chunk_ref)) => {
-                if seen_chunks
-                    .lock()
-                    .map_err(|e| {
-                        RepositoryErrorKind::Other(format!(
-                            "Thread panic during manifest_chunk_storage: {e}"
-                        ))
-                    })?
-                    .insert(chunk_ref.id)
-                {
-                    size += chunk_ref.length;
-                }
-            }
-            Ok(_) => {}
-            // TODO: don't skip errors
-            Err(err) => {
-                tracing::error!(
-                    error = %err,
-                    "Error in chunk payload iterator"
-                );
-            }
-        }
-    }
-    trace!(manifest_id = %manifest.id(), "Manifest done");
-    Ok(size)
+/// Statistics about chunk storage across different chunk types
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChunkStorageStats {
+    /// Total bytes stored in native chunks (stored in icechunk's chunk storage)
+    pub native_bytes: u64,
+    /// Total bytes stored in virtual chunks (references to external data)
+    pub virtual_bytes: u64,
+    /// Total bytes stored in inline chunks (stored directly in manifests)
+    pub inlined_bytes: u64,
 }
 
-async fn unique_manifest_infos<'a>(
-    storage: &'a (dyn Storage + Send + Sync),
-    storage_settings: &'a storage::Settings,
-    asset_manager: Arc<AssetManager>,
-    extra_roots: &'a HashSet<SnapshotId>,
-    max_snapshots_in_memory: NonZeroU16,
-) -> RepositoryResult<impl TryStream<Ok = ManifestFileInfo, Error = RepositoryError> + 'a>
-{
-    let all_snaps =
-        pointed_snapshots(storage, storage_settings, asset_manager, extra_roots)
-            .await?
-            .map(ready)
-            .buffer_unordered(max_snapshots_in_memory.get() as usize);
-    let all_manifest_infos = all_snaps
-        // this could be slightly optimized by not collecting all manifest info records into a vec
-        // but we don't expect too many, and they are small anyway
-        .map_ok(|snap| {
-            stream::iter(
-                snap.manifest_files().map(Ok::<_, RepositoryError>).collect::<Vec<_>>(),
-            )
-        })
-        .try_flatten();
-    let res = try_unique_stream(|mi| mi.id.clone(), all_manifest_infos);
-    Ok(res)
+impl ChunkStorageStats {
+    /// Create a new `ChunkStorageStats` with the specified byte counts
+    pub fn new(native_bytes: u64, virtual_bytes: u64, inlined_bytes: u64) -> Self {
+        Self { native_bytes, virtual_bytes, inlined_bytes }
+    }
+
+    /// Get the total bytes excluding virtual chunks (this is ~= to the size of all objects in the icechunk repo)
+    pub fn non_virtual_bytes(&self) -> u64 {
+        self.native_bytes.saturating_add(self.inlined_bytes)
+    }
+
+    /// Get the total bytes across all chunk types
+    pub fn total_bytes(&self) -> u64 {
+        self.native_bytes
+            .saturating_add(self.virtual_bytes)
+            .saturating_add(self.inlined_bytes)
+    }
+}
+
+impl Add for ChunkStorageStats {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            native_bytes: self.native_bytes.saturating_add(other.native_bytes),
+            virtual_bytes: self.virtual_bytes.saturating_add(other.virtual_bytes),
+            inlined_bytes: self.inlined_bytes.saturating_add(other.inlined_bytes),
+        }
+    }
+}
+
+#[derive(Default)]
+struct ChunkStorage {
+    seen_native: ChunkIdSet,
+    // Virtual chunks have no id; (location, offset, length) identifies the bytes.
+    seen_virtual: ShardedSet<(VirtualChunkLocation, ChunkOffset, ChunkLength)>,
+    native_bytes: AtomicU64,
+    virtual_bytes: AtomicU64,
+    // Inline chunks live in the manifest, so every occurrence is stored.
+    inlined_bytes: AtomicU64,
+}
+
+impl ChunkStorage {
+    fn into_stats(self) -> ChunkStorageStats {
+        ChunkStorageStats::new(
+            self.native_bytes.into_inner(),
+            self.virtual_bytes.into_inner(),
+            self.inlined_bytes.into_inner(),
+        )
+    }
+}
+
+impl ManifestConsumer for ChunkStorage {
+    type Output = ();
+    type Acc = ();
+
+    fn consume(&self, manifest: &Manifest) -> RepositoryResult<()> {
+        trace!(manifest_id = %manifest.id(), "Processing manifest");
+        // Native ids stream straight into their shards. Virtual keys and the
+        // inlined sum come out of the same single pass.
+        let mut virtual_ = Vec::new();
+        let mut inlined = 0u64;
+        let native =
+            manifest.chunk_payloads().inject()?.filter_map(|payload| match payload {
+                Ok(ChunkPayload::Ref(r)) => Some(Ok((r.id, r.length))),
+                Ok(ChunkPayload::Virtual(v)) => {
+                    virtual_.push(((v.location, v.offset, v.length), v.length));
+                    None
+                }
+                Ok(ChunkPayload::Inline(bytes)) => {
+                    inlined += bytes.len() as u64;
+                    None
+                }
+                Ok(_) => None,
+                Err(err) => Some(Err(err)),
+            });
+        let new_native = self.seen_native.try_extend_weighted(native).inject()?;
+        let new_virtual = self.seen_virtual.extend_weighted(virtual_);
+        self.native_bytes.fetch_add(new_native, Ordering::Relaxed);
+        self.virtual_bytes.fetch_add(new_virtual, Ordering::Relaxed);
+        self.inlined_bytes.fetch_add(inlined, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn fold(_acc: &mut (), _output: ()) {}
+
+    fn progress(&self) -> Option<(&'static str, u64)> {
+        Some(("native_bytes", self.native_bytes.load(Ordering::Relaxed)))
+    }
 }
 
 /// Compute the total size in bytes of all committed repo chunks.
-/// It doesn't include inline or virtual chunks.
+/// The total for each type of chunk is computed separately.
+#[instrument(skip_all)]
 pub async fn repo_chunks_storage(
-    storage: &(dyn Storage + Send + Sync),
-    storage_settings: &storage::Settings,
     asset_manager: Arc<AssetManager>,
     max_snapshots_in_memory: NonZeroU16,
     max_compressed_manifest_mem_bytes: NonZeroUsize,
+    max_decoded_manifest_mem_bytes: NonZeroUsize,
     max_concurrent_manifest_fetches: NonZeroU16,
-) -> RepositoryResult<u64> {
-    let extra_roots = Default::default();
-    let manifest_infos = unique_manifest_infos(
-        storage,
-        storage_settings,
-        asset_manager.clone(),
+) -> RepositoryResult<ChunkStorageStats> {
+    warn_on_low_fd_limit(
+        walk_peak_requests(max_concurrent_manifest_fetches, max_snapshots_in_memory),
+        "Chunk storage stats",
+    );
+    let extra_roots = HashSet::new();
+    let snaps = pointed_snapshots(
+        Arc::clone(&asset_manager),
+        None,
         &extra_roots,
         max_snapshots_in_memory,
     )
     .await?;
-
-    // we want to fetch many manifests in parallel, but not more than memory allows
-    // for this we use the StreamLimiter using the manifest size in bytes for usage
-    let limiter = &Arc::new(StreamLimiter::new(
-        "repo_chunks_storage".to_string(),
-        max_compressed_manifest_mem_bytes.get(),
-    ));
-
-    // We rate limit the stream of manifests to make sure we don't blow up memory
-    let rate_limited_manifests =
-        limiter.limit_stream(manifest_infos, |minfo| minfo.size_bytes as usize);
-
-    let seen_chunks = &Arc::new(Mutex::new(HashSet::new()));
-    let asset_manager = &asset_manager;
-
-    let compute_stream = rate_limited_manifests
-        .map_ok(|m| async move {
-            let manifest =
-                Arc::clone(asset_manager).fetch_manifest(&m.id, m.size_bytes).await?;
-            Ok((manifest, m))
-        })
-        // Now we can buffer a bunch of fetch_manifest operations. Because we are using
-        // StreamLimiter we know memory is not going to blow up
-        .try_buffer_unordered(max_concurrent_manifest_fetches.get() as usize)
-        .and_then(|(manifest, minfo)| async move {
-            let seen_chunks = Arc::clone(seen_chunks);
-            let size = task::spawn_blocking(|| {
-                calculate_manifest_storage(manifest, seen_chunks)
-            })
-            .await??;
-            Ok((size, minfo))
-        });
-    let (_, res) = limiter
-        .unlimit_stream(compute_stream, |(_, minfo)| minfo.size_bytes as usize)
-        .try_fold((0u64, 0), |(processed, total_size), (partial, _)| {
-            //info!("Processed {processed} manifests");
-            ready(Ok((processed + 1, total_size + partial)))
-        })
-        .await?;
-
-    debug_assert_eq!(limiter.current_usage(), 0);
-
-    Ok(res)
+    let limits = WalkLimits {
+        max_concurrent_manifest_fetches,
+        max_manifest_mem_bytes: max_compressed_manifest_mem_bytes,
+        max_decoded_manifest_mem_bytes,
+        decode_workers: NonZeroU16::new(asset_manager.max_concurrent_decodes())
+            .unwrap_or(NonZeroU16::MIN),
+    };
+    let consumer = Arc::new(ChunkStorage::default());
+    walk_manifests(asset_manager, limits, Arc::clone(&consumer), snaps).await?;
+    let consumer = Arc::try_unwrap(consumer).map_err(|_| {
+        RepositoryError::capture(RepositoryErrorKind::Other(
+            "manifest walker still holds the consumer".to_string(),
+        ))
+    })?;
+    Ok(consumer.into_stats())
 }

@@ -1,0 +1,61 @@
+/* Colors
+    @see https://m2.material.io/design/color/the-color-system.html#tools-for-picking-colors
+    @see https://github.com/squidfunk/mkdocs-material/blob/master/src/templates/assets/stylesheets/main/_colors.scss
+*/
+
+[data-md-color-scheme="light"] {
+   /* Primary color shades */
+   --md-primary-fg-color:               #5ea0d1;
+   --md-primary-fg-color--light:        #e4f1f8;
+   --md-primary-fg-color--dark:         #1d467f;
+
+   --md-primary-bg-color:               hsla(0, 0%, 100%, 1);
+   --md-primary-bg-color--light:        hsla(0, 0%, 100%, 0.7);
+
+   /* Accent color shades */
+   --md-accent-fg-color:                #a653ff;
+   --md-accent-fg-color--transparent:   rgba(166, 83, 255, 0.7);
+   //--md-accent-bg-color:                hsla(0, 0%, 100%, 1);
+   //--md-accent-bg-color--light:         hsla(0, 0%, 100%, 0.7);
+
+   /* Material resolves its link color from its own default indigo, so set it. */
+   --md-typeset-a-color:                #2f6fa8;
+   --md-footer-bg-color:                #1d467f;
+   --md-footer-bg-color--dark:          #163861;
+
+   /* Brand blues. Purple is the accent for hover and focus only. */
+   --ic-blue:                           #2f6fa8;
+   --ic-blue-strong:                    #1d467f;
+   --ic-on-blue:                        #ffffff;
+   --ic-hero-top:                       #5ea0d1;
+   --ic-hero-bottom:                    #1d467f;
+}
+
+/* Dark */
+[data-md-color-scheme="slate"] {
+    --md-primary-fg-color:               #1d467f;
+    --md-primary-fg-color--light:        #e4f1f8;
+    --md-primary-fg-color--dark:         #5ea0d1;
+
+    /* Accent color shades */
+   --md-accent-fg-color:                #a653ff;
+   --md-accent-fg-color--transparent:   rgba(166, 83, 255, 0.7);
+   //--md-accent-bg-color:                hsla(0, 0%, 100%, 1);
+   //--md-accent-bg-color--light:         hsla(0, 0%, 100%, 0.7);
+
+   --md-typeset-a-color:                #5ea0d1;
+   --md-footer-bg-color:                #12294a;
+   --md-footer-bg-color--dark:          #0d1f38;
+
+   /* Slate swaps the primary shades, so the hero names its colors directly. */
+   --ic-blue:                           #5ea0d1;
+   --ic-blue-strong:                    #5ea0d1;
+   --ic-on-blue:                        #0b1f33;
+   --ic-hero-top:                       #1d467f;
+   --ic-hero-bottom:                    #12294a;
+}
+
+/* Material sets the slate link color per primary palette, at higher specificity. */
+[data-md-color-scheme="slate"][data-md-color-primary] {
+   --md-typeset-a-color:                #5ea0d1;
+}

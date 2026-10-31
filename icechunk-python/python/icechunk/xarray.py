@@ -1,6 +1,6 @@
-import importlib
 from collections.abc import Hashable, Mapping, MutableMapping
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from typing import Any, Literal, overload
 
 import numpy as np
@@ -15,6 +15,11 @@ from xarray import DataArray, Dataset
 from xarray.backends.common import ArrayWriter
 from xarray.backends.zarr import ZarrStore
 
+try:
+    from zarr.core.metadata import ArrayV3Metadata
+except ImportError:
+    ArrayV3Metadata = Any  # type: ignore[misc,assignment]
+
 __all__ = ["to_icechunk"]
 
 Region = Mapping[str, slice | Literal["auto"]] | Literal["auto"] | None
@@ -22,7 +27,7 @@ ZarrWriteModes = Literal["w", "w-", "a", "a-", "r+", "r"]
 
 
 try:
-    has_dask = importlib.util.find_spec("dask") is not None
+    has_dask = find_spec("dask") is not None
 except ImportError:
     has_dask = False
 
@@ -31,12 +36,23 @@ if Version(xr.__version__) < Version("2024.10.0"):
         f"Writing to icechunk requires Xarray>=2024.10.0 but you have {xr.__version__}. Please upgrade."
     )
 
+if Version(xr.__version__) > Version("2025.09.0"):
+    from xarray.backends.writers import (  # type: ignore[import-not-found,unused-ignore]
+        _validate_dataset_names,
+        dump_to_store,
+    )
+else:
+    from xarray.backends.api import (  # type: ignore[attr-defined,no-redef,unused-ignore]
+        _validate_dataset_names,
+        dump_to_store,
+    )
+
 
 def is_dask_collection(x: Any) -> bool:
     if has_dask:
-        import dask
+        from dask.base import is_dask_collection
 
-        return dask.base.is_dask_collection(x)
+        return is_dask_collection(x)
     else:
         return False
 
@@ -46,7 +62,7 @@ class LazyArrayWriter(ArrayWriter):
         super().__init__()  # type: ignore[no-untyped-call]
 
         self.eager_sources: list[np.ndarray[Any, Any]] = []
-        self.eager_targets: list[zarr.Array] = []
+        self.eager_targets: list[zarr.Array[ArrayV3Metadata]] = []
         self.eager_regions: list[tuple[slice, ...]] = []
 
     def add(self, source: Any, target: Any, region: Any = None) -> Any:
@@ -81,6 +97,7 @@ class _XarrayDatasetWriter:
     store: IcechunkStore = field(kw_only=True)
 
     safe_chunks: bool = field(kw_only=True, default=True)
+    align_chunks: bool = field(kw_only=True, default=False)
 
     _initialized: bool = field(default=False, repr=False)
 
@@ -89,7 +106,7 @@ class _XarrayDatasetWriter:
 
     def __post_init__(self) -> None:
         if not isinstance(self.store, IcechunkStore):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004
                 f"Please pass in an icechunk.Session. Received {type(self.store)!r} instead."
             )
 
@@ -105,19 +122,24 @@ class _XarrayDatasetWriter:
             mode=mode, append_dim=append_dim, region=region
         )
 
-        self.xarray_store = ZarrStore.open_group(
-            store=self.store,
-            group=group,
-            mode=concrete_mode,
-            zarr_format=3,
-            append_dim=append_dim,
-            write_region=region,
-            safe_chunks=self.safe_chunks,
-            synchronizer=None,
-            consolidated=False,
-            consolidate_on_close=False,
-            zarr_version=None,
-        )
+        # align_chunks was added in xarray 2025.06.0
+        # For backwards compatibility, only pass it if supported
+        kwargs: dict[str, Any] = {
+            "store": self.store,
+            "group": group,
+            "mode": concrete_mode,
+            "zarr_format": 3,
+            "append_dim": append_dim,
+            "write_region": region,
+            "safe_chunks": self.safe_chunks,
+            "consolidated": False,
+            "consolidate_on_close": False,
+        }
+
+        if Version(xr.__version__) >= Version("2025.06.0"):
+            kwargs["align_chunks"] = self.align_chunks
+
+        self.xarray_store = ZarrStore.open_group(**kwargs)
         self.dataset = self.xarray_store._validate_and_autodetect_region(self.dataset)
 
     def write_metadata(self, encoding: Mapping[Any, Any] | None = None) -> None:
@@ -125,7 +147,6 @@ class _XarrayDatasetWriter:
         This method creates new Zarr arrays when necessary, writes attributes,
         and any in-memory arrays.
         """
-        from xarray.backends.api import _validate_dataset_names, dump_to_store
 
         # validate Dataset keys, DataArray names
         _validate_dataset_names(self.dataset)
@@ -137,7 +158,7 @@ class _XarrayDatasetWriter:
         # This writes the metadata (zarr.json) for all arrays
         # This also will resize arrays for any appends
         self.writer = LazyArrayWriter()
-        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call]
+        dump_to_store(self.dataset, self.xarray_store, self.writer, encoding=encoding)  # type: ignore[no-untyped-call,unused-ignore]
 
         self._initialized = True
 
@@ -157,17 +178,19 @@ class _XarrayDatasetWriter:
         self,
         chunkmanager_store_kwargs: MutableMapping[Any, Any] | None = None,
         split_every: int | None = None,
-    ) -> ForkSession | None:
+    ) -> ForkSession:
         """
         Write lazy arrays (e.g. dask) to store.
         """
-        from icechunk.dask import session_merge_reduction
-
         if not self._initialized:
             raise ValueError("Please call `write_metadata` first.")
 
         if not self.writer.sources:
-            return None
+            raise TypeError(
+                "Attempting to execute a write with dask but no dask arrays were detected."
+            )
+
+        from icechunk.dask import session_merge_reduction
 
         chunkmanager_store_kwargs = chunkmanager_store_kwargs or {}
         chunkmanager_store_kwargs["load_stored"] = False
@@ -188,6 +211,7 @@ def to_icechunk(
     group: str | None = None,
     mode: ZarrWriteModes | None = None,
     safe_chunks: bool = True,
+    align_chunks: bool = False,
     append_dim: Hashable | None = None,
     region: Region = None,
     encoding: Mapping[Any, Any] | None = None,
@@ -204,14 +228,22 @@ def to_icechunk(
     session : icechunk.Session
         Writable Icechunk Session
     mode : {"w", "w-", "a", "a-", r+", None}, optional
-        Persistence mode: "w" means create (overwrite if exists);
-        "w-" means create (fail if exists);
-        "a" means override all existing variables including dimension coordinates (create if does not exist);
-        "a-" means only append those variables that have ``append_dim``.
-        "r+" means modify existing array *values* only (raise an error if
-        any metadata or shapes would change).
+        Persistence mode:
+
+        - "w" means create (remove old if exists and write new);
+        - "w-" means create (fail if exists);
+        - "a" means override all existing variables including dimension coordinates (create if does not exist);
+        - "a-" means only append those variables that have ``append_dim``.
+        - "r+" means modify existing array *values* only (raise an error if
+          any metadata or shapes would change).
+
         The default mode is "a" if ``append_dim`` is set. Otherwise, it is
         "r+" if ``region`` is set and ``w-`` otherwise.
+
+        .. note::
+            When modifying an existing Zarr array that is lazily opened, the "w"
+            behavior can be surprising since the underlying file that is being
+            lazily read from might get deleted before the data is computed.
     group : str, optional
         Group path. (a.k.a. `path` in zarr terminology.)
     encoding : dict, optional
@@ -254,6 +286,16 @@ def to_icechunk(
         Note: Even with these validations it can still be unsafe to write
         two or more chunked arrays in the same location in parallel if they are
         not writing in independent regions.
+    align_chunks: bool, default False
+        If True, rechunks the Dask array to align with Zarr chunks before writing.
+        This ensures each Dask chunk maps to one or more contiguous Zarr chunks,
+        which avoids race conditions.
+        Internally, the process sets safe_chunks=False and tries to preserve
+        the original Dask chunking as much as possible.
+        Note: While this alignment avoids write conflicts stemming from chunk
+        boundary misalignment, it does not protect against race conditions
+        if multiple uncoordinated processes write to the same
+        Zarr array concurrently.
     chunkmanager_store_kwargs : dict, optional
         Additional keyword arguments passed on to the `ChunkManager.store` method used to store
         chunked arrays. For example for a dask array additional kwargs will be passed eventually to
@@ -279,20 +321,12 @@ def to_icechunk(
 
     as_dataset = _make_dataset(obj)
 
-    # This ugliness is needed so that we allow users to call `to_icechunk` with a dirty Session
-    # for _serial_ writes
-    is_dask = is_dask_collection(obj)
-    fork: Session | ForkSession
-    if is_dask:
-        if session.has_uncommitted_changes:
-            raise ValueError(
-                "Calling `to_icechunk` is not allowed on a Session with uncommitted changes. Please commit first."
-            )
-        fork = session.fork()
-    else:
-        fork = session
-
-    writer = _XarrayDatasetWriter(as_dataset, store=fork.store, safe_chunks=safe_chunks)
+    writer = _XarrayDatasetWriter(
+        as_dataset,
+        store=session.store,
+        safe_chunks=safe_chunks,
+        align_chunks=align_chunks,
+    )
 
     writer._open_group(group=group, mode=mode, append_dim=append_dim, region=region)
 
@@ -300,21 +334,26 @@ def to_icechunk(
     writer.write_metadata(encoding)
     # write in-memory arrays
     writer.write_eager()
-    # eagerly write dask arrays
-    maybe_fork_session = writer.write_lazy(
-        chunkmanager_store_kwargs=chunkmanager_store_kwargs
-    )
-    if is_dask:
-        if maybe_fork_session is None:
-            raise RuntimeError(
-                "Logic bug! Please open at issue at https://github.com/earth-mover/icechunk"
-            )
-        session.merge(maybe_fork_session)
-    else:
-        if maybe_fork_session is not None:
-            raise RuntimeError(
-                "Unexpected write of dask arrays! Please open at issue at https://github.com/earth-mover/icechunk"
-            )
+
+    if is_dask_collection(obj):
+        # to offer maximum flexibility to the user; we fork here purely for distributed writes.
+        # For example, this allows multiple resizes and distributed writes in the same session
+        # where we previously forced a user to commit.
+        # See test_distributed_append.py for an example.
+        fork: ForkSession = session.fork()
+        writer.writer.targets = [
+            # Any new arrays have already been created in the `write_metadata` step above
+            # so now we just use `mode="a"`.
+            zarr.open_array(fork.store, path=target.path, mode="a")
+            for target in writer.writer.targets
+        ]
+
+        # eagerly write dask arrays
+        forked_session = writer.write_lazy(
+            chunkmanager_store_kwargs=chunkmanager_store_kwargs,
+            split_every=split_every,
+        )
+        session.merge(forked_session)
 
 
 @overload

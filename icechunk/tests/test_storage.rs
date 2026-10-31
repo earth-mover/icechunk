@@ -2,77 +2,139 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     future::Future,
-    sync::Arc,
+    num::NonZeroU16,
+    pin::Pin,
+    sync::{Arc, LazyLock},
 };
 
 use bytes::Bytes;
+use chrono::Utc;
+use futures::{StreamExt as _, TryStreamExt as _, stream};
 use icechunk::{
-    ObjectStorage, Storage,
-    config::{S3Credentials, S3Options, S3StaticCredentials},
-    format::{ChunkId, ManifestId, SnapshotId},
-    new_local_filesystem_storage,
-    refs::{
-        Ref, RefError, RefErrorKind, create_tag, fetch_branch_tip, fetch_tag, list_refs,
-        update_branch,
+    ObjectStorage, Repository, RepositoryConfig, Storage,
+    asset_manager::AssetManager,
+    config::{
+        DEFAULT_MAX_CONCURRENT_REQUESTS, GcsCredentials, S3Credentials, S3Options,
+        S3StaticCredentials,
     },
+    error::ICError,
+    format::{
+        CHUNKS_FILE_PATH, ChunkId, MANIFESTS_FILE_PATH, OBJECT_ID_FIRST_CHARS,
+        OBJECT_ID_ONE_CHAR_PREFIXES, Path, SNAPSHOTS_FILE_PATH, SnapshotId,
+        TRANSACTION_LOGS_FILE_PATH, format_constants::SpecVersionBin, snapshot::Snapshot,
+    },
+    new_local_filesystem_storage,
+    refs::{RefData, RefErrorKind},
+    repository::{RepositoryError, RepositoryErrorKind},
     storage::{
-        self, ETag, FetchConfigResult, Generation, StorageResult, UpdateConfigResult,
-        VersionInfo, new_in_memory_storage, new_s3_storage, s3::mk_client,
+        self, Attribution, AttributionLabels, ConcurrencySettings, ETag, Generation,
+        RepositoryCreation, RequestAttribution, S3Storage, StorageContext,
+        StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, mk_client,
+        new_gcs_storage, new_http_storage, new_in_memory_storage, new_redirect_storage,
+        new_s3_object_store_storage, new_s3_storage, s3_storage,
     },
 };
+use icechunk_arrow_object_store::object_store::azure::AzureConfigKey;
 use icechunk_macros::tokio_test;
-use object_store::azure::AzureConfigKey;
 use pretty_assertions::{assert_eq, assert_ne};
+use rstest::rstest;
+use rstest_reuse::{self, *};
 use tempfile::tempdir;
-use tokio::io::AsyncReadExt;
+use tokio::{
+    io::{AsyncRead, AsyncReadExt as _},
+    sync::oneshot,
+};
+use warp::Filter as _;
 
-mod common;
+use crate::common;
+use crate::common::Permission;
 
-#[allow(clippy::expect_used)]
-async fn mk_s3_storage(prefix: &str) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
-    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
-        S3Options {
-            region: Some("us-east-1".to_string()),
-            endpoint_url: Some("http://localhost:9000".to_string()),
-            allow_http: true,
-            anonymous: false,
-            force_path_style: true,
+/// Every storage call in these tests carries full attribution, so each
+/// backend is exercised with the longest header it will see in production.
+static LABELS: LazyLock<AttributionLabels> = LazyLock::new(|| {
+    #[expect(clippy::expect_used)]
+    let attribution = Attribution::new()
+        .with_client("storage-tests/1.0")
+        .expect("valid client")
+        .with_workload("test_storage")
+        .expect("valid workload")
+        .with_principal("tester")
+        .expect("valid principal");
+    AttributionLabels::from(&attribution)
+});
+
+fn attributed(settings: &storage::Settings) -> StorageContext<'_> {
+    StorageContext::new(
+        settings,
+        RequestAttribution {
+            labels: &LABELS,
+            array: Some("group/array"),
+            chunk: Some(&[1, 2, 3]),
         },
+    )
+}
+
+#[template]
+#[rstest]
+#[case::v1(SpecVersionBin::V1)]
+#[case::v2(SpecVersionBin::V2)]
+fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
+
+#[expect(clippy::expect_used)]
+async fn mk_s3_storage(
+    prefix: &str,
+    permission: &Permission,
+) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let (access_key_id, secret_access_key) = permission.keys();
+
+    let storage: Arc<dyn Storage + Send + Sync> = new_s3_storage(
+        S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true)
+            .with_force_path_style(true),
         "testbucket".to_string(),
         Some(prefix.to_string()),
         Some(S3Credentials::Static(S3StaticCredentials {
-            access_key_id: "minio123".into(),
-            secret_access_key: "minio123".into(),
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
             session_token: None,
             expires_after: None,
         })),
+        Vec::new(),
+        Vec::new(),
+        None,
     )
-    .expect("Creating minio storage failed");
+    .expect("Creating S3 storage failed");
 
     Ok(storage)
 }
 
-#[allow(clippy::expect_used)]
 async fn mk_s3_object_store_storage(
     prefix: &str,
+    permission: &Permission,
 ) -> StorageResult<Arc<dyn Storage + Send + Sync>> {
+    let (access_key_id, secret_access_key) = permission.keys();
+
     let storage = Arc::new(
         ObjectStorage::new_s3(
             "testbucket".to_string(),
             Some(prefix.to_string()),
             Some(S3Credentials::Static(S3StaticCredentials {
-                access_key_id: "minio123".into(),
-                secret_access_key: "minio123".into(),
+                access_key_id: access_key_id.into(),
+                secret_access_key: secret_access_key.into(),
                 session_token: None,
                 expires_after: None,
             })),
-            Some(S3Options {
-                region: Some("us-east-1".to_string()),
-                endpoint_url: Some("http://localhost:9000".to_string()),
-                allow_http: true,
-                anonymous: false,
-                force_path_style: true,
-            }),
+            Some(
+                S3Options::default()
+                    .with_region("us-east-1")
+                    .with_endpoint_url("http://localhost:4200")
+                    .with_allow_http(true)
+                    .with_force_path_style(true),
+            ),
+            Vec::new(),
+            Vec::new(),
         )
         .await?,
     );
@@ -97,72 +159,181 @@ async fn mk_azure_blob_storage(
     Ok(storage)
 }
 
-#[allow(clippy::expect_used)]
-async fn with_storage<F, Fut>(f: F) -> Result<(), Box<dyn std::error::Error>>
+#[expect(clippy::expect_used)]
+async fn with_storage<F, Fut>(
+    permission: Permission,
+    f: F,
+) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Fn(&'static str, Arc<dyn Storage + Send + Sync>) -> Fut,
     Fut: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
-    let prefix = common::get_random_prefix("with_storage");
-    let s1 = mk_s3_storage(prefix.as_str()).await?;
-    #[allow(clippy::unwrap_used)]
+    let s1 =
+        mk_s3_storage(common::get_random_prefix("with_storage").as_str(), &permission)
+            .await?;
+    let s1slash = mk_s3_storage(
+        format!("{}/", common::get_random_prefix("with_storage")).as_str(),
+        &permission,
+    )
+    .await?;
+
+    #[expect(clippy::unwrap_used)]
     let s2 = new_in_memory_storage().await.unwrap();
-    let s3 =
-        mk_s3_object_store_storage(format!("{prefix}_object_store").as_str()).await?;
-    let s4 = mk_azure_blob_storage(prefix.as_str()).await?;
+    let s3 = mk_s3_object_store_storage(
+        format!("{}_object_store", common::get_random_prefix("with_storage")).as_str(),
+        &permission,
+    )
+    .await?;
+    let s3slash = mk_s3_object_store_storage(
+        format!("{}_object_store/", common::get_random_prefix("with_storage")).as_str(),
+        &permission,
+    )
+    .await?;
+    let s4 =
+        mk_azure_blob_storage(common::get_random_prefix("with_storage").as_str()).await?;
+    let s4slash = mk_azure_blob_storage(
+        format!("{}/", common::get_random_prefix("with_storage")).as_str(),
+    )
+    .await?;
     let dir = tempdir().expect("cannot create temp dir");
     let s5 = new_local_filesystem_storage(dir.path())
         .await
         .expect("Cannot create local Storage");
 
-    println!("Using in memory storage");
-    f("in_memory", s2).await?;
-    println!("Using local filesystem storage");
-    f("local_filesystem", s5).await?;
-    println!("Using s3 native storage on MinIO");
-    f("s3_native", s1).await?;
-    println!("Using s3 object_store storage on MinIO");
-    f("s3_object_store", s3).await?;
-    println!("Using azure_blob storage");
-    f("azure_blob", s4).await?;
+    let mut storages: Vec<(&'static str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("in_memory", s2),
+        ("local_filesystem", s5),
+        ("s3_native", s1),
+        ("s3_native_slash", s1slash),
+        ("s3_object_store", s3),
+        ("s3_object_store_slash", s3slash),
+        ("azure_blob", s4),
+        ("azure_blob_slash", s4slash),
+    ];
 
-    if env::var("AWS_BUCKET").is_ok() {
-        let s6 = common::make_aws_integration_storage(prefix.clone())?;
-        println!("Using AWS storage");
-        f("AWS", s6).await?;
+    if let Ok(e) = env::var("AWS_BUCKET")
+        && !e.is_empty()
+    {
+        let prefix = common::get_random_prefix("with_storage");
+        let s = common::make_aws_integration_storage(prefix.clone())?;
+        storages.push(("AWS", s));
+
+        let prefix = format!("{}/", common::get_random_prefix("with_storage"));
+        let s = common::make_aws_integration_storage(prefix.clone())?;
+        storages.push(("AWS_slash", s));
     }
-    if env::var("R2_BUCKET").is_ok() {
-        let s7 = common::make_r2_integration_storage(prefix.clone())?;
-        println!("Using R2 storage");
-        f("R2", s7).await?;
+    if let Ok(e) = env::var("R2_BUCKET")
+        && !e.is_empty()
+    {
+        let prefix = common::get_random_prefix("with_storage");
+        let s = common::make_r2_integration_storage(prefix.clone())?;
+        storages.push(("R2", s));
+
+        let prefix = format!("{}/", common::get_random_prefix("with_storage"));
+        let s = common::make_r2_integration_storage(prefix.clone())?;
+        storages.push(("R2_slash", s));
     }
-    if env::var("TIGRIS_BUCKET").is_ok() {
-        let s8 = common::make_tigris_integration_storage(prefix.clone())?;
-        println!("Using Tigris storage");
-        f("Tigris", s8).await?;
+    if let Ok(e) = env::var("HF_BUCKET")
+        && !e.is_empty()
+    {
+        let prefix = common::get_random_prefix("with_storage");
+        let s = common::make_hf_integration_storage(prefix.clone())?;
+        storages.push(("HF", s));
+
+        let prefix = format!("{}/", common::get_random_prefix("with_storage"));
+        let s = common::make_hf_integration_storage(prefix.clone())?;
+        storages.push(("HF_slash", s));
     }
+    // if let Ok(e) = env::var("TIGRIS_BUCKET") && !e.is_empty() {
+    //     let prefix = common::get_random_prefix("with_storage");
+    //     let s = common::make_tigris_integration_storage(prefix.clone())?;
+    //     storages.push(("Tigris", s));
+
+    //     let prefix = format!("{}/", common::get_random_prefix("with_storage"));
+    //     let s = common::make_tigris_integration_storage(prefix.clone())?;
+    //     storages.push(("Tigris_slash", s));
+    // }
+
+    let futures = storages.into_iter().map(|(name, storage)| {
+        println!("Using {name} storage");
+        f(name, storage)
+    });
+    futures::future::try_join_all(futures).await?;
 
     Ok(())
 }
 
+/// The storage's default settings with more patient retries: the cloud buckets used by
+/// [`with_storage`] are shared by all concurrent CI runs and can throttle with `SlowDown`.
+async fn with_storage_settings(
+    storage: &Arc<dyn Storage + Send + Sync>,
+) -> StorageResult<storage::Settings> {
+    let retries = storage::Settings {
+        retries: Some(storage::RetriesSettings {
+            max_tries: NonZeroU16::new(16),
+            initial_backoff_ms: Some(500),
+            max_backoff_ms: Some(30_000),
+        }),
+        ..Default::default()
+    };
+    Ok(storage.default_settings().await?.merge(retries))
+}
+
+async fn async_read_to_bytes(
+    mut read: Pin<Box<dyn AsyncRead + Send>>,
+) -> Result<Vec<u8>, std::io::Error> {
+    let mut data = Vec::with_capacity(1_024);
+    read.read_to_end(&mut data).await?;
+    Ok(data)
+}
+
 #[tokio_test]
-pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
+async fn test_object_write_read() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let storage_settings = with_storage_settings(&storage).await?;
+        let ctx = attributed(&storage_settings);
         let id = SnapshotId::random();
-        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
-        storage
-            .write_snapshot(
-                &storage_settings,
-                id.clone(),
-                vec![("foo".to_string(), "bar".to_string())],
-                Bytes::copy_from_slice(&bytes[..]),
-            )
-            .await?;
-        let mut read = storage.fetch_snapshot(&storage_settings, &id).await?;
-        let mut bytes_back = [0; 1024];
-        read.read_exact(&mut bytes_back).await?;
-        assert_eq!(bytes_back, bytes);
+        let mut bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
+        bytes[42] = 42;
+        bytes[43] = 99;
+
+        for dir in [
+            SNAPSHOTS_FILE_PATH,
+            MANIFESTS_FILE_PATH,
+            TRANSACTION_LOGS_FILE_PATH,
+            CHUNKS_FILE_PATH,
+        ] {
+            let path = format!("{dir}/{id}");
+
+            storage
+                .put_object(
+                    &ctx,
+                    path.as_str(),
+                    Bytes::copy_from_slice(&bytes[..]),
+                    Some("application/foo"),
+                    vec![("foo".to_string(), "bar".to_string())],
+                    None,
+                )
+                .await?
+                .must_write()?;
+
+            // check with unknown size
+            let (read, _) = storage.get_object(&ctx, path.as_str(), None).await?;
+            assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
+
+            // check with known size
+            let (read, _) =
+                storage.get_object(&ctx, path.as_str(), Some(&(0..1024))).await?;
+            assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
+
+            // check with small range
+            let (read, _) =
+                storage.get_object(&ctx, path.as_str(), Some(&(42..44))).await?;
+            assert_eq!(
+                async_read_to_bytes(read).await?.as_slice(),
+                Bytes::copy_from_slice(&[42, 99])
+            );
+        }
         Ok(())
     })
     .await?;
@@ -170,31 +341,16 @@ pub async fn test_snapshot_write_read() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[tokio_test]
-pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = ManifestId::random();
-        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
-        storage
-            .write_manifest(
-                &storage_settings,
-                id.clone(),
-                vec![("foo".to_string(), "bar".to_string())],
-                Bytes::copy_from_slice(&bytes[..]),
-            )
-            .await?;
-        let mut read =
-            storage.fetch_manifest_unknown_size(&storage_settings, &id).await?;
-        let mut bytes_back = [0; 1024];
-        read.read_exact(&mut bytes_back).await?;
-        assert_eq!(bytes_back, bytes);
-
-        let bytes_back = storage
-            .fetch_manifest_known_size(&storage_settings, &id, 1024)
-            .await?
-            .to_bytes(1024)
-            .await?;
-        assert_eq!(bytes_back, Bytes::copy_from_slice(&bytes[..]));
+#[apply(spec_version_cases)]
+async fn test_tag_write_get(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let repo =
+            Repository::create(storage).spec_version(spec_version).execute().await?;
+        repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
+        let back = repo.lookup_tag("mytag").await?;
+        assert_eq!(Snapshot::INITIAL_SNAPSHOT_ID, back);
         Ok(())
     })
     .await?;
@@ -202,159 +358,21 @@ pub async fn test_manifest_write_read() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[tokio_test]
-pub async fn test_chunk_write_read() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = ChunkId::random();
-        let bytes = Bytes::from_static(b"hello");
-        storage.write_chunk(&storage_settings, id.clone(), bytes.clone()).await?;
-
-        let back = storage.fetch_chunk(&storage_settings, &id, &(1..4)).await?;
-        assert_eq!(Bytes::from_static(b"ell"), back);
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_tag_write_get() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone()).await?;
-        let back = fetch_tag(storage.as_ref(), &storage_settings, "mytag").await?;
-        assert_eq!(id, back.snapshot);
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_fetch_non_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
-            .await?;
-
-        let back =
-            fetch_tag(storage.as_ref(), &storage_settings, "non-existing-tag").await;
-        assert!(matches!(back, Err(RefError{kind: RefErrorKind::RefNotFound(r), ..}) if r == "non-existing-tag"));
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_create_existing_tag() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-        create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
-            .await?;
-
-        let res =
-            create_tag(storage.as_ref(), &storage_settings, "mytag", id.clone())
-                .await;
-        assert!(matches!(res, Err(RefError{kind: RefErrorKind::TagAlreadyExists(r), ..}) if r == "mytag"));
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_branch_initialization() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id.clone(),
-            None,
-        )
-        .await?;
-
-        let res =
-            fetch_branch_tip(storage.as_ref(), &storage_settings, "some-branch").await?;
-        assert_eq!(res.snapshot, id);
-
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_fetch_non_existing_branch() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id = SnapshotId::random();
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id.clone(),
-            None,
-        )
-        .await?;
-
-        let back =
-            fetch_branch_tip(storage.as_ref(), &storage_settings, "non-existing-branch")
-                .await;
+#[apply(spec_version_cases)]
+async fn test_fetch_non_existing_tag(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let repo =
+            Repository::create(storage).spec_version(spec_version).execute().await?;
+        repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
+        let back = repo.lookup_tag("non-existing-tag").await;
         assert!(
-            matches!(back, Err(RefError{kind: RefErrorKind::RefNotFound(r),..}) if r == "non-existing-branch")
-        );
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-#[tokio_test]
-pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id1 = SnapshotId::random();
-        let id2 = SnapshotId::random();
-        let id3 = SnapshotId::random();
-
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id1.clone(),
-            None,
-        )
-        .await?;
-
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id2.clone(),
-            Some(&id1),
-        )
-        .await?;
-
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "some-branch",
-            id3.clone(),
-            Some(&id2),
-        )
-        .await?;
-
-        let res =
-            fetch_branch_tip(storage.as_ref(), &storage_settings, "some-branch").await?;
-        assert_eq!(res.snapshot, id3);
+            matches!(
+                back,
+                Err(RepositoryError{kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(r)), ..}) if r == "non-existing-tag"
+            )
+            );
 
         Ok(())
     })
@@ -363,40 +381,762 @@ pub async fn test_branch_update() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let id1 = SnapshotId::random();
-        let id2 = SnapshotId::random();
-        update_branch(storage.as_ref(), &storage_settings, "main", id1.clone(), None)
-            .await?;
-        update_branch(
-            storage.as_ref(),
-            &storage_settings,
-            "main",
-            id2.clone(),
-            Some(&id1),
-        )
-        .await?;
-        update_branch(storage.as_ref(), &storage_settings, "foo", id1.clone(), None)
-            .await?;
-        update_branch(storage.as_ref(), &storage_settings, "bar", id1.clone(), None)
-            .await?;
-        create_tag(storage.as_ref(), &storage_settings, "my-tag", id1.clone()).await?;
-        create_tag(storage.as_ref(), &storage_settings, "my-other-tag", id1.clone())
-            .await?;
+#[apply(spec_version_cases)]
+async fn test_create_existing_tag(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let repo =
+            Repository::create(storage).spec_version(spec_version).execute().await?;
+        repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
+        let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
+        assert!(
+            matches!(
+                res,
+                Err(RepositoryError{kind: RepositoryErrorKind::Ref(RefErrorKind::TagAlreadyExists(r)), ..}) if r == "mytag"
+            )
+            );
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
 
-        let res: HashSet<_> =
-            HashSet::from_iter(list_refs(storage.as_ref(), &storage_settings).await?);
-        assert_eq!(
+#[tokio_test]
+async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let _repo = Repository::create(Arc::clone(&storage)).execute().await?;
+
+        // creating repo with check_clean_repo = true
+        // should fail because we wrote data above
+        let res = Repository::create(Arc::clone(&storage)).execute().await;
+        assert!(res.is_err());
+        assert!(matches!(
             res,
-            HashSet::from_iter([
-                Ref::Tag("my-tag".to_string()),
-                Ref::Tag("my-other-tag".to_string()),
-                Ref::Branch("main".to_string()),
-                Ref::Branch("foo".to_string()),
-                Ref::Branch("bar".to_string()),
-            ])
+            Err(ICError { kind: RepositoryErrorKind::ParentDirectoryNotClean, .. })
+        ),);
+
+        // creating repo with check_clean_repo = false
+        // fails because it tries to overwrite a repo info that is not up to date
+        let res = Repository::create(storage).check_clean_root(false).execute().await;
+        assert!(res.is_err());
+        assert!(matches!(
+            res,
+            Err(ICError { kind: RepositoryErrorKind::RepoInfoUpdated, .. })
+        ));
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+/// Creating a repository at an empty prefix (the bucket/container root) is refused on
+/// every cloud object-store backend — native S3 and the `object_store`-based S3,
+/// Azure, and GCS — but allowed on in-memory and local-filesystem storage, and via
+/// the test-only escape hatch. The gate runs before any network I/O, so this needs
+/// no live servers (constructing each backend is lazy and does not connect).
+#[tokio_test]
+async fn create_refuses_empty_prefix_on_object_store()
+-> Result<(), Box<dyn std::error::Error>> {
+    fn s3_creds() -> S3Credentials {
+        S3Credentials::Static(S3StaticCredentials {
+            access_key_id: "key".into(),
+            secret_access_key: "secret".into(),
+            session_token: None,
+            expires_after: None,
+        })
+    }
+    fn native_s3(prefix: &str) -> StorageResult<S3Storage> {
+        s3_storage(
+            S3Options::default().with_region("us-east-1"),
+            "testbucket".to_string(),
+            Some(prefix.to_string()),
+            Some(s3_creds()),
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+    }
+
+    // Every create-capable cloud object-store backend, addressed at the bucket /
+    // container root. Both `can_create_repository` and the `Repository::create` gate
+    // run before any I/O, so none of these need a live server.
+    let refused: Vec<(&str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("native_s3", Arc::new(native_s3("")?)),
+        ("object_store_s3", mk_s3_object_store_storage("", &Permission::Modify).await?),
+        ("object_store_azure", mk_azure_blob_storage("").await?),
+        (
+            "object_store_gcs",
+            Arc::new(ObjectStorage::new_gcs(
+                "testbucket".to_string(),
+                Some(String::new()),
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+            )?),
+        ),
+    ];
+    for (name, storage) in refused {
+        assert_eq!(
+            storage.can_create_repository().await?,
+            RepositoryCreation::RefusedEmptyPrefix,
+            "{name}: empty-prefix creation should be refused at the storage level",
+        );
+        assert!(
+            matches!(
+                Repository::create(storage).execute().await,
+                Err(ICError { kind: RepositoryErrorKind::EmptyPrefixCreation, .. })
+            ),
+            "{name}: Repository::create should fail with EmptyPrefixCreation",
+        );
+    }
+
+    // Allowed: a non-empty prefix, the escape hatch (on both the native and the
+    // object_store backends), and the non-cloud backends even at an empty prefix.
+    let dir = tempdir()?;
+    let allowed: Vec<(&str, Arc<dyn Storage + Send + Sync>)> = vec![
+        ("native_s3_nonempty", Arc::new(native_s3("some/prefix")?)),
+        (
+            "native_s3_empty_with_hatch",
+            Arc::new(native_s3("")?.unsafe_allow_empty_prefix_creation()),
+        ),
+        (
+            "object_store_s3_empty_with_hatch",
+            Arc::new(
+                ObjectStorage::new_s3(
+                    "testbucket".to_string(),
+                    Some(String::new()),
+                    Some(s3_creds()),
+                    Some(S3Options::default().with_region("us-east-1")),
+                    Vec::new(),
+                    Vec::new(),
+                )
+                .await?
+                .unsafe_allow_empty_prefix_creation(),
+            ),
+        ),
+        ("in_memory", new_in_memory_storage().await?),
+        ("local_filesystem", new_local_filesystem_storage(dir.path()).await?),
+    ];
+    for (name, storage) in allowed {
+        assert_eq!(
+            storage.can_create_repository().await?,
+            RepositoryCreation::Allowed,
+            "{name}: creation should be allowed",
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_list_objects() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let settings = with_storage_settings(&storage).await?;
+        let ctx = attributed(&settings);
+        storage
+            .put_object(&ctx, "foo/bar/1", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "foo/bar/2", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "foo/3", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "foo/4", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "5", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "6", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+
+        for prefix in ["foo/bar", "foo/bar/"] {
+            let mut obs: Vec<_> = storage
+                .list_objects(&ctx, prefix)
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            obs.sort();
+            assert_eq!(obs, vec!["1".to_string(), "2".to_string()]);
+        }
+
+        for prefix in ["foo", "foo/"] {
+            let mut obs: Vec<_> = storage
+                .list_objects(&ctx, prefix)
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            obs.sort();
+            assert_eq!(
+                obs,
+                vec![
+                    "3".to_string(),
+                    "4".to_string(),
+                    "bar/1".to_string(),
+                    "bar/2".to_string()
+                ]
+            );
+        }
+
+        for prefix in ["", "/"] {
+            let mut obs: Vec<_> = storage
+                .list_objects(&ctx, prefix)
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            obs.sort();
+            assert_eq!(
+                obs,
+                vec![
+                    "5".to_string(),
+                    "6".to_string(),
+                    "foo/3".to_string(),
+                    "foo/4".to_string(),
+                    "foo/bar/1".to_string(),
+                    "foo/bar/2".to_string()
+                ]
+            );
+        }
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+fn prefixes(prefixes: &[&str]) -> Vec<String> {
+    prefixes.iter().map(|p| (*p).to_string()).collect()
+}
+
+#[tokio_test]
+async fn test_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let settings = with_storage_settings(&storage).await?;
+        let ctx = attributed(&settings);
+        for path in [
+            "foo/0a",
+            "foo/0b",
+            "foo/1a",
+            "foo/Za",
+            "foo/0abc",
+            "foo/0abd",
+            "foo/bar/0c",
+            "foo0/0d",
+            "0e",
+        ] {
+            storage
+                .put_object(&ctx, path, Bytes::new(), None, Default::default(), None)
+                .await?
+                .must_write()?;
+        }
+
+        for prefix in ["foo", "foo/"] {
+            let mut obs: Vec<_> = storage
+                .list_objects_with_id_prefixes(&ctx, prefix, &prefixes(&["0", "Z"]))
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            obs.sort();
+            assert_eq!(
+                obs,
+                vec![
+                    "0a".to_string(),
+                    "0abc".to_string(),
+                    "0abd".to_string(),
+                    "0b".to_string(),
+                    "Za".to_string(),
+                ]
+            );
+
+            // Prefixes longer than one character. `0ab` is deliberately
+            // shorter than every id it matches: an id equal to the prefix
+            // falls outside the offset listing the backends use.
+            let mut obs: Vec<_> = storage
+                .list_objects_with_id_prefixes(&ctx, prefix, &prefixes(&["0ab", "1"]))
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            obs.sort();
+            assert_eq!(
+                obs,
+                vec!["0abc".to_string(), "0abd".to_string(), "1a".to_string()]
+            );
+
+            let obs: Vec<_> = storage
+                .list_objects_with_id_prefixes(&ctx, prefix, &[])
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            assert!(obs.is_empty(), "empty prefix list returned {obs:?}");
+        }
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+/// The 1024 two-character prefixes cover the same keys as a plain listing.
+#[tokio_test]
+async fn test_list_objects_with_all_two_char_id_prefixes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let two_chars: Vec<String> = {
+        let mut chars: Vec<char> = OBJECT_ID_FIRST_CHARS.iter().copied().collect();
+        chars.sort_unstable();
+        chars.iter().flat_map(|a| chars.iter().map(move |b| format!("{a}{b}"))).collect()
+    };
+    assert_eq!(two_chars.len(), 1024);
+
+    let in_memory = new_in_memory_storage().await?;
+    let s3 = mk_s3_storage(
+        common::get_random_prefix("two_char_prefixes").as_str(),
+        &Permission::Modify,
+    )
+    .await?;
+    for storage in [in_memory, s3] {
+        let settings = storage.default_settings().await?;
+        let ctx = attributed(&settings);
+        let ids = ["00ABCD", "0ZABCD", "A0ABCD", "MKZZZZ", "Z0ABCD", "ZZABCD"];
+        for id in ids {
+            storage
+                .put_object(
+                    &ctx,
+                    &format!("{CHUNKS_FILE_PATH}/{id}"),
+                    Bytes::new(),
+                    None,
+                    Default::default(),
+                    None,
+                )
+                .await?
+                .must_write()?;
+        }
+
+        let all: HashSet<String> = storage
+            .list_objects(&ctx, CHUNKS_FILE_PATH)
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        assert_eq!(all, ids.iter().map(|id| (*id).to_string()).collect());
+
+        let split: HashSet<String> = storage
+            .list_objects_with_id_prefixes(&ctx, CHUNKS_FILE_PATH, &two_chars)
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        assert_eq!(split, all);
+    }
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_list_objects_with_id_prefixes_at_bucket_root()
+-> Result<(), Box<dyn std::error::Error>> {
+    let (access_key_id, secret_access_key) = Permission::Modify.keys();
+    let storage = ObjectStorage::new_s3(
+        "testbucket".to_string(),
+        None,
+        Some(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        })),
+        Some(
+            S3Options::default()
+                .with_region("us-east-1")
+                .with_endpoint_url("http://localhost:4200")
+                .with_allow_http(true)
+                .with_force_path_style(true),
+        ),
+        Vec::new(),
+        Vec::new(),
+    )
+    .await?;
+    let settings = storage.default_settings().await?;
+    let ctx = attributed(&settings);
+    let dir = common::get_random_prefix("root_first_chars");
+    for id in ["0a", "1a", "Za"] {
+        storage
+            .put_object(
+                &ctx,
+                &format!("{dir}/{id}"),
+                Bytes::new(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+    }
+
+    let mut obs: Vec<_> = storage
+        .list_objects_with_id_prefixes(&ctx, &dir, &prefixes(&["0", "Z"]))
+        .await?
+        .map_ok(|li| li.id)
+        .try_collect()
+        .await?;
+    obs.sort();
+    assert_eq!(obs, vec!["0a".to_string(), "Za".to_string()]);
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_gcs_list_objects_with_id_prefixes() -> Result<(), Box<dyn std::error::Error>>
+{
+    let storage = new_gcs_storage(
+        "al-public-test-bucket".to_string(),
+        Some("verification-copy".to_string()),
+        Some(GcsCredentials::Anonymous),
+        None,
+        Vec::new(),
+        Vec::new(),
+    )?;
+    // GC fans listings out per id prefix only on backends that list a prefix
+    // natively; GCS must be one of them or GC repeats the full listing per prefix
+    assert!(storage.lists_id_prefixes_natively());
+    let settings = storage.default_settings().await?;
+    let ctx = attributed(&settings);
+    for prefix in [
+        CHUNKS_FILE_PATH,
+        MANIFESTS_FILE_PATH,
+        SNAPSHOTS_FILE_PATH,
+        TRANSACTION_LOGS_FILE_PATH,
+    ] {
+        let all: HashSet<String> = storage
+            .list_objects(&ctx, prefix)
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        assert!(!all.is_empty(), "no objects under {prefix}");
+        let split: HashSet<String> = storage
+            .list_objects_with_id_prefixes(&ctx, prefix, &OBJECT_ID_ONE_CHAR_PREFIXES)
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        assert_eq!(split, all);
+
+        let first_char =
+            all.iter().filter_map(|id| id.chars().next()).min().unwrap_or('0');
+        let one_char: HashSet<String> = storage
+            .list_objects_with_id_prefixes(
+                &ctx,
+                prefix,
+                &prefixes(&[first_char.to_string().as_str()]),
+            )
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        let expected: HashSet<String> =
+            all.iter().filter(|id| id.starts_with(first_char)).cloned().collect();
+        assert_eq!(one_char, expected);
+
+        // A two-character prefix of one of those ids.
+        if let Some(two_chars) = expected
+            .iter()
+            .find(|id| id.chars().count() > 2)
+            .map(|id| id.chars().take(2).collect::<String>())
+        {
+            let two: HashSet<String> = storage
+                .list_objects_with_id_prefixes(
+                    &ctx,
+                    prefix,
+                    &prefixes(&[two_chars.as_str()]),
+                )
+                .await?
+                .map_ok(|li| li.id)
+                .try_collect()
+                .await?;
+            let expected: HashSet<String> = all
+                .iter()
+                .filter(|id| id.starts_with(two_chars.as_str()))
+                .cloned()
+                .collect();
+            assert_eq!(two, expected);
+        }
+    }
+    Ok(())
+}
+
+#[tokio_test]
+async fn conditional_create_conflicts_with_existing()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Exercises the readback's `NotOurWrite` branch (metadata-enabled
+    // backends) and the `NotStamped` branch (local_filesystem); both
+    // must surface as `NotOnLatestVersion`.
+    with_storage(Permission::Modify, |_, storage| async move {
+        let settings = with_storage_settings(&storage).await?;
+        let ctx = attributed(&settings);
+        let path = "conditional-create-conflict";
+
+        storage
+            .put_object(
+                &ctx,
+                path,
+                Bytes::from_static(b"first"),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+
+        let conditional_res = storage
+            .put_object(
+                &ctx,
+                path,
+                Bytes::from_static(b"second"),
+                None,
+                Default::default(),
+                Some(&VersionInfo::for_creation()),
+            )
+            .await?;
+
+        assert!(matches!(conditional_res, VersionedUpdateResult::NotOnLatestVersion));
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+/// Deterministic #2099 regression: a conditional create whose response was
+/// lost must recover via the write-id readback with a *fresh* etag. We model
+/// the retry by seeding the object with a known write-id, then forcing the
+/// create to reuse it.
+async fn assert_lost_response_recovers_with_fresh_etag(
+    label: &str,
+    multipart: bool,
+    requester_pays: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // rustfs ignores the requester-pays header; setting it only exercises the
+    // requester-pays branch of the readback HEAD.
+    let (access_key_id, secret_access_key) = Permission::Modify.keys();
+    let storage = new_s3_storage(
+        S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url("http://localhost:4200")
+            .with_allow_http(true)
+            .with_force_path_style(true)
+            .with_requester_pays(requester_pays),
+        "testbucket".to_string(),
+        Some(common::get_random_prefix(label)),
+        Some(S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        })),
+        Vec::new(),
+        Vec::new(),
+        None,
+    )?;
+    let mut settings = storage.default_settings().await?;
+    if multipart {
+        // Tiny threshold so small writes exercise the multipart path.
+        settings.minimum_size_for_multipart_upload = Some(1);
+    }
+    let ctx = attributed(&settings);
+    let key = "lost-response-create";
+    let forced = format!("forced-write-id-{label}");
+
+    // The first attempt that landed before its response was lost.
+    let seeded = storage
+        .put_object(
+            &ctx,
+            key,
+            Bytes::from_static(b"v1"),
+            None,
+            vec![(
+                icechunk_storage::readback::WRITE_ID_METADATA_KEY.to_string(),
+                forced.clone(),
+            )],
+            None,
+        )
+        .await?
+        .must_write()?;
+
+    // The retry: same write-id; conditional create 412s, readback recovers it.
+    icechunk_s3::test_util::force_next_write_id(forced);
+    let recovered = match storage
+        .put_object(
+            &ctx,
+            key,
+            Bytes::from_static(b"v2"),
+            None,
+            Default::default(),
+            Some(&VersionInfo::for_creation()),
+        )
+        .await?
+    {
+        VersionedUpdateResult::Updated { new_version } => new_version,
+        VersionedUpdateResult::NotOnLatestVersion => {
+            panic!("{label}: lost-response create should recover, got NotOnLatestVersion")
+        }
+    };
+    assert_eq!(recovered.etag(), seeded.etag(), "{label}: recovered a stale etag");
+
+    // Freshness: a stale recovered etag would 412 the follow-on update.
+    let follow_on = storage
+        .put_object(
+            &ctx,
+            key,
+            Bytes::from_static(b"v3"),
+            None,
+            Default::default(),
+            Some(&recovered),
+        )
+        .await?;
+    assert!(
+        matches!(follow_on, VersionedUpdateResult::Updated { .. }),
+        "{label}: recovered etag was stale; follow-on conditional update failed"
+    );
+    Ok(())
+}
+
+#[tokio_test]
+async fn lost_response_conditional_create_recovers_single()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag("lost-response-single", false, false)
+        .await
+}
+
+#[tokio_test]
+async fn lost_response_conditional_create_recovers_multipart()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag("lost-response-multipart", true, false)
+        .await
+}
+
+#[tokio_test]
+async fn lost_response_conditional_create_recovers_requester_pays()
+-> Result<(), Box<dyn std::error::Error>> {
+    assert_lost_response_recovers_with_fresh_etag(
+        "lost-response-requester-pays",
+        false,
+        true,
+    )
+    .await
+}
+
+#[tokio_test]
+async fn test_delete_objects() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let settings = with_storage_settings(&storage).await?;
+        let ctx = attributed(&settings);
+        storage
+            .put_object(&ctx, "foo/bar/1", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "foo/bar/2", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "foo/3", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "foo/4", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "5", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+        storage
+            .put_object(&ctx, "6", Bytes::new(), None, Default::default(), None)
+            .await?
+            .must_write()?;
+
+        // passing a prefix without slash
+        let res = storage
+            .delete_objects(&ctx, "foo/bar", stream::iter([("1".to_string(), 1)]).boxed())
+            .await?;
+        assert_eq!(res.deleted_objects, 1);
+        assert_eq!(res.deleted_bytes, 1);
+
+        // passing a prefix with slash
+        let res = storage
+            .delete_objects(
+                &ctx,
+                "foo/bar/",
+                stream::iter([("2".to_string(), 2)]).boxed(),
+            )
+            .await?;
+        assert_eq!(res.deleted_objects, 1);
+        assert_eq!(res.deleted_bytes, 2);
+
+        let mut obs: Vec<_> = storage
+            .list_objects(&ctx, "foo/bar")
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        obs.sort();
+        assert!(obs.is_empty());
+
+        // passing a prefix without slash
+        let res = storage
+            .delete_objects(
+                &ctx,
+                "",
+                stream::iter([("foo/3".to_string(), 5), ("foo/4".to_string(), 6)])
+                    .boxed(),
+            )
+            .await?;
+        assert_eq!(res.deleted_objects, 2);
+        assert_eq!(res.deleted_bytes, 11);
+
+        let mut obs: Vec<_> = storage
+            .list_objects(&ctx, "foo")
+            .await?
+            .map_ok(|li| li.id)
+            .try_collect()
+            .await?;
+        obs.sort();
+        assert!(obs.is_empty());
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio_test]
+#[apply(spec_version_cases)]
+async fn test_fetch_non_existing_branch(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let repo =
+            Repository::create(storage).spec_version(spec_version).execute().await?;
+        let back = repo.lookup_branch("non-existing-branch").await;
+        assert!(
+            matches!(
+                back,
+                Err(RepositoryError{kind: RepositoryErrorKind::Ref(RefErrorKind::RefNotFound(r)), ..}) if r == "non-existing-branch"
+            )
         );
         Ok(())
     })
@@ -405,160 +1145,202 @@ pub async fn test_ref_names() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[tokio_test]
-#[allow(clippy::panic)]
-pub async fn test_write_config_on_empty() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let config = Bytes::copy_from_slice(b"hello");
-        let version = match storage.update_config(&storage_settings, config.clone(), &VersionInfo::for_creation()).await? {
-    UpdateConfigResult::Updated { new_version } => new_version,
-    UpdateConfigResult::NotOnLatestVersion => panic!(),
-};
+#[apply(spec_version_cases)]
+async fn test_write_config_on_empty(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let storage_settings = with_storage_settings(&storage).await?;
+
+        let am = Arc::new(AssetManager::new_no_cache(
+            storage,
+            storage_settings,
+            spec_version,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ));
+        let config = RepositoryConfig::default();
+        let Some(version) =
+            am.try_update_config(&config, &VersionInfo::for_creation(), None).await?
+        else {
+            panic!()
+        };
         assert_ne!(version, VersionInfo::for_creation());
-        let res = storage.fetch_config(&storage_settings, ).await?;
-        assert!(
-            matches!(res, FetchConfigResult::Found{bytes, version: actual_version} if actual_version == version && bytes == config )
-        );
+        let res = am.fetch_config().await?;
+        match res {
+            Some((result, actual_version)) => {
+                assert_eq!(result, config);
+                assert_eq!(actual_version, version);
+            }
+            None => panic!("Couldn't get file"),
+        }
         Ok(())
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 
 #[tokio_test]
-#[allow(clippy::panic)]
-pub async fn test_write_config_on_existing() -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
-        let storage_settings = storage.default_settings();
-        let first_version = match storage.update_config(&storage_settings, Bytes::copy_from_slice(b"hello"), &VersionInfo::for_creation()).await? {
-            UpdateConfigResult::Updated { new_version } => new_version,
-            _ => panic!(),
+#[apply(spec_version_cases)]
+async fn test_write_config_on_existing(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let am = Arc::new(AssetManager::new_no_cache(
+            Arc::clone(&storage),
+            with_storage_settings(&storage).await?,
+            spec_version,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ));
+        let config1 = RepositoryConfig::default();
+        let Some(first_version) =
+            am.try_update_config(&config1, &VersionInfo::for_creation(), None).await?
+        else {
+            panic!()
         };
-        let config = Bytes::copy_from_slice(b"bye");
-        let second_version = match storage.update_config(&storage_settings, config.clone(), &first_version).await? {
-            UpdateConfigResult::Updated { new_version } => new_version,
-            _ => panic!(),
+        let config2 =
+            RepositoryConfig { inline_chunk_threshold_bytes: Some(42), ..config1 };
+        let Some(second_version) =
+            am.try_update_config(&config2, &first_version, Some("foo/baz")).await?
+        else {
+            panic!()
         };
         assert_ne!(second_version, first_version);
-        let res = storage.fetch_config(&storage_settings, ).await?;
-        assert!(
-            matches!(res, FetchConfigResult::Found{bytes, version: actual_version} if actual_version == second_version && bytes == config )
-        );
+        let (fetched_config, fetched_version) = am.fetch_config().await?.unwrap();
+        assert_eq!(second_version, fetched_version);
+        assert_eq!(config2, fetched_config);
         Ok(())
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 
 #[tokio_test]
-pub async fn test_write_config_fails_on_bad_version_when_non_existing()
--> Result<(), Box<dyn std::error::Error>> {
+#[apply(spec_version_cases)]
+async fn test_write_config_fails_on_bad_version_when_non_existing(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
     // FIXME: this test fails in MinIO but seems to work on S3
-    #[allow(clippy::unwrap_used)]
     let storage = new_in_memory_storage().await.unwrap();
-    let storage_settings = storage.default_settings();
-    let version = storage
-        .update_config(
-            &storage_settings,
-            Bytes::copy_from_slice(b"hello"),
+    let storage_settings = storage.default_settings().await?;
+    let am = Arc::new(AssetManager::new_no_cache(
+        storage,
+        storage_settings,
+        spec_version,
+        1, // we are only reading, compression doesn't matter
+        DEFAULT_MAX_CONCURRENT_REQUESTS,
+    ));
+    let config = RepositoryConfig::default();
+    let err = am
+        .try_update_config(
+            &config,
             &VersionInfo::from_etag_only("00000000000000000000000000000000".to_string()),
+            Some("foo/bar"),
         )
         .await;
-
-    assert!(matches!(version, Ok(UpdateConfigResult::NotOnLatestVersion)));
+    assert!(matches!(
+        err,
+        Err(RepositoryError {
+            kind: RepositoryErrorKind::StorageError(StorageErrorKind::ObjectNotFound,),
+            ..
+        })
+    ));
     Ok(())
 }
 
 #[tokio_test]
-#[allow(clippy::panic)]
-pub async fn test_write_config_fails_on_bad_version_when_existing()
--> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|storage_type, storage| async move {
-        let storage_settings = storage.default_settings();
-        let config = Bytes::copy_from_slice(b"hello");
-        let version = match storage.update_config(&storage_settings, config.clone(), &VersionInfo::for_creation()).await? {
-            UpdateConfigResult::Updated { new_version } => new_version,
-            _ => panic!(),
+#[apply(spec_version_cases)]
+async fn test_write_config_fails_on_bad_version_when_existing(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |storage_type, storage| async move {
+        let storage_settings = with_storage_settings(&storage).await?;
+        let am = Arc::new(AssetManager::new_no_cache(
+            storage,
+            storage_settings,
+            spec_version,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ));
+
+        let config1 = RepositoryConfig::default();
+        let Some(version) =
+            am.try_update_config(&config1, &VersionInfo::for_creation(), None).await?
+        else {
+            panic!()
         };
-        let update_res = storage
-            .update_config(&storage_settings,
-                Bytes::copy_from_slice(b"bye"),
-            &VersionInfo{
-                etag: Some(ETag("00000000000000000000000000000000".to_string())),
-                generation: Some(Generation("0".to_string())),
-            },
+        let update_res = am
+            .try_update_config(
+                &config1,
+                &VersionInfo {
+                    etag: Some(ETag("00000000000000000000000000000000".to_string())),
+                    generation: Some(Generation("0".to_string())),
+                },
+                Some("foo/bar"),
             )
             .await?;
+
         if storage_type == "local_filesystem" {
             // FIXME: local file system doesn't have conditional updates yet
-            assert!(matches!(update_res, UpdateConfigResult::Updated{..}));
-
+            assert!(update_res.is_some());
         } else {
-            assert!(matches!(update_res, UpdateConfigResult::NotOnLatestVersion));
+            assert!(update_res.is_none());
         }
 
-        let fetch_res = storage.fetch_config(&storage_settings, ).await?;
+        let (fetched_config, fetched_version) = am.fetch_config().await?.unwrap();
         if storage_type == "local_filesystem" {
             // FIXME: local file system doesn't have conditional updates yet
-            assert!(
-                matches!(fetch_res, FetchConfigResult::Found{bytes, version: actual_version}
-                    if actual_version != version && bytes == Bytes::copy_from_slice(b"bye"))
-            );
+            assert_ne!(fetched_version, version);
+            assert_eq!(fetched_config, config1);
         } else {
-            assert!(
-                matches!(fetch_res, FetchConfigResult::Found{bytes, version: actual_version}
-                    if actual_version == version && bytes == config )
-            );
+            assert_eq!(fetched_version, version);
+            assert_eq!(fetched_config, config1);
         }
         Ok(())
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 
 #[tokio_test]
-#[allow(clippy::panic)]
-pub async fn test_write_config_can_overwrite_with_unsafe_config()
--> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+#[apply(spec_version_cases)]
+async fn test_write_config_can_overwrite_with_unsafe_config(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
         let storage_settings = storage::Settings {
             unsafe_use_conditional_update: Some(false),
             unsafe_use_conditional_create: Some(false),
-            ..storage.default_settings()
+            ..with_storage_settings(&storage).await?
         };
+        let am = Arc::new(AssetManager::new_no_cache(
+            storage,
+            storage_settings,
+            spec_version,
+            1, // we are only reading, compression doesn't matter
+            DEFAULT_MAX_CONCURRENT_REQUESTS,
+        ));
 
-        // create the initial version
-        let config = Bytes::copy_from_slice(b"hello");
-        match storage
-            .update_config(
-                &storage_settings,
-                config.clone(),
-                &VersionInfo {
-                    etag: Some(ETag("some-bad-etag".to_string())),
-                    generation: Some(Generation("42".to_string())),
-                }
-            )
-            .await?
-        {
-            UpdateConfigResult::Updated { new_version } => new_version,
-            _ => panic!(),
+        let config1 = RepositoryConfig::default();
+        match am.try_update_config(&config1, &VersionInfo::for_creation(), None).await? {
+            Some(new_version) => new_version,
+            None => panic!(),
         };
 
         // attempt a bad change that should succeed in this config
-        let update_res = storage
-            .update_config(
-                &storage_settings,
-                Bytes::copy_from_slice(b"bye"),
+        let update_res = am
+            .try_update_config(
+                &config1,
                 &VersionInfo {
                     etag: Some(ETag("other-bad-etag".to_string())),
                     generation: Some(Generation("55".to_string())),
                 },
+                Some("foo/bar"),
             )
             .await?;
-
-        assert!(matches!(update_res, UpdateConfigResult::Updated { .. }));
-
-        let fetch_res = storage.fetch_config(&storage_settings).await?;
-        assert!(
-            matches!(fetch_res, FetchConfigResult::Found{bytes, ..} if bytes.as_ref() == b"bye")
-        );
+        assert!(update_res.is_some());
+        assert_eq!(am.fetch_config().await?.unwrap().0, config1);
         Ok(())
     })
     .await?;
@@ -566,96 +1348,92 @@ pub async fn test_write_config_can_overwrite_with_unsafe_config()
 }
 
 #[tokio_test]
-#[allow(clippy::unwrap_used)]
-pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
-    if env::var("AWS_BUCKET").is_err() {
+async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(store) = common::aws_real_store() else {
         return Ok(());
-    }
+    };
     let prefix = common::get_random_prefix("test_storage_classes");
     let st = common::make_aws_integration_storage(prefix.clone())?;
+    check_storage_classes(st, &store, &prefix).await
+}
+
+/// Same as [`test_storage_classes`] but through the `object_store` backend.
+#[tokio_test]
+async fn test_storage_classes_object_store() -> Result<(), Box<dyn std::error::Error>> {
+    let Some(store) = common::aws_real_store() else {
+        return Ok(());
+    };
+    let prefix = common::get_random_prefix("test_storage_classes_object_store");
+    let st = new_s3_object_store_storage(
+        store.options().clone(),
+        store.bucket().to_string(),
+        Some(prefix.clone()),
+        Some(store.credentials().clone()),
+        Vec::new(),
+        Vec::new(),
+    )
+    .await?;
+    check_storage_classes(st, &store, &prefix).await
+}
+
+/// Write two objects as `STANDARD_IA` and one with the default class, then
+/// list the prefix with the AWS SDK and check the classes S3 recorded.
+async fn check_storage_classes(
+    st: Arc<dyn Storage + Send + Sync>,
+    store: &common::RealStore,
+    prefix: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let client = mk_client(
-        &common::get_aws_integration_options()?,
-        common::get_aws_integration_credentials()?,
+        store.options(),
+        store.credentials().clone(),
         Vec::new(),
         Vec::new(),
         &storage::Settings::default(),
     )
     .await;
 
-    // we write 2 chunks in IA and one in standard, in ascending order of id
-    st.write_chunk(
-        &storage::Settings {
-            chunks_storage_class: Some("STANDARD_IA".to_string()),
-            ..storage::Settings::default()
-        },
-        ChunkId::new([0; 12]),
-        Bytes::new(),
-    )
-    .await?;
-    st.write_chunk(
-        &storage::Settings {
-            storage_class: Some("STANDARD_IA".to_string()),
-            ..storage::Settings::default()
-        },
-        ChunkId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-        Bytes::new(),
-    )
-    .await?;
-    st.write_chunk(
-        &storage::Settings::default(),
-        ChunkId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
-        Bytes::new(),
-    )
-    .await?;
-    let out = client
-        .list_objects_v2()
-        .bucket(common::get_aws_integration_bucket()?)
-        .prefix(format!("{prefix}/chunks"))
-        .into_paginator()
-        .send()
-        .collect::<Vec<_>>()
-        .await
-        .pop()
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        out.contents()
-            .iter()
-            .map(|o| o.storage_class().unwrap().to_string())
-            .collect::<Vec<_>>(),
-        vec!["STANDARD_IA", "STANDARD_IA", "STANDARD"]
-    );
+    let ia_settings = storage::Settings {
+        storage_class: Some("STANDARD_IA".to_string()),
+        ..storage::Settings::default()
+    };
+    let ia_ctx = attributed(&ia_settings);
+    let default_settings = storage::Settings::default();
+    let default_ctx = attributed(&default_settings);
 
-    st.write_manifest(
-        &storage::Settings {
-            metadata_storage_class: Some("STANDARD_IA".to_string()),
-            ..storage::Settings::default()
-        },
-        ManifestId::new([0; 12]),
-        Vec::new(),
+    // we write 2 chunks in IA and one in standard, in ascending order of id
+    st.put_object(
+        &ia_ctx,
+        "chunks/000000000000",
         Bytes::new(),
+        None,
+        Default::default(),
+        None,
     )
-    .await?;
-    st.write_manifest(
-        &storage::Settings {
-            storage_class: Some("STANDARD_IA".to_string()),
-            ..storage::Settings::default()
-        },
-        ManifestId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
-        Vec::new(),
+    .await?
+    .must_write()?;
+    st.put_object(
+        &ia_ctx,
+        "chunks/000000000001",
         Bytes::new(),
+        None,
+        Default::default(),
+        None,
     )
-    .await?;
-    st.write_manifest(
-        &storage::Settings::default(),
-        ManifestId::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]),
-        Vec::new(),
+    .await?
+    .must_write()?;
+    st.put_object(
+        &default_ctx,
+        "chunks/000000000002",
         Bytes::new(),
+        None,
+        Default::default(),
+        None,
     )
-    .await?;
+    .await?
+    .must_write()?;
     let out = client
         .list_objects_v2()
-        .bucket(common::get_aws_integration_bucket()?)
+        .bucket(store.bucket())
         .prefix(format!("{prefix}/chunks"))
         .into_paginator()
         .send()
@@ -675,24 +1453,599 @@ pub async fn test_storage_classes() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Backends with storage classes accept a valid class and reject a bogus one; a
+/// bogus class that writes fine was never sent. Backends without classes accept any.
+#[tokio_test]
+async fn test_storage_class_reaches_backend() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |name, storage| async move {
+        let valid_class = match name {
+            "in_memory" | "local_filesystem" => None,
+            // rustfs only accepts REDUCED_REDUNDANCY
+            n if n.starts_with("s3_") => Some("REDUCED_REDUNDANCY"),
+            n if n.starts_with("azure_blob") => Some("Cool"),
+            n if n.starts_with("AWS") || n.starts_with("R2") => Some("STANDARD_IA"),
+            // the HF gateway's storage class support is unknown
+            n if n.starts_with("HF") => return Ok(()),
+            _ => panic!("add backend {name} to this test"),
+        };
+        const BOGUS: &str = "NOT_A_STORAGE_CLASS";
+        let settings = with_storage_settings(&storage).await?;
+        match valid_class {
+            Some(class) => {
+                put_with_storage_class(&storage, &settings, class).await?.must_write()?;
+                let bogus = put_with_storage_class(&storage, &settings, BOGUS).await;
+                assert!(bogus.is_err(), "{name}: storage class was not sent");
+            }
+            None => {
+                put_with_storage_class(&storage, &settings, BOGUS).await?.must_write()?;
+            }
+        }
+        Ok(())
+    })
+    .await
+}
+
+async fn put_with_storage_class(
+    storage: &Arc<dyn Storage + Send + Sync>,
+    settings: &storage::Settings,
+    class: &str,
+) -> StorageResult<VersionedUpdateResult> {
+    let settings =
+        storage::Settings { storage_class: Some(class.to_string()), ..settings.clone() };
+    let ctx = attributed(&settings);
+    let key = format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random());
+    storage
+        .put_object(&ctx, &key, Bytes::from_static(b"storage class"), None, vec![], None)
+        .await
+}
+
 #[tokio::test]
-pub async fn test_write_object_larger_than_multipart_threshold()
+async fn test_write_object_larger_than_multipart_threshold()
 -> Result<(), Box<dyn std::error::Error>> {
-    with_storage(|_, storage| async move {
+    with_storage(Permission::Modify, |_, storage| async move {
         let custom_settings = storage::Settings {
             minimum_size_for_multipart_upload: Some(100),
-            ..storage.default_settings()
+            ..with_storage_settings(&storage).await?
         };
+        let custom_ctx = attributed(&custom_settings);
 
         let id = ChunkId::random();
+        let path = format!("{MANIFESTS_FILE_PATH}/{id}");
         let bytes = Bytes::copy_from_slice(&[0; 1024]);
 
-        storage.write_chunk(&custom_settings, id.clone(), bytes.clone()).await?;
-        let fetched = storage.fetch_chunk(&custom_settings, &id, &(0..1024)).await?;
+        storage
+            .put_object(
+                &custom_ctx,
+                path.as_str(),
+                bytes.clone(),
+                None,
+                Default::default(),
+                None,
+            )
+            .await?
+            .must_write()?;
+        let fetched = async_read_to_bytes(
+            storage.get_object(&custom_ctx, path.as_str(), Some(&(0..1024))).await?.0,
+        )
+        .await?;
         assert_eq!(fetched, bytes);
 
         Ok(())
     })
     .await?;
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_get_object_conditional() -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |name, storage| async move {
+        let storage_settings = with_storage_settings(&storage).await?;
+        let ctx = attributed(&storage_settings);
+        let id = SnapshotId::random();
+        let bytes: [u8; 1024] = core::array::from_fn(|_| rand::random());
+
+        let path = format!("{MANIFESTS_FILE_PATH}/{id}");
+
+        storage
+            .put_object(
+                &ctx,
+                path.as_str(),
+                Bytes::copy_from_slice(&bytes[..]),
+                Some("application/foo"),
+                vec![("foo".to_string(), "bar".to_string())],
+                None,
+            )
+            .await?
+            .must_write()?;
+
+        // get version for existing object
+        let (read, version) = storage.get_object(&ctx, path.as_str(), None).await?;
+        assert_eq!(async_read_to_bytes(read).await?.as_slice(), bytes);
+
+        // conditional get, should return OnLatestVersion
+        let res =
+            storage.get_object_conditional(&ctx, path.as_str(), Some(&version)).await?;
+        if name.starts_with("HF") {
+            // the Huggin Face gateway ignores If-None-Match on GetObject and re-sends the object
+            assert!(matches!(res, storage::GetModifiedResult::Modified { .. }));
+        } else {
+            assert!(matches!(res, storage::GetModifiedResult::OnLatestVersion));
+        }
+
+        // conditional get without a version, should return Modified
+        let res = storage.get_object_conditional(&ctx, path.as_str(), None).await?;
+        if let storage::GetModifiedResult::Modified { data, .. } = res {
+            assert_eq!(async_read_to_bytes(data).await?.as_slice(), bytes);
+        } else {
+            panic!("Didn't return data");
+        }
+
+        // conditional get random etag, should return Modified
+        let res = storage
+            .get_object_conditional(
+                &ctx,
+                path.as_str(),
+                Some(&VersionInfo::from_etag_only("0xbadc0ffee".to_string())),
+            )
+            .await?;
+        if let storage::GetModifiedResult::Modified { data, .. } = res {
+            assert_eq!(async_read_to_bytes(data).await?.as_slice(), bytes);
+        } else {
+            panic!("Didn't return data");
+        }
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+#[tokio::test]
+/// Start an HTTP server serving static files from icechunk-python/tests/data/test-repo-v2
+/// Create an HTTP storage that hits that server, and call some methods on it
+async fn test_http_storage() -> Result<(), Box<dyn std::error::Error>> {
+    let repo_path =
+        env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
+    let route = warp::fs::dir(repo_path.clone());
+    let (stop, wait) = oneshot::channel();
+    let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
+        let _ = wait.await;
+    });
+
+    let join = tokio::task::spawn(server.run());
+
+    let url = format!("http://127.0.0.1:{port}");
+    let storage1 = new_http_storage(url.as_str(), None, None)?;
+    let storage2 = new_http_storage(url.as_str(), None, None)?;
+    for storage in [storage1, storage2] {
+        assert!(!storage.can_write().await?);
+
+        let settings = storage.default_settings().await?;
+        let ctx = attributed(&settings);
+        let mut data = Vec::with_capacity(1_024);
+
+        let mut read = storage.get_object(&ctx, "repo", None).await?.0;
+        read.read_to_end(&mut data).await?;
+        let expected = std::fs::metadata(repo_path.join("repo"))?.len();
+        assert_eq!(expected, data.len() as u64);
+
+        let mut data = Vec::with_capacity(1_024);
+        let conc_settings = storage::Settings {
+            concurrency: Some(ConcurrencySettings {
+                max_concurrent_requests_for_object: Some(100.try_into()?),
+                ideal_concurrent_request_size: Some(10.try_into()?),
+            }),
+            ..settings.clone()
+        };
+        let conc_ctx = attributed(&conc_settings);
+        let mut read = storage.get_object(&conc_ctx, "repo", Some(&(0..100))).await?.0;
+        read.read_to_end(&mut data).await?;
+        assert_eq!(100, data.len() as u64);
+
+        let mut data = Vec::with_capacity(1_024);
+        let mut read = storage
+            .get_object(&conc_ctx, "snapshots/1CECHNKREP0F1RSTCMT0", None)
+            .await?
+            .0;
+        read.read_to_end(&mut data).await?;
+        let expected =
+            std::fs::metadata(repo_path.join("snapshots/1CECHNKREP0F1RSTCMT0"))?.len();
+        assert_eq!(expected, data.len() as u64);
+
+        let lm = storage.get_object_last_modified(&ctx, "repo").await?;
+        assert!(lm < Utc::now());
+    }
+
+    // stop the server
+    stop.send(()).unwrap();
+    join.await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+/// Start an HTTP server that requires an Authorization header to serve files.
+/// Verify that http storage configured with the matching header can read objects,
+/// and that storage without the header is rejected.
+async fn test_http_storage_with_auth_header() -> Result<(), Box<dyn std::error::Error>> {
+    const EXPECTED_TOKEN: &str = "Bearer test-token";
+
+    let repo_path =
+        env::current_dir()?.join("../icechunk-python/tests/data/test-repo-v2");
+
+    // Warp filter: require Authorization header, then serve files
+    let route = warp::header::exact("authorization", EXPECTED_TOKEN)
+        .and(warp::fs::dir(repo_path.clone()));
+
+    let (stop, wait) = oneshot::channel();
+    let port = port_check::free_local_ipv4_port_in_range(8000..65000).unwrap();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
+        let _ = wait.await;
+    });
+    let join = tokio::task::spawn(server.run());
+
+    let url = format!("http://127.0.0.1:{port}");
+
+    // With the correct Authorization header – reads should succeed
+    let headers =
+        HashMap::from([("authorization".to_string(), EXPECTED_TOKEN.to_string())]);
+    let storage_with_auth = new_http_storage(url.as_str(), None, Some(headers))?;
+    assert!(!storage_with_auth.can_write().await?);
+    let settings = storage_with_auth.default_settings().await?;
+    let ctx = attributed(&settings);
+    let mut data = Vec::with_capacity(1_024);
+    storage_with_auth
+        .get_object(&ctx, "repo", None)
+        .await?
+        .0
+        .read_to_end(&mut data)
+        .await?;
+    let expected_len = std::fs::metadata(repo_path.join("repo"))?.len();
+    assert_eq!(expected_len, data.len() as u64);
+
+    // Without the Authorization header – the server should reject the request
+    let storage_no_auth = new_http_storage(url.as_str(), None, None)?;
+    let Err(err) = storage_no_auth.get_object(&ctx, "repo", None).await else {
+        panic!("expected an error when no Authorization header is provided");
+    };
+    // The request reached the server and was rejected at the HTTP layer (an
+    // object store error), as opposed to a missing file (`ObjectNotFound`) or
+    // a configuration/parse error.
+    assert!(
+        matches!(err.kind, StorageErrorKind::ObjectStore(_)),
+        "expected an object store error from the rejected request, got: {err:?}"
+    );
+    // ...and the rejection is the server refusing the missing-header request,
+    // not a transport-level failure.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("non-2xx") && msg.contains("authorization"),
+        "expected a non-2xx rejection mentioning the authorization header, got: {err}"
+    );
+
+    // stop the server
+    stop.send(()).unwrap();
+    join.await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+/// Start a server that after a few redirects returns a redirect to a S3 public repo
+/// Build a redirect storage and verify the S3 repo is accessible
+async fn test_redirect_storage() -> Result<(), Box<dyn std::error::Error>> {
+    let port = port_check::free_local_ipv4_port_in_range(9000..65000).unwrap();
+    let route = warp::path::end()
+        .map(|| warp::redirect::found(warp::http::Uri::from_static("1")))
+        .or(warp::path("1")
+            .map(|| warp::redirect::permanent(warp::http::Uri::from_static("/2"))))
+        .or(warp::path("2")
+            .map(|| warp::redirect::redirect(warp::http::Uri::from_static("/3"))))
+        .or(warp::path("3").map(|| {
+            warp::redirect::temporary(warp::http::Uri::from_static(
+                "s3://icechunk-public-data/v1/era5_weatherbench2?region=us-east-1",
+            ))
+        }));
+
+    let (stop, wait) = oneshot::channel();
+    let server = warp::serve(route).bind(([127, 0, 0, 1], port)).await.graceful(async {
+        let _ = wait.await;
+    });
+
+    let join = tokio::task::spawn(server.run());
+    let url = format!("http://127.0.0.1:{port}");
+    let storage = new_redirect_storage(url.as_str())?;
+    let mut data = Vec::with_capacity(1_024);
+    let settings = storage.default_settings().await?;
+    let ctx = attributed(&settings);
+    let mut read = storage.get_object(&ctx, "refs/branch.main/ref.json", None).await?.0;
+
+    // stop the server, because it shouldn't be needed after the first interaction
+    stop.send(()).unwrap();
+    join.await?;
+
+    read.read_to_end(&mut data).await?;
+    let _: RefData = serde_json::from_slice(&data)?;
+
+    let repo = Repository::open(storage).execute().await?;
+    let session = repo
+        .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
+            "main".to_string(),
+        ))
+        .await?;
+    assert!(session.list_nodes(&Path::root()).await?.count() >= 8);
+
+    Ok(())
+}
+
+#[tokio_test]
+#[apply(spec_version_cases)]
+async fn test_basic_repo_ops(
+    #[case] spec_version: SpecVersionBin,
+) -> Result<(), Box<dyn std::error::Error>> {
+    with_storage(Permission::Modify, |_, storage| async move {
+        let repo = Repository::create(Arc::clone(&storage))
+            .spec_version(spec_version)
+            .execute()
+            .await?;
+
+        let branches = repo.list_branches().await?;
+        assert!(branches.contains("main"));
+
+        let session = repo
+            .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
+                "main".to_string(),
+            ))
+            .await?;
+        assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
+
+        // reopen from storage
+        let repo = Repository::open(storage).execute().await?;
+
+        let branches = repo.list_branches().await?;
+        assert!(branches.contains("main"));
+
+        let session = repo
+            .readonly_session(&icechunk::repository::VersionInfo::BranchTipRef(
+                "main".to_string(),
+            ))
+            .await?;
+        assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
+
+        Ok(())
+    })
+    .await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Custom request headers tests.
+//
+// We tag every write with a custom user-metadata header (`x-amz-meta-...`) via
+// the storage's `write_headers`, then read the object back with a *raw* S3
+// client and assert the metadata is present.
+
+const WRITE_HEADER_NAME: &str = "x-amz-meta-icechunk-write-header-test";
+/// S3 strips the `x-amz-meta-` prefix and lowercases the remainder.
+const WRITE_HEADER_META_KEY: &str = "icechunk-write-header-test";
+const WRITE_HEADER_VALUE: &str = "present";
+
+fn write_header() -> Vec<(String, String)> {
+    vec![(WRITE_HEADER_NAME.to_string(), WRITE_HEADER_VALUE.to_string())]
+}
+
+/// Write one object and return its repo-relative key.
+async fn put_probe_object(
+    storage: &Arc<dyn Storage + Send + Sync>,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let settings = storage.default_settings().await?;
+    let ctx = attributed(&settings);
+    let key = format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random());
+    storage
+        .put_object(
+            &ctx,
+            &key,
+            Bytes::from_static(b"hello write headers"),
+            None,
+            vec![],
+            None,
+        )
+        .await?;
+    Ok(key)
+}
+
+/// HEAD `{prefix}/{rel_key}` with a raw S3 client and assert our write header
+/// survived as object metadata.
+async fn assert_write_header_round_trips(
+    label: &str,
+    options: &S3Options,
+    credentials: S3Credentials,
+    bucket: &str,
+    prefix: &str,
+    rel_key: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client =
+        mk_client(options, credentials, vec![], vec![], &storage::Settings::default())
+            .await;
+    let full_key = format!("{prefix}/{rel_key}");
+    let head = client.head_object().bucket(bucket).key(&full_key).send().await?;
+    let got =
+        head.metadata().and_then(|m| m.get(WRITE_HEADER_META_KEY)).map(String::as_str);
+    assert_eq!(
+        got,
+        Some(WRITE_HEADER_VALUE),
+        "{label}: write header did not round-trip (key={full_key})"
+    );
+    Ok(())
+}
+
+#[tokio_test]
+async fn test_write_headers_reach_s3_compatible_storage()
+-> Result<(), Box<dyn std::error::Error>> {
+    // (label, endpoint, access_key, secret_key); these are the root credentials
+    // of each local emulator and have full access to `testbucket`.
+    let emulators = [("rustfs", "http://localhost:4200", "test123", "test123")];
+
+    for (name, endpoint, access_key_id, secret_access_key) in emulators {
+        let options = S3Options::default()
+            .with_region("us-east-1")
+            .with_endpoint_url(endpoint)
+            .with_allow_http(true)
+            .with_force_path_style(true);
+        let credentials = S3Credentials::Static(S3StaticCredentials {
+            access_key_id: access_key_id.into(),
+            secret_access_key: secret_access_key.into(),
+            session_token: None,
+            expires_after: None,
+        });
+
+        // native S3
+        let prefix = common::get_random_prefix("write_headers_native");
+        let native = new_s3_storage(
+            options.clone(),
+            "testbucket".to_string(),
+            Some(prefix.clone()),
+            Some(credentials.clone()),
+            Vec::new(),
+            write_header(),
+            None,
+        )?;
+        let key = put_probe_object(&native).await?;
+        assert_write_header_round_trips(
+            &format!("{name}/native"),
+            &options,
+            credentials.clone(),
+            "testbucket",
+            &prefix,
+            &key,
+        )
+        .await?;
+
+        // object_store S3
+        let prefix = common::get_random_prefix("write_headers_object_store");
+        let object_store: Arc<dyn Storage + Send + Sync> = Arc::new(
+            ObjectStorage::new_s3(
+                "testbucket".to_string(),
+                Some(prefix.clone()),
+                Some(credentials.clone()),
+                Some(options.clone()),
+                Vec::new(),
+                write_header(),
+            )
+            .await?,
+        );
+        let key = put_probe_object(&object_store).await?;
+        assert_write_header_round_trips(
+            &format!("{name}/object_store"),
+            &options,
+            credentials.clone(),
+            "testbucket",
+            &prefix,
+            &key,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Native-S3 header round-trip against a real store, reused by the per-cloud
+/// `#[ignore]` tests below.
+async fn real_store_write_header_check(
+    store: &common::RealStore,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prefix = common::get_random_prefix("write_headers_real");
+    let storage = store.write_header_storage(prefix.clone(), write_header())?;
+    let key = put_probe_object(&storage).await?;
+    assert_write_header_round_trips(
+        "real",
+        store.options(),
+        store.credentials().clone(),
+        store.bucket(),
+        &prefix,
+        &key,
+    )
+    .await
+}
+
+#[tokio_test]
+#[ignore = "needs credentials from env"]
+async fn test_write_headers_reach_aws() -> Result<(), Box<dyn std::error::Error>> {
+    let store = common::aws_real_store().expect("AWS_* env vars must be set");
+    // native S3
+    real_store_write_header_check(&store).await?;
+
+    // object_store S3 (AWS is the only real S3-compatible store with an
+    // object_store constructor exposed)
+    let prefix = common::get_random_prefix("write_headers_real_object_store");
+    let object_store: Arc<dyn Storage + Send + Sync> = Arc::new(
+        ObjectStorage::new_s3(
+            store.bucket().to_string(),
+            Some(prefix.clone()),
+            Some(store.credentials().clone()),
+            Some(store.options().clone()),
+            Vec::new(),
+            write_header(),
+        )
+        .await?,
+    );
+    let key = put_probe_object(&object_store).await?;
+    assert_write_header_round_trips(
+        "aws/object_store",
+        store.options(),
+        store.credentials().clone(),
+        store.bucket(),
+        &prefix,
+        &key,
+    )
+    .await
+}
+
+#[tokio_test]
+#[ignore = "needs credentials from env"]
+async fn test_write_headers_reach_r2() -> Result<(), Box<dyn std::error::Error>> {
+    let store = common::r2_real_store().expect("R2_* env vars must be set");
+    real_store_write_header_check(&store).await
+}
+
+#[tokio_test]
+#[ignore = "needs credentials from env"]
+async fn test_write_headers_reach_tigris() -> Result<(), Box<dyn std::error::Error>> {
+    // Also verifies a user x-amz-meta-* header coexists with the injected
+    // X-Tigris-* consistency headers.
+    let store = common::tigris_real_store().expect("TIGRIS_* env vars must be set");
+    real_store_write_header_check(&store).await
+}
+
+/// A malformed native-S3 header must fail the operation cleanly
+#[tokio_test]
+async fn test_invalid_native_s3_header_errors_not_panics()
+-> Result<(), Box<dyn std::error::Error>> {
+    let options = S3Options::default()
+        .with_region("us-east-1")
+        .with_endpoint_url("http://localhost:4200")
+        .with_allow_http(true)
+        .with_force_path_style(true);
+    let credentials = S3Credentials::Static(S3StaticCredentials {
+        access_key_id: "test123".into(),
+        secret_access_key: "test123".into(),
+        session_token: None,
+        expires_after: None,
+    });
+    let storage = new_s3_storage(
+        options,
+        "testbucket".to_string(),
+        Some(common::get_random_prefix("invalid_header")),
+        Some(credentials),
+        Vec::new(),
+        vec![("bad header name".to_string(), "v".to_string())],
+        None,
+    )?;
+    let settings = storage.default_settings().await?;
+    let ctx = attributed(&settings);
+    let result = storage
+        .put_object(&ctx, "chunks/x", Bytes::from_static(b"data"), None, vec![], None)
+        .await;
+    assert!(result.is_err(), "invalid header should fail the write, not panic");
     Ok(())
 }

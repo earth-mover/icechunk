@@ -147,7 +147,13 @@ class LocalRunner(Runner):
 
     def execute(self, cmd: str, **kwargs) -> None:
         # don't stop if benchmarks fail
-        subprocess.run(f"{self.activate} && {cmd}", cwd=self.pycwd, shell=True, **kwargs)
+        subprocess.run(
+            f"{self.activate} && {cmd}",
+            cwd=self.pycwd,
+            shell=True,
+            check=False,
+            **kwargs,
+        )
 
     def initialize(self) -> None:
         logger.info(f"Running initialize for {self.ref} in {self.base}")
@@ -214,7 +220,7 @@ class CoiledRunner(Runner):
         super().initialize()
 
     def execute(self, cmd, **kwargs):
-        subprocess.run([*self.get_coiled_run_args(), cmd], **kwargs)
+        subprocess.run([*self.get_coiled_run_args(), cmd], check=False, **kwargs)
 
     def sync_benchmarks_folder(self) -> None:
         subprocess.run(
@@ -345,7 +351,8 @@ if __name__ == "__main__":
             "--columns=median",
             "--name=normal",
             *files,
-        ]
+        ],
+        check=False,
     )
 
 

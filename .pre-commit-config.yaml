@@ -3,37 +3,74 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
+        exclude: 'icechunk-js/\.yarn/releases/.*'
       - id: end-of-file-fixer
+        exclude: 'icechunk-js/\.yarn/releases/.*'
       - id: check-yaml
         exclude: docs/mkdocs.yml
       - id: debug-statements
       - id: mixed-line-ending
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    # Ruff version.
-    rev: 'v0.8.0'
+    rev: 'v0.16.4'
     hooks:
       - id: ruff-format
       - id: ruff
         args: ["--fix", "--show-fixes", "icechunk-python/"]
+
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.7
+    rev: v1.7.11
     hooks:
       - id: actionlint
         files: ".github/workflows/"
         args: ["-ignore", "SC1090", "-ignore", "SC2046", "-ignore", "SC2086", "-ignore", "SC2129", "-ignore", "SC2155"]
+
   - repo: https://github.com/codespell-project/codespell
-    # Configuration for codespell is in .codespellrc
     rev: v2.3.0
     hooks:
       - id: codespell
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.24.1
+    hooks:
+    - id: zizmor
+      files: \.github\/workflows\/(code-quality|dependency-check|detect-unused-dependencies|fs-stress-release|js-ci|python-check|python-ci|python-upstream|publish-rust-library|rust-ci|rust-upstream|windows-check)\.ya?ml
+      args:
+        - "--no-progress" # https://github.com/zizmorcore/zizmor/issues/582
+        - "--pedantic"
+
   - repo: local
     hooks:
-      - id: just-rust
-        name: just
-        description: Run the just pre-commit step
+      # icechunk-python's readme is what PyPI renders, and it cannot point outside
+      # the package directory, so it is a copy that must not drift.
+      - id: readme-sync
+        name: "icechunk-python/README.md matches the root README.md"
+        entry: diff README.md icechunk-python/README.md
+        language: system
+        files: ^(README\.md|icechunk-python/README\.md)$
+        pass_filenames: false
+
+      - id: rust-pre-commit-fast
+        name: "Fast Rust checks (format, lint)"
+        entry: just pre-commit-fast
+        language: system
+        files: \.(rs|toml)$|Cargo\.lock$|justfile$
+        pass_filenames: false
+
+      - id: rust-pre-commit
+        name: "Medium Rust checks (compilation, deps)"
         entry: just pre-commit
         language: system
+        files: \.(rs|toml)$|Cargo\.lock$|justfile$
         pass_filenames: false
-        files: "(^|.*/)(icechunk/|icechunk-python/src/).*"
+        stages: [pre-push]
+
+      - id: rust-pre-commit-ci
+        name: "Full CI checks (tests, examples)"
+        entry: just pre-commit-ci
+        language: system
+        files: \.(rs|toml)$|Cargo\.lock$|justfile$
+        pass_filenames: false
+        stages: [manual]
 
 exclude: 'tests/data/.*'

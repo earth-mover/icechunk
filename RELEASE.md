@@ -1,11 +1,88 @@
 # How to release new versions
 
-1. If there are Rust changes, update `icechunk/Cargo.toml` increasing version.
-1. Update `icechunk-python/Cargo.toml` increasing version. This version can be ahead of the one in `icechunk/Cargo.toml`, that's OK.
-1. If there are Rust changes, update the version on the dependency on Rust Icechunk library in `icechunk-python/Cargo.toml`.
-1. Run tests to ensure `Cargo.lock` updates and everything works.
-1. Document changes in `Changelog.md` and commit.
-1. Prepare the desired release on a branch or tag (not the official tag name, this ref can be temporary). We usually use `main` for the release point.
-1. Run the [`publish rust library`](https://github.com/earth-mover/icechunk/actions/workflows/publish-rust-library.yml) workflow on the ref you want to release.
-1. After the previous point completes, run the [`Python CI and library release`](https://github.com/earth-mover/icechunk/actions/workflows/python-ci.yaml) workflow on the ref you want to release.
-1. After the previous point completes, [create a new release in GitHub](https://github.com/earth-mover/icechunk/releases/new). Ask it to create the tag, and generate the release notes. This step will notify the community slack of the new release.
+## Update version metadata files
+
+All internal crates are versioned in lockstep with the JS package: bump every workspace crate and `icechunk-js/package.json` to the new version even if a given component had no changes since the last release, and update the matching `version = "..."` pins under `[workspace.dependencies]` in the top-level `Cargo.toml`. The current crates are `icechunk`, `icechunk-python`, `icechunk-types`, `icechunk-format`, `icechunk-storage`, `icechunk-s3`, `icechunk-arrow-object-store`, and `icechunk-macros`.
+
+1. (Optional: Iff changes to core icechunk rust crate) Update `icechunk/Cargo.toml` by incrementing the version.
+1. Update `icechunk-python/Cargo.toml` by incrementing the version.
+1. Update the remaining workspace crates (`icechunk-types`, `icechunk-format`, `icechunk-storage`, `icechunk-s3`, `icechunk-arrow-object-store`, `icechunk-macros`) to the same version.
+1. Update `icechunk-js/package.json` to the same version.
+1. Update the version of the dependency on the core Rust Icechunk library in `icechunk-python/Cargo.toml`, ensuring that it is consistent with the latest version of the core icechunk rust crate. Update the other internal crate pins under `[workspace.dependencies]` in the top-level `Cargo.toml` to match.
+1. Update the `Cargo.lock` file, by running `cargo check` from the top-level icechunk directory.
+1. Document changes in `Changelog.md`.
+1. Commit all changes and make a PR.
+1. Once CI passes on the PR merge it.
+
+## (Optional) Issuing a icechunk rust library release
+
+1. (Optional: Iff changes to core icechunk rust crate) Go to the [`publish rust library` github action](https://github.com/earth-mover/icechunk/actions/workflows/publish-rust-library.yml). Click `Run workflow`, select the branch (`main` for a normal release, `support/v1.x` for a V1 support release), and click the green `Run workflow` button to launch.
+
+## Issuing an icechunk python release
+
+1. Wait until any previous workflow completes.
+1. Go to the [`Python CI and library release` github action](https://github.com/earth-mover/icechunk/actions/workflows/python-ci.yaml).
+1. Check `Make a PyPI release`.
+1. Uncheck `Use git-based version for nightly builds`.
+1. Under `Branch to build/release (for manual builds only)` select the branch you want to release (`main` for a normal release, `support/v1.x` for a V1 support release). Where it asks which branch workflow you want to use the workflow from just use the one from `main`.
+1. Click the green `Run workflow` button to launch.
+1. After the previous point completes, [create a new release in GitHub](https://github.com/earth-mover/icechunk/releases/new). Ask it to create the tag, and generate the release notes. Once you hit release, this step will upload the new version to [PyPI](https://pypi.org/project/icechunk/), and notify the community slack of the new release.
+1. After an hour or so an automated PR should appear to update the [conda-forge feedstock](https://github.com/conda-forge/icechunk-feedstock). Merge that and the new version will appear on conda-forge.
+
+## Issuing an icechunk JS release
+
+The package is [`@earthmover/icechunk`](https://www.npmjs.com/package/@earthmover/icechunk) on npm.
+
+1. Wait until any previous workflow completes.
+1. Go to the [`JS CI` github action](https://github.com/earth-mover/icechunk/actions/workflows/js-ci.yaml).
+1. Click `Run workflow` and select the branch to run the workflow from (you most likely want to use `main`).
+1. Click the green `Run workflow` button to launch.
+1. The workflow builds the native binaries for macOS, Windows, Linux, and WASI, tests each one, then publishes to npm.
+
+The `publish` job only runs on a manual `workflow_dispatch`. Push and pull request runs build and test but never publish. Every manual run publishes to npm, so do not dispatch this workflow for any other reason.
+
+The npm dist-tag comes from the version in `icechunk-js/package.json`:
+
+| Version in `package.json` | npm dist-tag |
+|---------------------------|--------------|
+| `2.2.2` | `latest` |
+| `2.3.0-alpha.0` | `alpha` |
+| `2.3.0-rc.1` | `rc` |
+
+## Understanding the Python CI workflow options
+
+The [`Python CI and library release` workflow](https://github.com/earth-mover/icechunk/actions/workflows/python-ci.yaml) has three inputs that control what gets built and where it goes:
+
+| Input | Purpose |
+|-------|---------|
+| `pypi_release` | If checked, uploads wheels to PyPI |
+| `use_git_version` | If checked, generates version from git tags (e.g., `2.0.0-alpha.0-dev123+gabc1234`). If unchecked, uses version from `Cargo.toml` |
+| `branch` | Which branch to build (`main` or `support/v1.x`) |
+
+### Where wheels are uploaded
+
+| Trigger | Destination |
+|---------|-------------|
+| Scheduled (cron) | Scientific Python nightly only |
+| Manual with `pypi_release: false` | Scientific Python nightly only |
+| Manual with `pypi_release: true` | PyPI and Scientific Python nightly |
+
+Note: Any manual `workflow_dispatch` trigger will upload to the Scientific Python nightly server, regardless of other settings.
+
+### Common scenarios
+
+**Standard release to PyPI** (e.g., `2.0.0`):
+
+- `pypi_release`: ✅ checked
+- `use_git_version`: ❌ unchecked (uses `Cargo.toml` version)
+
+**Alpha/pre-release to PyPI** (e.g., `2.0.0-alpha.0`):
+
+- Same as standard release - just ensure `Cargo.toml` has the alpha version
+- `pypi_release`: ✅ checked
+- `use_git_version`: ❌ unchecked
+
+**Dev build to PyPI** (e.g., `2.0.0-alpha.0-dev123+gabc1234`):
+
+- `pypi_release`: ✅ checked
+- `use_git_version`: ✅ checked

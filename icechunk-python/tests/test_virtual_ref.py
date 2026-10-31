@@ -1,4 +1,5 @@
 import uuid
+import warnings
 from collections.abc import Sized
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -24,13 +25,22 @@ from icechunk import (
     s3_credentials,
     s3_store,
 )
+from icechunk.credentials import (
+    AnyCredential,
+    Credentials,
+    HttpAccess,
+    LocalFileSystemAccess,
+    s3_anonymous_credentials,
+)
 from icechunk.repository import Repository
-from tests.conftest import write_chunks_to_minio
+from tests.conftest import Permission, write_chunks_to_minio
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 @pytest.mark.parametrize("use_async", [True, False])
-async def test_write_minio_virtual_refs(use_async) -> None:
+async def test_write_minio_virtual_refs(
+    use_async: bool, any_spec_version: int | None
+) -> None:
     prefix = str(uuid.uuid4())
     etags = write_chunks_to_minio(
         [
@@ -42,17 +52,18 @@ async def test_write_minio_virtual_refs(use_async) -> None:
     config = RepositoryConfig.default()
     store_config = s3_store(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         s3_compatible=True,
         force_path_style=True,
     )
     container = VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
+    access_key_id, secret_access_key = Permission.MODIFY.keys()
     credentials = containers_credentials(
         {
             "s3://testbucket": s3_credentials(
-                access_key_id="minio123", secret_access_key="minio123"
+                access_key_id=access_key_id, secret_access_key=secret_access_key
             )
         }
     )
@@ -62,6 +73,7 @@ async def test_write_minio_virtual_refs(use_async) -> None:
         storage=in_memory_storage(),
         config=config,
         authorize_virtual_chunk_access=credentials,
+        create_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -94,7 +106,7 @@ async def test_write_minio_virtual_refs(use_async) -> None:
             location=f"s3://testbucket/{prefix}/chunk-1",
             offset=0,
             length=4,
-            etag_checksum="bad etag",
+            etag_checksum="00000000000000000000000000000000",
         ),
         VirtualChunkSpec(
             index=[3, 0, 0],
@@ -128,7 +140,7 @@ async def test_write_minio_virtual_refs(use_async) -> None:
             location=f"s3://testbucket/{prefix}/chunk-2",
             offset=1,
             length=4,
-            etag_checksum="bad etag",
+            etag_checksum="00000000000000000000000000000000",
         ),
         VirtualChunkSpec(
             index=[3, 0, 1],
@@ -227,37 +239,59 @@ async def test_write_minio_virtual_refs(use_async) -> None:
 
 
 @pytest.mark.parametrize(
-    "container_type,url_prefix,store_config",
+    "container_type,url_prefix,store_config,explicit_credentials",
     [
         (
             "s3",
             "s3://earthmover-sample-data/",
             ObjectStoreConfig.S3(S3Options(region="us-east-1", anonymous=True)),
+            Credentials.S3(s3_anonymous_credentials()),
         ),
         (
             "http",
             "https://earthmover-sample-data.s3.amazonaws.com/",
             http_store(),
+            HttpAccess,
         ),
     ],
 )
+# `None` is the deprecated way to authorize; the explicit sentinel/credential is the
+# replacement. Both must keep working during the deprecation cycle (icechunk#2194).
+@pytest.mark.parametrize("authorize_with_none", [True, False])
 @pytest.mark.parametrize("use_async", [True, False])
 async def test_public_virtual_refs(
     tmpdir: Path,
     container_type: str,
     url_prefix: str,
     store_config: ObjectStoreConfig.S3 | ObjectStoreConfig.Http,
+    explicit_credentials: AnyCredential,
+    authorize_with_none: bool,
     use_async: bool,
+    any_spec_version: int | None,
 ) -> None:
     config = RepositoryConfig.default()
     container = VirtualChunkContainer(url_prefix, store_config)
     config.set_virtual_chunk_container(container)
 
-    repo = Repository.open_or_create(
-        storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
-        config=config,
-        authorize_virtual_chunk_access={url_prefix: None},
-    )
+    credentials = None if authorize_with_none else explicit_credentials
+
+    def open_repo() -> Repository:
+        return Repository.open_or_create(
+            storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
+            config=config,
+            authorize_virtual_chunk_access={url_prefix: credentials},
+            create_version=any_spec_version,
+        )
+
+    if authorize_with_none:
+        # Deprecated: passing `None` must warn, pointing at the explicit replacement.
+        with pytest.warns(DeprecationWarning, match="authorize_virtual_chunk_access"):
+            repo = open_repo()
+    else:
+        # Explicit sentinel/credential: must not warn.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            repo = open_repo()
     session = repo.writable_session("main")
     store = session.store
 
@@ -266,7 +300,7 @@ async def test_public_virtual_refs(
         name="year", shape=((72,)), chunks=((72,)), dtype="float32", compressors=None
     )
 
-    file_path = f"{url_prefix}/netcdf/oscar_vel2018.nc"
+    file_path = f"{url_prefix}netcdf/oscar_vel2018.nc"
     if use_async:
         await store.set_virtual_ref_async(
             "year/c/0",
@@ -368,9 +402,12 @@ async def test_public_virtual_refs(
     assert np.allclose(year_values, actual_values)
 
 
-def test_error_on_nonexisting_virtual_chunk_container() -> None:
+def test_error_on_nonexisting_virtual_chunk_container(
+    any_spec_version: int | None,
+) -> None:
     repo = Repository.open_or_create(
         storage=in_memory_storage(),
+        create_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -393,12 +430,14 @@ def test_error_on_nonexisting_virtual_chunk_container() -> None:
     )
 
     with pytest.raises(
-        IcechunkError, match="file:///foo.* edit the repository configuration"
+        IcechunkError, match=r"file:///foo.* edit the repository configuration"
     ):
         array[0]
 
 
-def test_error_on_non_authorized_virtual_chunk_container() -> None:
+def test_error_on_non_authorized_virtual_chunk_container(
+    any_spec_version: int | None,
+) -> None:
     store_config = local_filesystem_store("/foo")
     container = VirtualChunkContainer("file:///foo/", store_config)
     config = RepositoryConfig.default()
@@ -406,6 +445,7 @@ def test_error_on_non_authorized_virtual_chunk_container() -> None:
     repo = Repository.open_or_create(
         storage=in_memory_storage(),
         config=config,
+        create_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -428,13 +468,52 @@ def test_error_on_non_authorized_virtual_chunk_container() -> None:
         ],
     )
 
-    with pytest.raises(IcechunkError, match="file:///foo.*authorize"):
+    with pytest.raises(IcechunkError, match=r"file:///foo.*authorize"):
         array[0]
 
 
-def test_cannot_write_invalid_urls() -> None:
+def test_no_auth_sentinels_authorize_local_filesystem(
+    any_spec_version: int | None,
+) -> None:
+    # icechunk#2194: the explicit `LocalFileSystemAccess` sentinel replaces `None` for
+    # file:// containers. `None` still works but warns; the sentinel works silently.
+    store_config = local_filesystem_store("/foo")
+    container = VirtualChunkContainer("file:///foo/", store_config)
+    config = RepositoryConfig.default()
+    config.set_virtual_chunk_container(container)
+
+    def open_repo(creds: AnyCredential | None) -> Repository:
+        return Repository.open_or_create(
+            storage=in_memory_storage(),
+            config=config,
+            authorize_virtual_chunk_access={"file:///foo/": creds},
+            create_version=any_spec_version,
+        )
+
+    # Deprecated `None` warns at open.
+    with pytest.warns(DeprecationWarning, match="authorize_virtual_chunk_access"):
+        open_repo(None)
+
+    # Explicit sentinel is accepted and does not warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        open_repo(LocalFileSystemAccess)
+
+
+def test_containers_credentials_passes_through_no_auth_sentinels() -> None:
+    result = containers_credentials(
+        {"file:///foo/": LocalFileSystemAccess, "http://example.com/": HttpAccess}
+    )
+    assert result == {
+        "file:///foo/": LocalFileSystemAccess,
+        "http://example.com/": HttpAccess,
+    }
+
+
+def test_cannot_write_invalid_urls(any_spec_version: int | None) -> None:
     repo = Repository.create(
         storage=in_memory_storage(),
+        spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -477,3 +556,175 @@ def test_cannot_write_invalid_urls() -> None:
                 ),
             ],
         )
+
+
+def test_set_virtual_refs_arr_skips_empty_paths() -> None:
+    """Empty paths represent missing chunks and should be silently skipped."""
+    repo = Repository.create(storage=in_memory_storage())
+    session = repo.writable_session("main")
+    store = session.store
+
+    zarr.create_array(store, shape=(3,), chunks=(1,), dtype="i4", compressors=None)
+    session.commit("init")
+
+    session = repo.writable_session("main")
+    store = session.store
+
+    # locations[1] is empty — should be skipped, not raise an error
+    store.set_virtual_refs_arr(
+        array_path="/",
+        chunk_grid_shape=(3,),
+        locations=["s3://bucket/a.nc", "", "s3://bucket/c.nc"],
+        offsets=np.array([0, 0, 0], dtype=np.uint64),
+        lengths=np.array([4, 0, 4], dtype=np.uint64),
+        validate_containers=False,
+    )
+
+    # Only the two non-empty chunks should have been written
+    locations = session.all_virtual_chunk_locations()
+    assert sorted(locations) == ["s3://bucket/a.nc", "s3://bucket/c.nc"]
+
+
+def test_set_virtual_refs_preserves_url_parts() -> None:
+    """Regression test for https://github.com/earth-mover/icechunk/issues/2218
+
+    Virtual chunk locations used to drop userinfo, port, query and fragment from
+    the URL, and to normalize the path (collapsing ``/../`` and decoding
+    ``%2e%2e``), which corrupts opaque object keys. For object-store schemes the
+    location is now stored verbatim: every part, including repeated ``//`` and
+    literal ``..``, is preserved exactly.
+    """
+    location = "https://user:pass@host.com:8443/a//b/../c.bin?versionId=42#frag"
+    expected = location
+
+    repo = Repository.create(storage=in_memory_storage())
+    session = repo.writable_session("main")
+    store = session.store
+
+    array = zarr.create_array(
+        store, shape=(10,), chunks=(10,), dtype="float32", compressors=None
+    )
+    store.set_virtual_refs(
+        array_path=array.path,
+        chunks=[VirtualChunkSpec(index=[0], location=location, offset=0, length=40)],
+        validate_containers=False,
+    )
+
+    assert next(iter(session.all_virtual_chunk_locations())) == expected
+
+
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+async def test_write_minio_virtual_refs_with_vcc_urls(
+    any_spec_version: int | None,
+) -> None:
+    """Write virtual refs using vcc:// relative URLs and verify they resolve correctly."""
+    path = str(uuid.uuid4())
+    write_chunks_to_minio(
+        [
+            (f"{path}/chunk-1", b"first"),
+            (f"{path}/chunk-2", b"second"),
+        ],
+    )
+
+    config = RepositoryConfig.default()
+    store_config = s3_store(
+        region="us-east-1",
+        endpoint_url="http://localhost:4200",
+        allow_http=True,
+        s3_compatible=True,
+        force_path_style=True,
+    )
+    container = VirtualChunkContainer("s3://testbucket/", store_config, name="minio-data")
+    config.set_virtual_chunk_container(container)
+    access_key_id, secret_access_key = Permission.MODIFY.keys()
+    credentials = containers_credentials(
+        {
+            "s3://testbucket": s3_credentials(
+                access_key_id=access_key_id, secret_access_key=secret_access_key
+            )
+        }
+    )
+
+    repo = Repository.open_or_create(
+        storage=in_memory_storage(),
+        config=config,
+        authorize_virtual_chunk_access=credentials,
+        create_version=any_spec_version,
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    zarr.create_array(
+        store, shape=(3, 1, 1), chunks=(1, 1, 1), dtype="i4", compressors=None
+    )
+
+    # Write refs using vcc:// relative URLs
+    store.set_virtual_ref(
+        "c/0/0/0",
+        f"vcc://minio-data/{path}/chunk-1",
+        offset=0,
+        length=4,
+    )
+    store.set_virtual_ref(
+        "c/1/0/0",
+        f"vcc://minio-data/{path}/chunk-2",
+        offset=1,
+        length=4,
+    )
+
+    # Read back and verify bytes
+    buffer_prototype = zarr.core.buffer.default_buffer_prototype()
+    first = await store.get("c/0/0/0", prototype=buffer_prototype)
+    assert first is not None
+    assert first.to_bytes() == b"firs"  # codespell:ignore firs
+
+    second = await store.get("c/1/0/0", prototype=buffer_prototype)
+    assert second is not None
+    assert second.to_bytes() == b"econ"
+
+    # all_virtual_chunk_locations should return expanded absolute URLs
+    all_locations = set(session.all_virtual_chunk_locations())
+    assert f"s3://testbucket/{path}/chunk-1" in all_locations
+    assert f"s3://testbucket/{path}/chunk-2" in all_locations
+    # Should not contain vcc:// URLs
+    assert not any(loc.startswith("vcc://") for loc in all_locations)
+
+    # Batch set with a mix of vcc:// and absolute URLs
+    store.set_virtual_refs(
+        array_path="/",
+        validate_containers=True,
+        chunks=[
+            VirtualChunkSpec(
+                index=[0, 0, 0],
+                location=f"vcc://minio-data/{path}/chunk-1",
+                offset=0,
+                length=4,
+            ),
+            VirtualChunkSpec(
+                index=[1, 0, 0],
+                location=f"vcc://minio-data/{path}/chunk-2",
+                offset=0,
+                length=4,
+            ),
+            VirtualChunkSpec(
+                index=[2, 0, 0],
+                location=f"s3://testbucket/{path}/chunk-1",
+                offset=1,
+                length=4,
+            ),
+        ],
+    )
+
+    first = await store.get("c/0/0/0", prototype=buffer_prototype)
+    assert first is not None
+    assert first.to_bytes() == b"firs"  # codespell:ignore firs
+
+    second = await store.get("c/1/0/0", prototype=buffer_prototype)
+    assert second is not None
+    assert second.to_bytes() == b"seco"
+
+    third = await store.get("c/2/0/0", prototype=buffer_prototype)
+    assert third is not None
+    assert third.to_bytes() == b"irst"
+
+    session.commit("vcc test")

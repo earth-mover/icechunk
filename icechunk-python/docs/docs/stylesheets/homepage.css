@@ -1,0 +1,866 @@
+/* Homepage styles */
+
+/* Application header should be static for the landing page. Relative rather
+   than static so the palette toggle's hidden inputs stay anchored in it;
+   otherwise focusing one scrolls the page to the bottom. */
+.md-header {
+  position: relative;
+}
+
+/* Remove spacing, as we cannot hide it completely */
+.md-main__inner {
+  margin: 0;
+  max-width: 100%;
+  position: relative;
+}
+
+/* Hide breadcrumb in content */
+#home-content > a:first-child,
+#home-content > p:first-child > a:first-child {
+  display: none;
+}
+
+/* Hide table of contents for desktop */
+@media screen and (min-width: 60em) {
+  .md-sidebar--secondary {
+    display: none !important;
+  }
+}
+
+/* Hide navigation for desktop */
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--primary {
+    display: none;
+  }
+}
+
+/* Hero */
+#hero-container {
+  position: relative;
+  text-align: center;
+  background: linear-gradient(180deg, var(--ic-hero-top) 0%, var(--ic-hero-bottom) 100%);
+}
+
+.mdx-hero {
+  padding: 1rem 0 5.5rem;
+}
+
+.hero-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding-top: 2rem;
+}
+
+h1.hero-title {
+  font-size: 2.75rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin: 0;
+  color: var(--md-primary-bg-color);
+}
+
+h3.hero-subtitle {
+  color: var(--md-primary-fg-color--light);
+  margin-top: 0;
+  margin-bottom: 14px;
+  font-size: 1.5rem;
+}
+
+.hero-langs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem 1.5rem;
+  width: fit-content;
+  margin: 0 auto 28px;
+  padding: 0.45rem 1.25rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.hero-langs a,
+.hero-langs a:hover {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--md-primary-bg-color);
+  font-size: 0.85rem;
+}
+
+.hero-langs a:hover {
+  text-decoration: underline;
+}
+
+.hero-langs svg {
+  width: 1.2em;
+  height: 1.2em;
+  fill: currentColor;
+}
+
+/* Material styles .md-button under .md-typeset, so match that specificity. */
+.md-typeset .hero-cta-button,
+.md-typeset .hero-cta-button:hover,
+.md-typeset .hero-cta-button:focus {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.6em 1.8em;
+  background-color: #fff;
+  color: #1d467f;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.md-typeset .hero-cta-button:hover,
+.md-typeset .hero-cta-button:focus {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+}
+
+/* Cards that overlap the hero's bottom edge and link to the sections below */
+.panes {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.75rem;
+  margin: -4.5rem 0 1rem;
+}
+
+a.pane {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  text-align: center;
+  padding: 1.25rem 0.75rem 1rem;
+  border-radius: 12px;
+  border: 1px solid #d6e6f2;
+  background: var(--md-default-bg-color);
+  color: var(--md-default-fg-color);
+  box-shadow: 0 4px 16px rgba(29, 70, 127, 0.08);
+  transition: box-shadow 0.15s;
+}
+
+a.pane:hover {
+  color: var(--md-default-fg-color);
+  box-shadow: 0 6px 22px rgba(29, 70, 127, 0.16);
+}
+
+[data-md-color-scheme="slate"] a.pane {
+  border-color: #343a4a;
+  background: #262a36;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.pane-icon svg {
+  width: 2rem;
+  height: 2rem;
+  fill: var(--ic-blue);
+}
+
+/* Smaller than the section headings, which the cards only point to. */
+.pane-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin: 0.5rem 0 0.3rem;
+}
+
+.pane-line {
+  font-size: 0.7rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.pane-more {
+  margin-top: auto;
+  padding-top: 0.25rem;
+  color: var(--md-default-fg-color--light);
+  transition: transform 0.15s, color 0.15s;
+}
+
+.pane-more svg {
+  width: 1.5rem;
+  height: 1.5rem;
+  fill: currentColor;
+}
+
+a.pane:hover .pane-more {
+  color: var(--md-accent-fg-color);
+  transform: translateY(3px);
+}
+
+@media screen and (max-width: 76em) {
+  .panes {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* Five full cards fill more than a phone screen, so they become a list. */
+@media screen and (max-width: 45em) {
+  .panes {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  a.pane {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 0.9rem;
+    align-items: center;
+    text-align: left;
+    padding: 0.75rem 1rem;
+  }
+
+  .pane-icon {
+    grid-row: span 2;
+  }
+
+  .pane-icon svg {
+    width: 1.6rem;
+    height: 1.6rem;
+  }
+
+  .pane-title {
+    margin: 0;
+  }
+
+  .pane-more {
+    display: none;
+  }
+}
+
+/* Detail sections: text beside a figure */
+#home-content {
+  max-width: 76rem;
+}
+
+.benefit-row {
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  gap: 2rem;
+  align-items: start;
+  margin: 4rem 0 0;
+  scroll-margin-top: 1rem;
+}
+
+.benefit-row h2,
+.benefit-row h3 {
+  margin-top: 0;
+  font-weight: 700;
+  color: var(--md-default-fg-color);
+}
+
+.benefit-row h2 {
+  letter-spacing: -0.01em;
+}
+
+.benefit-row h3 {
+  font-size: 1.15em;
+}
+
+/* A subsection sits close under its section, with a rule to show the link. */
+.benefit-row--sub {
+  margin-top: 2rem;
+}
+
+.benefit-row--sub .benefit-text {
+  padding-left: 1rem;
+  border-left: 3px solid color-mix(in srgb, var(--ic-blue) 35%, transparent);
+}
+
+.benefit-figure {
+  padding: 1.25rem;
+  border-radius: 12px;
+  background: var(--md-code-bg-color);
+  container-type: inline-size;
+}
+
+/* Diagrams pad themselves; extra padding here would push them under their
+   760px mobile breakpoint. */
+.benefit-figure:has(iframe) {
+  padding: 0;
+  overflow: hidden;
+}
+
+.benefit-figure iframe {
+  display: block;
+  width: 100%;
+  height: 32rem;
+  border: 0;
+}
+
+@media screen and (max-width: 60em) {
+  .benefit-row {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+}
+
+/* mkdocs-breadcrumbs-plugin prepends a "Home" breadcrumb to every page, the
+   home page included, and its exclude_paths does not stop that. */
+#home-content > .panes + p {
+  display: none;
+}
+
+/* By-line */
+.by-line-wrapper {
+  margin: 4rem auto 1rem;
+  width: 50%;
+}
+
+.by-line-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 20px;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.75rem;
+}
+
+.by-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.heart-container {
+  display: block;
+  padding-top: 6px;
+}
+
+@keyframes heart-beat {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.5); }
+  100% { transform: scale(1); }
+}
+
+.heart-image {
+  width: 16px;
+  min-width: 16px;
+  height: auto;
+
+  animation-name: heart-beat;
+  animation-timeline: scroll(root);
+  animation-timing-function: ease-in;
+  animation-fill-mode: forwards;
+  animation-range: entry 10% cover 50%;
+}
+
+.earthmover-wordmark {
+  width: 96px;
+}
+
+/* Mobile */
+@media screen and (max-width: 60em) {
+  h1.hero-title {
+    font-size: 2rem;
+  }
+
+  h3.hero-subtitle {
+    font-size: 1rem;
+  }
+
+  .by-line-wrapper {
+    width: 70%;
+  }
+
+  .by-line-container {
+    flex-direction: column;
+  }
+}
+
+/* Logo */
+
+@keyframes bob {
+  from {
+    transform: translate3d(0,0,0);
+  }
+  to {
+    transform: translate3d(0, -2%, 0);
+  }
+}
+
+@keyframes ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0;
+  }
+  25%{
+    opacity: 0.25;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+#cube-logo {
+  width: 64px;
+  height: auto;
+}
+
+#cube-container {
+ animation: bob 2s ease-in-out alternate infinite;
+}
+
+#ripple-1-front, #ripple-1-back {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: ripple 2s ease-in-out infinite;
+}
+
+#ripple-2-front, #ripple-2-back {
+  opacity: 0;
+  transform-box: fill-box;
+  animation: ripple 2s 1s ease-in-out infinite;
+}
+
+#ripple-1-front, #ripple-2-front {
+  transform-origin: center bottom;
+}
+
+#ripple-1-back, #ripple-2-back {
+  transform-origin: center top;
+}
+
+.no-pointer {
+  pointer-events: none;
+}
+
+
+.small-cube path {
+  transition: filter 4s ease-in-out;
+  transform-box: fill-box;
+  transform-origin: center center;
+}
+
+
+.small-cube:hover path {
+  filter:  hue-rotate(620deg) saturate(2000%) invert(70%);
+  transition: all 0s ease-in-out;
+
+}
+
+/* Inline SVG figures, colored from the theme so they follow light and dark */
+.fig {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--md-text-font-family);
+  --fmt-tiff: #2a9d8f;
+  --fmt-netcdf: #b7791f;
+  --fmt-hdf5: #cc79a7;
+}
+
+.fig text {
+  fill: var(--md-default-fg-color);
+  text-anchor: middle;
+}
+
+.fig .label {
+  font-size: 15px;
+}
+
+.fig .box {
+  fill: var(--md-default-bg-color);
+  stroke: var(--ic-blue);
+  stroke-width: 2;
+}
+
+.fig .line {
+  fill: none;
+  stroke: var(--md-default-fg-color--lighter);
+  stroke-width: 2.5;
+}
+
+.fig .dashed {
+  stroke: var(--md-default-fg-color--light);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+
+.fig text.on-color {
+  fill: var(--ic-on-blue);
+  font-weight: 700;
+}
+
+/* Versioning: branch and tag labels */
+.fig .branch {
+  fill: var(--ic-blue-strong);
+}
+
+.fig .tag {
+  fill: #b7791f;
+}
+
+.fig .tag + text.on-color {
+  fill: #2b1d05;
+}
+
+.fig .pill {
+  font-size: 14px;
+}
+
+/* Below this width the horizontal commit graph shrinks its labels too far. */
+.fig-narrow {
+  display: none;
+  max-width: 24rem;
+  margin: 0 auto;
+}
+
+@container (max-width: 640px) {
+  .fig-wide {
+    display: none;
+  }
+
+  .fig-narrow {
+    display: block;
+  }
+}
+
+/* HTML figure text matches the SVG label sizes at 1:1 scale. */
+.fig-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--md-default-fg-color);
+}
+
+.fig-label {
+  font-size: 0.75rem;
+}
+
+.fig-sub {
+  font-size: 0.65rem;
+  line-height: 1.35;
+  color: var(--md-default-fg-color--light);
+}
+
+.fig-mono {
+  font-family: var(--md-code-font-family);
+  font-size: 0.6rem;
+  color: var(--md-default-fg-color--light);
+  text-align: center;
+}
+
+.fig-icon {
+  width: 1.8rem;
+  height: 1.8rem;
+  flex: none;
+  fill: var(--md-default-fg-color--light);
+}
+
+/* Scale: one column per size, on a shared axis */
+.scale {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.scale-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  padding-inline: 0.5rem;
+  text-align: center;
+}
+
+.scale-grid {
+  width: 100%;
+  height: auto;
+  margin: 0.6rem 0 0.4rem;
+}
+
+.scale-grid + .fig-sub {
+  margin-bottom: 0.6rem;
+}
+
+.scale-unit {
+  position: relative;
+  align-self: stretch;
+  margin: auto -0.5rem 0;
+  padding-top: 0.6rem;
+  border-top: 2px solid var(--md-default-fg-color--lighter);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.scale-unit::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 50%;
+  height: 8px;
+  border-left: 2px solid var(--md-default-fg-color--lighter);
+}
+
+/* Mixed chunks: colors match the zero-copy diagram (archive orange, Icechunk
+   blue); dashed outlines are virtual chunks, solid fills native ones. */
+.fig .virtual {
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.fig .virtual.fine {
+  stroke-width: 1.2;
+  stroke-dasharray: 3 2;
+}
+
+.fig .netcdf {
+  fill: color-mix(in srgb, #d8a05a 25%, transparent);
+  stroke: var(--fmt-netcdf);
+}
+
+.fig .native {
+  fill: #5ea0d1;
+  stroke: #2f6fa8;
+  stroke-width: 2;
+}
+
+.ck {
+  border: 2px solid #2f6fa8;
+  border-radius: 6px;
+}
+
+.ck--virtual {
+  border-style: dashed;
+}
+
+.ck--tiff {
+  border-color: var(--fmt-tiff);
+  background: color-mix(in srgb, var(--fmt-tiff) 18%, transparent);
+}
+
+.ck--netcdf {
+  border-color: var(--fmt-netcdf);
+  background: color-mix(in srgb, #d8a05a 25%, transparent);
+}
+
+.ck--hdf5 {
+  border-color: var(--fmt-hdf5);
+  background: color-mix(in srgb, var(--fmt-hdf5) 22%, transparent);
+}
+
+.ck--native {
+  background: #5ea0d1;
+}
+
+.ck--native .fig-title,
+.ck--native .fig-sub {
+  color: #0b1f33;
+}
+
+.ck--legend {
+  border-color: var(--md-default-fg-color--light);
+}
+
+.mix {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) 2fr;
+  gap: 1.75rem;
+  align-items: center;
+}
+
+.mix-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.mix-sources .ck {
+  display: flex;
+  flex-direction: column;
+  padding: 0.4rem 0.75rem;
+}
+
+.mix-array {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.mix-cells,
+.mix-ticks {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0 0.45rem;
+}
+
+.mix-cells {
+  padding: 0.35rem;
+  border: 2px solid var(--md-default-fg-color--lighter);
+  border-radius: 8px;
+}
+
+.mix-cells .ck {
+  aspect-ratio: 34 / 52;
+  border-radius: 4px;
+}
+
+.mix-ticks {
+  margin-top: -0.3rem;
+}
+
+.fig-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-self: flex-start;
+  margin-top: 0.5rem;
+  font-size: 0.65rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.fig-legend .ck {
+  display: inline-block;
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-right: 0.5rem;
+  vertical-align: -0.15rem;
+  border-radius: 3px;
+}
+
+@container (max-width: 560px) {
+  .mix {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+
+  .mix-sources {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .mix-ticks .fig-mono {
+    font-size: 0.5rem;
+    white-space: nowrap;
+    letter-spacing: -0.04em;
+  }
+}
+
+/* Format and client: language chips */
+.fig-chip {
+  padding: 0.1rem 0.55rem;
+  border: 1.5px solid var(--ic-blue);
+  border-radius: 999px;
+  font-size: 0.62rem;
+}
+
+.ns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) 5.5rem minmax(0, 1fr);
+  gap: 1rem;
+  align-items: center;
+}
+
+.ns-computer {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+  border: 2px solid var(--md-default-fg-color--lighter);
+  border-radius: 14px;
+}
+
+.ns-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.ns-code {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0.55rem;
+  border: 2px solid var(--ic-blue);
+  border-radius: 8px;
+  background: var(--md-default-bg-color);
+}
+
+.ns-code::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  height: 1rem;
+  border-left: 2px solid var(--md-default-fg-color--lighter);
+}
+
+.ns-lib {
+  padding: 0.8rem;
+  border-radius: 8px;
+  background: var(--ic-blue);
+  color: var(--ic-on-blue);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.ns-langs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ns-io {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  text-align: center;
+}
+
+.ns-arrow {
+  width: 100%;
+  height: auto;
+  fill: var(--md-default-fg-color--light);
+  stroke: var(--md-default-fg-color--light);
+  stroke-width: 2.5;
+}
+
+.ns-stores {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.ns-store {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.75rem;
+  align-items: center;
+}
+
+.ns-store .fig-icon {
+  grid-row: span 2;
+  width: 2.6rem;
+  height: 2.6rem;
+}
+
+.ns-or {
+  padding-left: 3.35rem;
+  font-size: 0.7rem;
+  font-style: italic;
+  color: var(--md-default-fg-color--light);
+}
+
+@container (max-width: 560px) {
+  .ns {
+    grid-template-columns: 1fr;
+  }
+
+  .ns-io {
+    flex-direction: row;
+    justify-content: center;
+  }
+
+  .ns-arrow {
+    width: 2.5rem;
+    transform: rotate(90deg);
+  }
+}

@@ -1,3 +1,4 @@
+#![cfg(not(feature = "shuttle"))]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use bytes::Bytes;
 use chrono::Utc;
@@ -10,21 +11,17 @@ use icechunk::{
 };
 use icechunk_macros::tokio_test;
 use pretty_assertions::assert_eq;
-use rand::{Rng, rng};
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use rand::{RngExt as _, rng};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::{
     sync::{Barrier, RwLock},
     task::{self, JoinSet},
     time::sleep,
 };
 
-use futures::TryStreamExt;
+use futures::TryStreamExt as _;
 
-mod common;
+use crate::common;
 
 const N: usize = 20;
 
@@ -64,13 +61,14 @@ async fn test_concurrency_in_tigris() -> Result<(), Box<dyn std::error::Error>> 
 /// This test starts concurrent tasks to read, write and list a repository.
 ///
 /// It writes an `NxN` array,  with individual tasks for each 1x1 chunk. Concurrently with that it
-/// starts NxN tasks to read each chunk, these tasks only finish when the chunk was successfully
+/// starts `NxN` tasks to read each chunk, these tasks only finish when the chunk was successfully
 /// read. While that happens, another Task lists the chunk contents and only finishes when it finds
 /// all chunks written.
 async fn do_test_concurrency(
     storage: Arc<dyn Storage + Send + Sync>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let shape = ArrayShape::new(vec![(N as u64, 1), (N as u64, 1)]).unwrap();
+    let shape =
+        ArrayShape::new(vec![(N as u64, N as u32), (N as u64, N as u32)]).unwrap();
 
     let config = RepositoryConfig {
         manifest: Some(ManifestConfig {
@@ -79,7 +77,7 @@ async fn do_test_concurrency(
         }),
         ..Default::default()
     };
-    let repo = Repository::create(Some(config), storage, HashMap::new()).await?;
+    let repo = Repository::create(storage).config(config).execute().await?;
 
     let mut ds = repo.writable_session("main").await?;
 
@@ -108,7 +106,9 @@ async fn do_test_concurrency(
     for x in 0..N {
         for y in 0..N {
             let ds = Arc::clone(&ds);
-            set.spawn(async move { write_task(ds, x as u32, y as u32).await });
+            set.spawn(async move {
+                write_task(ds, x as u32, y as u32).await.expect("Error in write task");
+            });
         }
     }
 
@@ -117,7 +117,11 @@ async fn do_test_concurrency(
     Ok(())
 }
 
-async fn write_task(ds: Arc<RwLock<Session>>, x: u32, y: u32) {
+async fn write_task(
+    ds: Arc<RwLock<Session>>,
+    x: u32,
+    y: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
     let value = x as f64 * y as f64;
     let bytes = Bytes::copy_from_slice(&value.to_be_bytes());
 
@@ -129,7 +133,8 @@ async fn write_task(ds: Arc<RwLock<Session>>, x: u32, y: u32) {
 
     let payload = {
         let guard = ds.read().await;
-        let writer = guard.get_chunk_writer();
+        let writer = guard
+            .get_chunk_writer(&"/array".try_into().unwrap(), &ChunkIndices(vec![x, y]))?;
         writer(bytes).await.expect("Failed to write chunk")
     };
 
@@ -142,6 +147,7 @@ async fn write_task(ds: Arc<RwLock<Session>>, x: u32, y: u32) {
         )
         .await
         .expect("Failed to write chunk ref");
+    Ok(())
 }
 
 async fn read_task(ds: Arc<RwLock<Session>>, x: u32, y: u32, barrier: Arc<Barrier>) {
@@ -162,10 +168,10 @@ async fn read_task(ds: Arc<RwLock<Session>>, x: u32, y: u32, barrier: Arc<Barrie
         let actual_bytes =
             get_chunk(chunk_reader).await.expect("Failed to getch chunk payload");
 
-        if let Some(bytes) = &actual_bytes {
-            if bytes == &expected_bytes {
-                break;
-            }
+        if let Some(bytes) = &actual_bytes
+            && bytes == &expected_bytes
+        {
+            break;
         }
         let random_sleep = {
             let mut rng = rng();
@@ -189,7 +195,7 @@ async fn list_task(ds: Arc<RwLock<Session>>, barrier: Arc<Barrier>) {
         let nodes = ds
             .read()
             .await
-            .list_nodes()
+            .list_nodes(&Path::root())
             .await
             .expect("list_nodes failed")
             .map(|n| n.unwrap().path.to_string())

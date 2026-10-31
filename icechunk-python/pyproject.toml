@@ -5,42 +5,55 @@ build-backend = "maturin"
 [project]
 name = "icechunk"
 description = "Icechunk Python"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
-  "Programming Language :: Python :: Implementation :: PyPy",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15",
+  "Programming Language :: Python :: Free Threading :: 2 - Beta",
 ]
-readme = "../README.md"
+readme = "README.md"
 license = { file = "LICENSE" }
 dynamic = ["version"]
 authors = [{ name = "Earthmover", email = "info@earthmover.io" }]
 
-dependencies = ["zarr>=3,!=3.0.3"]
+# This is the minimum zarr version for users. The pixi dev environments set a
+# maximum version. See [tool.pixi.feature.dev.pypi-dependencies] below.
+dependencies = ["zarr>=3.1.0"]
 
-[project.optional-dependencies]
+[dependency-groups]
+dev = [
+  { include-group = "test" },
+  "mypy==2.3.1",
+  # same reason as [tool.pixi.feature.dev.pypi-dependencies] below
+  "zarr<3.2",
+  "ruff==0.16.4",
+  "maturin>=1.7,<2.0",
+  "maturin-import-hook>=0.3.0",
+  "third-wheel",
+]
 test = [
   "boto3",
   "coverage",
-  "mypy",
-  "object-store-python",
-  "pytest",
+  "pytest==9.0.3",
   "pytest-cov",
   "pytest-asyncio",
   "pytest-xdist",
-  "ruff",
-  "dask>=2024.11.0",
-  "distributed>=2024.11.0",
-  "xarray>=2025.01.2",
+  "pytest-reportlog",
+  "dask>=2025.2.0",
+  "distributed>=2025.2.0",
+  "xarray>=2025.07.1",
   "hypothesis",
   "pandas-stubs",
   "boto3-stubs[s3]",
   "termcolor",
-  "pooch",
-  "netcdf4",
+  "rich",
+  "flatbuffers",
+  "zstandard",
 ]
 benchmark = [
   "pytest-benchmark[histogram]",
@@ -52,25 +65,23 @@ benchmark = [
   "tqdm",
   "humanize",
   "platformdirs",
-  "ipdb",
   "coiled",
+  "toolz",
 ]
 docs = [
   "scipy",
   "cftime",
   "pooch",
-  "dask>=2024.11.0",
-  "distributed>=2024.11.0",
-  "xarray>=2025.01.2",
-  "myst_nb",
-  "pydata_sphinx_theme",
+  "dask>=2025.2.0",
+  "distributed>=2025.2.0",
+  "xarray>=2025.07.1",
   "mkdocs-awesome-pages-plugin",
   "mkdocs-mermaid2-plugin",
   "markdown-exec",
   "mkdocs-breadcrumbs-plugin",
   "mkdocs-minify-plugin",
   "mkdocs-open-in-new-tab",
-  "mkdocs",
+  "mkdocs<2",
   "mkdocs-material[imaging]",
   "mkdocstrings[python]",
   "mkdocs-jupyter",
@@ -80,91 +91,76 @@ docs = [
   "mkdocs-include-markdown-plugin",
   "mkdocs-redirects",
   "mkdocs-git-authors-plugin",
-  "sphinx",
-  "sphinx_copybutton",
-  "sphinx_design",
-  "sphinx_togglebutton",
-  "sphinx-autodoc-typehints",
-]
-
-[dependency-groups]
-upstream = [
-  "boto3",
-  "coverage",
-  "mypy",
-  "pytest",
-  "pytest-cov",
-  "pytest-asyncio",
-  "pytest-xdist",
-  "pytest-reportlog",
-  "ruff",
-  "hypothesis",
-  "pandas-stubs",
-  "boto3-stubs[s3]",
-  "termcolor",
-  # "object-store-python @ git+https://github.com/roeap/object-store-python.git", # doesn't work with uv
-  "object-store-python",
-  "dask @ git+https://github.com/dask/dask.git",
-  "distributed @ git+https://github.com/dask/distributed.git",
-  "xarray @ git+https://github.com/pydata/xarray.git",
-  "zarr @ git+https://github.com/zarr-developers/zarr.git",
-]
-dev = [
-  { include-group = "upstream" }
+  "rich",
 ]
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["pyo3/abi3-py312", "pyo3/abi3t-py315"]
 module-name = "icechunk._icechunk_python"
 python-source = "python"
-exclude = ["README.md"]
+editable-profile = "dev"
+cargo-extra-args = ["--workspace"]
 
 [tool.uv]
-# Rebuild package when any Rust files change
-cache-keys = [
-  {file = "pyproject.toml"},
-  {file = "Cargo.toml"},
-  {file = "src/**/*.rs"},
-  {file = "../icechunk/Cargo.toml"},
-  {file = "../icechunk/src/**/*.rs"},
+# Disable automatic package building - we use maturin-import-hook for faster dev cycles
+package = false
+
+[tool.third-wheel]
+renames = [
+  { original = "icechunk", new-name = "icechunk_v1", version = ">=1,<2" },
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 minversion = "7"
 testpaths = ["tests", "integration_tests"]
 log_cli_level = "INFO"
 xfail_strict = true
-addopts = ["-ra", "--strict-config", "--strict-markers"]
+addopts = ["-ra", "--strict-config", "--strict-markers", "-n", "auto"]
 markers = [
-  "asyncio",
-  "gpu", # need this to run the zarr tests
+  "gpu",        # need this to run the zarr tests
+  "hypothesis", # auto-applied by hypothesis to @given tests
 ]
 filterwarnings = [
   "error",
   "ignore:Jupyter is migrating its paths to use:DeprecationWarning:",
   "ignore:Port 8787 is already in use:UserWarning:",
-  # TODO: this is raised for vlen-utf8, consolidated metadata, U1 dtype
+  # TODO: this is raised for vlen-utf8, vlen-bytes, consolidated metadata, U1 dtype, S1 dtype
   "ignore:The codec `vlen-utf8` is currently not part in the Zarr format 3 specification.",
+  "ignore:The codec `vlen-bytes` is currently not part in the Zarr format 3 specification.",
   "ignore:The dtype `<U1` is currently not part in the Zarr format 3 specification.",
+  "ignore:The dtype `\\|S1` is currently not part in the Zarr format 3 specification.",
+  "ignore:Consolidated metadata is currently not part in the Zarr format 3 specification.",
   "ignore::ResourceWarning",
   "ignore:Unused async fixture loop scope:pytest.PytestWarning",
   "ignore:.*does not have a Zarr V3 specification.*",
+  # xarray < 2026.7.0 raises this on import under numpy >= 2.5; remove when the
+  # minimum supported xarray reaches 2026.7.0
+  "ignore:The 'generic' unit for NumPy timedelta is deprecated:DeprecationWarning",
+]
+
+# remap wheel-venv site-packages paths to the source tree; applied on `coverage combine`
+[tool.coverage.paths]
+icechunk = [
+  "icechunk-python/python/icechunk",
+  "*/site-packages/icechunk",
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-
-[[tool.mypy.overrides]]
-ignore_missing_imports = true
-module = ["toolz.*"]
+# This fixture generator drives several icechunk versions (installed under
+# renamed packages via third-wheel; see `just gen-expired-fixtures`) through one
+# Any-typed API, so it can't be meaningfully type-checked.
+exclude = ["tests/data_generation/generate_expired_repos.py"]
 
 [tool.ruff]
+target-version = "py312"
 line-length = 90
-extend-exclude = ["*.ipynb", "doc", "_typed_ops.pyi"]
+extend-exclude = ["*.ipynb", "*.md", "doc", "_typed_ops.pyi"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -210,6 +206,135 @@ ban-relative-imports = "all"
 [project.scripts]
 icechunk = "icechunk._icechunk_python:cli_entrypoint"
 
-[project.entry-points."zarr.stores"]
-icechunk = "icechunk.zarr_adapter:IcechunkStoreAdapter"
-ic = "icechunk.zarr_adapter:ICStoreAdapter"
+[tool.pixi.workspace]
+channels = ["conda-forge", "https://prefix.dev/github-releases"]
+requires-pixi = ">=0.72.0"
+platforms = [
+  "osx-arm64",
+  # pixi <0.78 writes unnamed glibc platforms to pixi.lock as p1/p2, and newer
+  # pixi writes the full name; these names keep the lock the same for both
+  { name = "p1", platform = "linux-64", glibc = "2.34" },
+  { name = "p2", platform = "linux-aarch64", glibc = "2.34" },
+  "win-64",
+  "osx-64",
+]
+
+# zarr 3.2 changed the type hints that the zarr test overrides suppress.
+# mypy then reports unused suppressions. A separate change adds zarr 3.2 support.
+[tool.pixi.feature.dev.pypi-dependencies]
+zarr = "<3.2"
+
+[tool.pixi.feature.netcdf.dependencies]
+netcdf4 = ">=1.7.4,<2"
+
+[tool.pixi.feature.docs.dependencies]
+cairo = ">=1.18.4,<2"
+
+[tool.pixi.feature.py312.dependencies]
+python = "~=3.12.0"
+
+[tool.pixi.feature.py315t.dependencies]
+python-freethreading = "~=3.15.0"
+
+# numcodecs declared free-threaded support in 0.17.0. Older releases re-enable
+# the GIL when zarr imports them, which serializes every thread.
+[tool.pixi.feature.py315t.pypi-dependencies]
+numcodecs = ">=0.17.0"
+
+[tool.pixi.feature.rustc.dependencies]
+rust = "~=1.98.0"
+
+# CI jobs that only test a prebuilt wheel install just this and python.
+[tool.pixi.feature.runner.dependencies]
+just = ">=1.58.0,<2"
+uv = ">=0.13.4,<0.14"
+flatbuffers = ">=25.12.19,<26"
+
+[tool.pixi.feature.build.dependencies]
+compilers = ">=1.11.0,<2"
+openssl = ">=3.6.3,<4"
+pkgconfig = ">=1.5.5,<2"
+cargo-deny = ">=0.20.2,<0.21"
+prek = ">=0.4.14,<0.5"
+cargo-nextest = ">=0.9.143,<0.10"
+samply = ">=0.13.1,<0.14"
+cargo-release = ">=1.1.3,<2"
+cargo-llvm-cov = ">=0.9.0,<0.10"
+nodejs = ">=22.23.2,<23"
+semver = ">=3.0.4,<4"
+
+# This feature holds the WASI toolchain for the wasm32-wasip1-threads target.
+[tool.pixi.feature.js.dependencies]
+rust-std-wasm32-wasip1-threads = "~=1.98.1"
+clang = ">=19.1.7"
+llvm-tools = ">=19.1.7"
+
+[tool.pixi.feature.msrv.dependencies]
+rust = "~=1.95.0"
+
+[tool.pixi.feature.nextest.dependencies]
+cargo-nextest = ">=0.9.143,<0.10"
+
+# pysemver, for `just check-msrv`
+[tool.pixi.feature.msrv-check.dependencies]
+semver = ">=3.0.4,<4"
+
+[tool.pixi.feature.build.target.linux-64.dependencies]
+sysroot_linux-64 = ">=2.34"
+
+[tool.pixi.feature.build.target.linux-aarch64.dependencies]
+sysroot_linux-aarch64 = ">=2.34"
+
+[tool.pixi.environments]
+default = { features = [
+  "py312",
+  "netcdf",
+  "runner",
+  "build",
+  "dev",
+  "docs",
+  "test",
+  "rustc"
+], solve-group = "default" }
+benchmark = { features = ["benchmark"], solve-group = "default" }
+py315t = { features = [
+  "py315t",
+  "runner",
+  "build",
+  "dev",
+  "test",
+  "rustc"
+], solve-group = "py315t" }
+# The MSRV check only runs cargo. The default feature's PyPI deps get built
+# from source for the free-threaded python this env resolves to.
+msrv = { features = [
+  "runner",
+  "build",
+  "msrv"
+], no-default-feature = true }
+# The js lanes build no python.
+# The default feature pulls the project's pypi dependencies.
+# Those dependencies have no free-threaded wheels on windows.
+js = { features = [
+  "runner",
+  "build",
+  "rustc",
+  "js"
+], no-default-feature = true }
+wheel-test = { features = [
+  "py312",
+  "runner"
+], no-default-feature = true, solve-group = "default" }
+# Same solve group as py315t, so the wheel is tested on the interpreter that built it
+wheel-test-py315t = { features = [
+  "py315t",
+  "runner"
+], no-default-feature = true, solve-group = "py315t" }
+# The Windows and macOS unit-test legs need cargo, nextest and the MSRV text
+# check. A small env installs faster than the default one.
+rust-test = { features = [
+  "runner",
+  "rustc",
+  "nextest",
+  "msrv-check"
+], no-default-feature = true, solve-group = "default" }

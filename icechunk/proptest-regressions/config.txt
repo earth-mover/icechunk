@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc de0fa0b9bd6e6c92a3248a0e4514a869634acbecb5de698cc1254a23e379083b # shrinks to config = RepositoryConfig { inline_chunk_threshold_bytes: None, get_partial_values_concurrency: None, compression: None, max_concurrent_requests: None, caching: None, storage: None, virtual_chunk_containers: None, manifest: Some(ManifestConfig { preload: None, splitting: None }), previous_file: None }

@@ -1,16 +1,33 @@
+import datetime
 from collections.abc import Iterable
-from typing import cast
+from types import ModuleType
+from typing import TYPE_CHECKING, Any
+
+__all__ = [
+    "chunk_coordinates",
+    "chunk_paths",
+    "chunk_slicers",
+    "draw_older_than",
+    "repository_configs",
+    "splitting_configs",
+]
 
 import hypothesis.strategies as st
+from packaging.version import Version
 
 import icechunk as ic
 import zarr
-from zarr.core.metadata import ArrayV3Metadata
+
+if TYPE_CHECKING:
+    try:
+        from zarr.core.metadata import ArrayV3Metadata
+    except ImportError:
+        ArrayV3Metadata = Any  # type: ignore[misc,assignment]
 
 
 @st.composite
 def splitting_configs(
-    draw: st.DrawFn, *, arrays: Iterable[zarr.Array]
+    draw: st.DrawFn, *, arrays: "Iterable[zarr.Array[ArrayV3Metadata]]"
 ) -> ic.ManifestSplittingConfig:
     config_dict: dict[
         ic.ManifestSplitCondition,
@@ -29,7 +46,7 @@ def splitting_configs(
         else:
             array_condition = ic.ManifestSplitCondition.path_matches(array.path)
         dimnames = (
-            cast(ArrayV3Metadata, array.metadata).dimension_names or (None,) * array.ndim
+            getattr(array.metadata, "dimension_names", None) or (None,) * array.ndim
         )
         dimsize_axis_names = draw(
             st.lists(
@@ -49,3 +66,126 @@ def splitting_configs(
                 key: draw(st.integers(min_value=1, max_value=size + 10))
             }
     return ic.ManifestSplittingConfig.from_dict(config_dict)
+
+
+@st.composite
+def repository_configs(
+    draw: st.DrawFn,
+    num_updates_per_repo_info_file: st.SearchStrategy[int] = st.integers(  # noqa: B008
+        min_value=1, max_value=5
+    ),
+    inline_chunk_threshold_bytes: st.SearchStrategy[int] | None = None,
+    splitting: st.SearchStrategy[ic.ManifestSplittingConfig] | None = None,
+    ic_module: ModuleType | None = None,
+) -> ic.RepositoryConfig:
+    ice = ic_module or ic
+    manifest = None
+    if splitting is not None:
+        manifest = ice.ManifestConfig(splitting=draw(splitting))
+    kwargs: dict[str, Any] = {
+        "inline_chunk_threshold_bytes": draw(inline_chunk_threshold_bytes)
+        if inline_chunk_threshold_bytes is not None
+        else None,
+        "manifest": manifest,
+    }
+    # num_updates_per_repo_info_file is v2-only
+    if Version(ice.__version__).major >= 2:
+        kwargs["num_updates_per_repo_info_file"] = draw(num_updates_per_repo_info_file)
+    return ice.RepositoryConfig(**kwargs)  # type: ignore[no-any-return]
+
+
+@st.composite
+def chunk_coordinates(draw: st.DrawFn, numblocks: tuple[int, ...]) -> tuple[int, ...]:
+    return draw(
+        st.tuples(*tuple(st.integers(min_value=0, max_value=b - 1) for b in numblocks))
+    )
+
+
+@st.composite
+def chunk_slicers(
+    draw: st.DrawFn, numblocks: tuple[int, ...], chunk_shape: tuple[int, ...]
+) -> tuple[slice, ...]:
+    """
+    Strategy to generate a tuple of slices that indexes a single chunk.
+
+    Parameters
+    ----------
+
+    draw: st.DrawFn
+    numblocks: tuple of int
+        Number of chunks along each axis.
+    chunk_shape:
+        Shape of each chunk (assumes regular chunk grid)
+    """
+    return tuple(
+        (
+            slice(coord * size, (coord + 1) * size)
+            for coord, size in zip(
+                draw(chunk_coordinates(numblocks)), chunk_shape, strict=True
+            )
+        )
+    )
+
+
+@st.composite
+def chunk_paths(draw: st.DrawFn, numblocks: tuple[int, ...]) -> str:
+    blockidx = draw(chunk_coordinates(numblocks))
+    return "/".join(map(str, blockidx))
+
+
+def draw_older_than(
+    data: st.DataObject, storage: ic.Storage, repo: ic.Repository
+) -> datetime.datetime:
+    """Draw an ``older_than`` cutoff from storage-level ``created_at`` timestamps.
+
+    Uses the same timestamps that the Rust GC compares against, taking the max
+    of the snapshot and transaction ``created_at`` for each key so both are
+    reliably expired together. Expiration compares against the snapshot's
+    ``flushed_at`` instead, which can be later than the file's ``created_at``
+    (Linux stamps file mtimes from a coarse clock), so that is included too.
+    """
+    epoch = datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)
+
+    def flushed_at(snapshot_id: str) -> datetime.datetime:
+        try:
+            return repo.lookup_snapshot(snapshot_id).written_at
+        except ic.SnapshotNotFoundError:
+            # Already expired out of the repo info, so expiration can't select it.
+            return epoch
+
+    created_at_snapshots: dict[str, datetime.datetime] = {
+        obj.key: obj.created_at
+        for obj in storage.list_objects_metadata(prefix="snapshots")
+    }
+    created_at_txs: dict[str, datetime.datetime] = {
+        obj.key: obj.created_at
+        for obj in storage.list_objects_metadata(prefix="transactions")
+    }
+    created_at_times = sorted(
+        # These are written concurrently (session.rs) and get slightly different
+        # created_at timestamps. Take the max so we delete both.
+        max(
+            created_at_snapshots[key],
+            created_at_txs.get(key, epoch),
+            flushed_at(key),
+        )
+        for key in created_at_snapshots
+    )[::-1]  # reverse to maximize chances of GCing more objects
+    # The order here is important; again we prioritize GCing more objects first
+    result: datetime.datetime = data.draw(
+        st.one_of(
+            st.just(max(created_at_times) + datetime.timedelta(days=1)),
+            # Not `sampled_from`: the number of snapshots depends on earlier
+            # expire/GC runs, and replaying a choice against a differently-sized
+            # strategy raises FlakyStrategyDefinition.
+            st.integers(min_value=0, max_value=255).map(
+                # Add 1μs to ensure we delete both the tx log & snapshot
+                lambda i: (
+                    created_at_times[i % len(created_at_times)]
+                    + datetime.timedelta(microseconds=1)
+                )
+            ),
+            st.just(datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC)),
+        )
+    )
+    return result

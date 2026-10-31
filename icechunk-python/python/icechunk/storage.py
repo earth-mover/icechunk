@@ -2,17 +2,52 @@ from collections.abc import Callable
 from datetime import datetime
 
 from icechunk._icechunk_python import (
+    ChecksumAlgorithm,
+    ChunkType,
     GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
     S3StaticCredentials,
     Storage,
+    StorageConcurrencySettings,
+    StorageRetriesSettings,
+    StorageSettings,
+    StorageTimeoutSettings,
 )
 from icechunk.credentials import (
     azure_credentials,
     gcs_credentials,
     s3_credentials,
 )
+
+__all__ = [
+    "AnyObjectStoreConfig",
+    "ChecksumAlgorithm",
+    "ChunkType",
+    "ObjectStoreConfig",
+    "S3Options",
+    "Storage",
+    "StorageConcurrencySettings",
+    "StorageRetriesSettings",
+    "StorageSettings",
+    "StorageTimeoutSettings",
+    "azure_storage",
+    "azure_store",
+    "gcs_storage",
+    "gcs_store",
+    "hf_storage",
+    "http_storage",
+    "http_store",
+    "in_memory_storage",
+    "local_filesystem_storage",
+    "local_filesystem_store",
+    "r2_storage",
+    "redirect_storage",
+    "s3_object_store_storage",
+    "s3_storage",
+    "s3_store",
+    "tigris_storage",
+]
 
 AnyObjectStoreConfig = (
     ObjectStoreConfig.InMemory
@@ -40,17 +75,66 @@ def local_filesystem_storage(path: str) -> Storage:
     return Storage.new_local_filesystem(path)
 
 
+def http_storage(
+    base_url: str,
+    opts: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Storage:
+    """Create a read-only Storage instance that reads data from an HTTP(s) server.
+
+    Parameters
+    ----------
+    base_url: str
+        The URL path to the root of the repository
+    opts: dict[str, str] | None
+        A dictionary of transport options for the HTTP object store. See
+        https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants
+        for a list of possible keys in snake case format.
+    headers: dict[str, str] | None
+        Static HTTP headers injected into every request made by the underlying
+        HTTP client. Useful for authentication, e.g.
+        ``{"authorization": "Bearer <token>"}``.
+    """
+    return Storage.new_http(base_url, opts, headers)
+
+
 def http_store(
     opts: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> ObjectStoreConfig.Http:
     """Build an ObjectStoreConfig instance for HTTP object stores.
 
     Parameters
     ----------
     opts: dict[str, str] | None
-        A dictionary of options for the HTTP object store. See https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants for a list of possible keys in snake case format.
+        A dictionary of transport options for the HTTP object store. See
+        https://docs.rs/object_store/latest/object_store/client/enum.ClientConfigKey.html#variants
+        for a list of possible keys in snake case format.
+    headers: dict[str, str] | None
+        Static HTTP headers injected into every request made by the underlying
+        HTTP client. Useful for authentication, e.g.
+        ``{"authorization": "Bearer <token>"}``.
     """
-    return ObjectStoreConfig.Http(opts)
+    return ObjectStoreConfig.Http(opts, headers)
+
+
+def redirect_storage(base_url: str) -> Storage:
+    """Create a read-only Storage instance that follows HTTP redirects to resolve the underlying storage backend.
+
+    The given URL is expected to return an HTTP redirect (3xx) with a ``Location`` header
+    pointing to a supported storage scheme (``s3://``, ``gs://``, ``r2://``, ``tigris://``,
+    ``http+icechunk://``, etc.). Icechunk will follow redirects until it reaches a recognized
+    scheme and then use that as the actual storage backend.
+
+    This is useful when a service controls which bucket or path a repository lives in, so
+    clients don't need to know the final storage location ahead of time.
+
+    Parameters
+    ----------
+    base_url: str
+        The URL that will be followed to discover the actual storage location.
+    """
+    return Storage.new_redirect(base_url)
 
 
 def local_filesystem_store(
@@ -73,6 +157,9 @@ def s3_store(
     anonymous: bool = False,
     s3_compatible: bool = False,
     force_path_style: bool = False,
+    network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
+    checksum_algorithm: ChecksumAlgorithm | None = None,
 ) -> ObjectStoreConfig.S3Compatible | ObjectStoreConfig.S3:
     """Build an ObjectStoreConfig instance for S3 or S3 compatible object stores."""
 
@@ -81,6 +168,10 @@ def s3_store(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
+        anonymous=anonymous,
+        checksum_algorithm=checksum_algorithm,
     )
     return (
         ObjectStoreConfig.S3Compatible(options)
@@ -105,6 +196,13 @@ def s3_storage(
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
     force_path_style: bool = False,
+    network_stream_timeout_seconds: int = 60,
+    requester_pays: bool = False,
+    checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in S3 or S3 compatible object stores.
 
@@ -113,11 +211,15 @@ def s3_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
-        Optional endpoint where the object store serves data, example: http://localhost:9000
+        Optional endpoint where the object store serves data, example: http://localhost:4200
     allow_http: bool
         If the object store can be accessed using http protocol instead of https
     access_key_id: str | None
@@ -142,6 +244,30 @@ def s3_storage(
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
     force_path_style: bool
         Whether to force using path-style addressing for buckets
+    network_stream_timeout_seconds: int
+        Timeout requests if no bytes can be transmitted during this period of time.
+        If set to 0, timeout is disabled. Default: 60.
+    requester_pays: bool
+        Enable requester pays for S3 buckets
+    checksum_algorithm: ChecksumAlgorithm | None
+        Override the checksum algorithm used for write requests (PutObject,
+        UploadPart, DeleteObjects). When ``None`` (default) the AWS SDK picks
+        its own default. Set explicitly when targeting an S3-compatible service
+        that rejects the SDK's default.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store,
+        for example ``{"x-amz-acl": "bucket-owner-full-control"}``.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
     """
 
     credentials = s3_credentials(
@@ -159,12 +285,20 @@ def s3_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
+        requester_pays=requester_pays,
+        anonymous=anonymous or False,
+        checksum_algorithm=checksum_algorithm,
     )
     return Storage.new_s3(
         config=options,
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 
@@ -182,6 +316,9 @@ def s3_object_store_storage(
     anonymous: bool | None = None,
     from_env: bool | None = None,
     force_path_style: bool = False,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -197,12 +334,16 @@ def s3_object_store_storage(
         endpoint_url=endpoint_url,
         allow_http=allow_http,
         force_path_style=force_path_style,
+        anonymous=anonymous or False,
     )
     return Storage.new_s3_object_store(
         config=options,
         bucket=bucket,
         prefix=prefix,
         credentials=credentials,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 
@@ -222,6 +363,12 @@ def tigris_storage(
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
+    network_stream_timeout_seconds: int = 60,
+    checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Tigris object store.
 
@@ -230,11 +377,15 @@ def tigris_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     region: str | None
         The region to use in the object store, if `None` a default region will be used
     endpoint_url: str | None
-        Optional endpoint where the object store serves data, example: http://localhost:9000
+        Optional endpoint where the object store serves data, example: http://localhost:4200
     use_weak_consistency: bool
         If set to True it will return a Storage instance that is read only, and can read from the
         the closest Tigris region. Behavior is undefined if objects haven't propagated to the region yet.
@@ -261,6 +412,23 @@ def tigris_storage(
         ensure all those copies don't need to call get_credentials immediately. After the initial
         set of credentials has expired, the cached value is no longer used. Notice that credentials
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    network_stream_timeout_seconds: int
+        Timeout requests if no bytes can be transmitted during this period of time.
+        If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store,
+        for example ``{"x-amz-acl": "bucket-owner-full-control"}``.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -272,13 +440,24 @@ def tigris_storage(
         get_credentials=get_credentials,
         scatter_initial_credentials=scatter_initial_credentials,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
+        anonymous=anonymous or False,
+        checksum_algorithm=checksum_algorithm,
+    )
     return Storage.new_tigris(
         config=options,
         bucket=bucket,
         prefix=prefix,
         use_weak_consistency=use_weak_consistency,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 
@@ -298,15 +477,25 @@ def r2_storage(
     from_env: bool | None = None,
     get_credentials: Callable[[], S3StaticCredentials] | None = None,
     scatter_initial_credentials: bool = False,
+    network_stream_timeout_seconds: int = 60,
+    checksum_algorithm: ChecksumAlgorithm | None = None,
+    legacy_rooted_keys: bool | None = None,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
-    """Create a Storage instance that saves data in Tigris object store.
+    """Create a Storage instance that saves data in R2 object store.
 
     Parameters
     ----------
     bucket: str | None
         The bucket name
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     account_id: str | None
         Cloudflare account ID. When provided, a default endpoint URL is constructed as
         `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`. If not provided, `endpoint_url`
@@ -337,6 +526,23 @@ def r2_storage(
         ensure all those copies don't need to call get_credentials immediately. After the initial
         set of credentials has expired, the cached value is no longer used. Notice that credentials
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    network_stream_timeout_seconds: int
+        Timeout requests if no bytes can be transmitted during this period of time.
+        If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store,
+        for example ``{"x-amz-acl": "bucket-owner-full-control"}``.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
     """
     credentials = s3_credentials(
         access_key_id=access_key_id,
@@ -348,13 +554,127 @@ def r2_storage(
         get_credentials=get_credentials,
         scatter_initial_credentials=scatter_initial_credentials,
     )
-    options = S3Options(region=region, endpoint_url=endpoint_url, allow_http=allow_http)
+    options = S3Options(
+        region=region,
+        endpoint_url=endpoint_url,
+        allow_http=allow_http,
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
+        anonymous=anonymous or False,
+        checksum_algorithm=checksum_algorithm,
+    )
     return Storage.new_r2(
         config=options,
         bucket=bucket,
         prefix=prefix,
         account_id=account_id,
         credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
+    )
+
+
+def hf_storage(
+    *,
+    bucket: str,
+    prefix: str | None,
+    namespace: str,
+    access_key_id: str | None = None,
+    secret_access_key: str | None = None,
+    session_token: str | None = None,
+    expires_after: datetime | None = None,
+    from_env: bool | None = None,
+    get_credentials: Callable[[], S3StaticCredentials] | None = None,
+    scatter_initial_credentials: bool = False,
+    network_stream_timeout_seconds: int = 60,
+    legacy_rooted_keys: bool | None = None,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Storage:
+    """Create a Storage instance that saves data in a Hugging Face Storage Bucket.
+
+    Data goes through Hugging Face's S3-compatible gateway. The credentials are
+    the S3 access key and secret generated from a Hugging Face access token. The
+    token itself is not an S3 credential. See
+    https://huggingface.co/docs/hub/storage-buckets-s3 for how to generate them.
+
+    The gateway discards user metadata. Icechunk stores a write id there to tell
+    a lost success response apart from a real conflict. On Hugging Face that
+    recovery is unavailable. The network can lose a conditional write's response
+    on its way back to the client. That is rare. The retry then reports a
+    conflict that never happened. Retry the commit.
+
+    Parameters
+    ----------
+    bucket: str
+        The bucket name, without the namespace
+    prefix: str | None
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
+    namespace: str
+        The bucket owner: a Hugging Face username or organization name
+    access_key_id: str | None
+        S3 credential access key. It starts with `HFAK`
+    secret_access_key: str | None
+        S3 credential secret access key
+    session_token: str | None
+        Optional S3 credential session token
+    expires_after: datetime | None
+        Optional expiration for the object store credentials
+    from_env: bool | None
+        Fetch credentials from the operative system environment
+    get_credentials: Callable[[], S3StaticCredentials] | None
+        Use this function to get and refresh object store credentials
+    scatter_initial_credentials: bool, optional
+        Immediately call and store the value returned by get_credentials. This is useful if the
+        repo or session will be pickled to generate many copies. Passing scatter_initial_credentials=True will
+        ensure all those copies don't need to call get_credentials immediately. After the initial
+        set of credentials has expired, the cached value is no longer used. Notice that credentials
+        obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    network_stream_timeout_seconds: int
+        Timeout requests if no bytes can be transmitted during this period of time.
+        If set to 0, timeout is disabled. Default: 60.
+    legacy_rooted_keys: bool | None
+        The object key layout. ``None`` (default) detects it automatically and is
+        what most users will want; only set it explicitly if you have a special
+        situation and know what you're doing. ``True`` forces the old leading-slash
+        layout (empty prefix only); ``False`` forces the standard one.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
+    """
+    credentials = s3_credentials(
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        expires_after=expires_after,
+        from_env=from_env,
+        get_credentials=get_credentials,
+        scatter_initial_credentials=scatter_initial_credentials,
+    )
+    options = S3Options(
+        network_stream_timeout_seconds=network_stream_timeout_seconds,
+    )
+    return Storage.new_hf(
+        config=options,
+        bucket=bucket,
+        prefix=prefix,
+        namespace=namespace,
+        credentials=credentials,
+        legacy_rooted_keys=legacy_rooted_keys,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
 
 
@@ -379,10 +699,14 @@ def gcs_storage(
     service_account_key: str | None = None,
     application_credentials: str | None = None,
     bearer_token: str | None = None,
+    anonymous: bool | None = None,
     from_env: bool | None = None,
     config: dict[str, str] | None = None,
     get_credentials: Callable[[], GcsBearerCredential] | None = None,
     scatter_initial_credentials: bool = False,
+    read_headers: dict[str, str] | None = None,
+    write_headers: dict[str, str] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Google Cloud Storage object store.
 
@@ -391,7 +715,11 @@ def gcs_storage(
     bucket: str
         The bucket where the repository will store its data
     prefix: str | None
-        The prefix within the bucket that is the root directory of the repository
+        The prefix within the bucket that is the root directory of the repository.
+        An empty or ``None`` prefix points at the bucket root. Creating a
+        repository at the bucket root is not supported in modern Icechunk
+        versions; existing bucket-root repositories can still be opened and
+        updated.
     service_account_file: str | None
         The path to the service account file
     service_account_key: str | None
@@ -400,6 +728,8 @@ def gcs_storage(
         The path to the application credentials file
     bearer_token: str | None
         The bearer token to use for the object store
+    anonymous: bool | None
+        If set to True requests to the object store will not be signed
     from_env: bool | None
         Fetch credentials from the operative system environment
     config: dict[str, str] | None
@@ -412,6 +742,15 @@ def gcs_storage(
         ensure all those copies don't need to call get_credentials immediately. After the initial
         set of credentials has expired, the cached value is no longer used. Notice that credentials
         obtained are stored, and they can be sent over the network if you pickle the session/repo.
+    read_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every read request to the object store.
+    write_headers: dict[str, str] | None
+        Extra HTTP headers to attach to every write request to the object store,
+        for example ``{"x-goog-acl": "bucket-owner-full-control"}``.
+    headers: dict[str, str] | None
+        Extra HTTP headers to attach to both read and write requests. They are
+        merged with ``read_headers``/``write_headers``, which take precedence per
+        role on a key conflict.
     """
     credentials = gcs_credentials(
         service_account_file=service_account_file,
@@ -419,6 +758,7 @@ def gcs_storage(
         application_credentials=application_credentials,
         bearer_token=bearer_token,
         from_env=from_env,
+        anonymous=anonymous,
         get_credentials=get_credentials,
         scatter_initial_credentials=scatter_initial_credentials,
     )
@@ -427,7 +767,27 @@ def gcs_storage(
         prefix=prefix,
         credentials=credentials,
         config=config,
+        read_headers=read_headers,
+        write_headers=write_headers,
+        headers=headers,
     )
+
+
+def azure_store(
+    *,
+    account: str,
+    config: dict[str, str] | None = None,
+) -> ObjectStoreConfig.Azure:
+    """Build an ObjectStoreConfig instance for Azure stores.
+
+    Parameters
+    ----------
+    account: str
+        The account to which the caller must have access privileges
+    config: dict[str, str] | None
+        A dictionary of options for the Azure Blob Storage object store. See https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants for a list of possible configuration keys.
+    """
+    return ObjectStoreConfig.Azure({"account": account, **(config or {})})
 
 
 def azure_storage(
@@ -439,6 +799,7 @@ def azure_storage(
     sas_token: str | None = None,
     bearer_token: str | None = None,
     from_env: bool | None = None,
+    anonymous: bool | None = None,
     config: dict[str, str] | None = None,
 ) -> Storage:
     """Create a Storage instance that saves data in Azure Blob Storage object store.
@@ -450,7 +811,10 @@ def azure_storage(
     container: str
         The container where the repository will store its data
     prefix: str
-        The prefix within the container that is the root directory of the repository
+        The prefix within the container that is the root directory of the repository.
+        An empty prefix points at the container root. Creating a repository at the
+        container root is not supported in modern Icechunk versions; existing
+        container-root repositories can still be opened and updated.
     access_key: str | None
         Azure Blob Storage credential access key
     sas_token: str | None
@@ -459,6 +823,8 @@ def azure_storage(
         Azure Blob Storage credential bearer token
     from_env: bool | None
         Fetch credentials from the operative system environment
+    anonymous: bool | None
+        Access a public container anonymously, without credentials
     config: dict[str, str] | None
         A dictionary of options for the Azure Blob Storage object store. See https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants for a list of possible configuration keys.
     """
@@ -467,6 +833,7 @@ def azure_storage(
         sas_token=sas_token,
         bearer_token=bearer_token,
         from_env=from_env,
+        anonymous=anonymous,
     )
     return Storage.new_azure_blob(
         account=account,

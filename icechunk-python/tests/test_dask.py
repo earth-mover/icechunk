@@ -5,25 +5,30 @@ pytest.importorskip("distributed")
 
 import tempfile
 
+import numpy as np
+
 import dask
 import distributed
 import xarray as xr
 import zarr
 from icechunk import Repository, local_filesystem_storage
-from icechunk.dask import store_dask
+from icechunk.dask import session_merge_reduction, store_dask
 from icechunk.xarray import to_icechunk
 from tests.test_xarray import create_test_data, roundtrip
 from xarray.testing import assert_identical
 
 
-def test_store_dask() -> None:
+def test_store_dask(any_spec_version: int | None) -> None:
     shape = (100, 100)
     dask_chunks = (20, 20)
     dask_array = dask.array.random.random(shape, chunks=dask_chunks)
 
     zarr_chunks = (10, 10)
     with tempfile.TemporaryDirectory() as tmpdir:
-        repo = Repository.create(local_filesystem_storage(tmpdir))
+        repo = Repository.create(
+            local_filesystem_storage(tmpdir),
+            spec_version=any_spec_version,
+        )
         session = repo.writable_session("main")
         group = zarr.group(store=session.store, overwrite=True)
 
@@ -34,59 +39,90 @@ def test_store_dask() -> None:
             dtype="f8",
             fill_value=float("nan"),
         )
-        # can't fork a dirty session
-        with dask.config.set(scheduler="processes"):
-            with pytest.raises(ValueError):
-                store_dask(sources=[dask_array], targets=[zarray])
 
-        # session = repo.writable_session("main")
-        # Can't fork a dirty session
-        with pytest.raises(ValueError):
-            fork = session.fork()
-
-        session.commit("i am forced to commit to make progress")
-        session = repo.writable_session("main")
         fork = session.fork()
         zarray = zarr.open_array(fork.store, path="array")
         with dask.config.set(scheduler="processes"):
             store_dask(sources=[dask_array], targets=[zarray])
 
 
-def test_distributed() -> None:
+def test_session_merge_reduction_rejects_unknown_arrays() -> None:
+    with pytest.raises(TypeError, match="Expected a dask array"):
+        session_merge_reduction(np.arange(10), split_every=None)  # type: ignore[arg-type]
+
+
+def test_distributed(any_spec_version: int | None) -> None:
     with distributed.Client():  # type: ignore [no-untyped-call]
         ds = create_test_data().chunk(dim1=3, dim2=4)
-        with roundtrip(ds, commit=True) as actual:
+        with roundtrip(ds, commit=True, spec_version=any_spec_version) as actual:
             assert_identical(actual, ds)
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_dask_schedulers(scheduler) -> None:
+def test_dask_schedulers(scheduler: str, any_spec_version: int | None) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data().chunk(dim1=3, dim2=4)
-        with roundtrip(ds, commit=scheduler == "processes") as actual:
+        with roundtrip(
+            ds,
+            commit=scheduler == "processes",
+            spec_version=any_spec_version,
+        ) as actual:
             assert_identical(actual, ds)
 
 
 @pytest.mark.parametrize("scheduler", ["threads", "processes"])
-def test_xarray_to_icechunk_nested_pickling(scheduler) -> None:
+def test_xarray_to_icechunk_nested_pickling(
+    scheduler: str, any_spec_version: int | None
+) -> None:
     with dask.config.set(scheduler=scheduler):
         ds = create_test_data(dim_sizes=(2, 3, 4)).chunk(-1)
         with tempfile.TemporaryDirectory() as tmpdir:
-            repo = Repository.create(local_filesystem_storage(tmpdir))
+            repo = Repository.create(
+                local_filesystem_storage(tmpdir), spec_version=any_spec_version
+            )
             session = repo.writable_session("main")
 
             to_icechunk(ds, session=session, mode="w")
-            with pytest.raises(ValueError, match="Please commit first"):
-                to_icechunk(ds, session=session, mode="w")
-            # Needed because we can't pickle the writable session for distributed read
-            session.commit("wrote a commit.")
-            with xr.open_zarr(session.store, consolidated=False) as actual:
+            with xr.open_zarr(session.store, consolidated=False, chunks=None) as actual:
+                assert_identical(actual, ds)
+            to_icechunk(ds, session=session, mode="w")
+            with xr.open_zarr(session.store, consolidated=False, chunks=None) as actual:
+                assert_identical(actual, ds)
+            with xr.open_zarr(session.fork().store, consolidated=False) as actual:
                 assert_identical(actual, ds)
 
             newds = ds + 1
             session = repo.writable_session("main")
             to_icechunk(newds, session=session, mode="w")
-            # Needed because we can't pickle the writable session
-            session.commit("wrote another commit.")
-            with xr.open_zarr(session.store, consolidated=False) as actual:
+            with xr.open_zarr(session.store, consolidated=False, chunks=None) as actual:
                 assert_identical(actual, newds)
+            with xr.open_zarr(session.fork().store, consolidated=False) as actual:
+                assert_identical(actual, newds)
+
+
+@pytest.mark.parametrize("scheduler", ["threads", "processes"])
+def test_fork_session_deep_copies(scheduler: str, any_spec_version: int | None) -> None:
+    with dask.config.set(scheduler=scheduler):
+        ds = create_test_data(dim_sizes=(2, 3, 4)).drop_encoding().chunk(dim3=1)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Repository.create(
+                local_filesystem_storage(tmpdir),
+                spec_version=any_spec_version,
+            )
+
+            session = repo.writable_session("main")
+            ds.to_zarr(session.store, mode="w", compute=False)
+            session.commit("expand store in prep for region writes")
+
+            session = repo.writable_session("main")
+            forks = [session.fork() for _ in range(ds.sizes["dim3"])]
+            for t, fork in zip(range(ds.sizes["dim3"]), forks, strict=True):
+                to_icechunk(ds.isel(dim3=[t]), fork, region="auto")
+            session.merge(*forks)
+            session.commit("yaya writes succeeded")
+
+            actual = xr.open_dataset(
+                repo.readonly_session("main").store,  # type: ignore [arg-type]
+                engine="zarr",
+            )
+            xr.testing.assert_identical(actual, ds)

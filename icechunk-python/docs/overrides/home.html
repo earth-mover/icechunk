@@ -1,0 +1,75 @@
+{% extends "main.html" %}
+
+{% block tabs %}
+  {{ super() }}
+
+  <!-- Styles for homepage page -->
+  <link rel="stylesheet" href="{{ 'stylesheets/homepage.css' | url }}" />
+
+  <!-- Hero for landing page -->
+  <section id="hero-container" class="mdx-container">
+    <div class="mdx-hero md-grid md-typeset">
+
+        <!-- Hero content -->
+        <div class="mdx-hero__content md-content__inner md-typeset">
+            <div class="hero-title-row">
+                {% include "partials/cube.html" %}
+                <h1 class="hero-title">Icechunk</h1>
+            </div>
+            <h3 class="hero-subtitle">{{ config.site_description }}</h3>
+            <div class="hero-langs">
+                <a href="{{ 'reference/' | url }}">{% include ".icons/material/language-python.svg" %} Python</a>
+                <a href="{{ 'reference/icechunk-rust/' | url }}">{% include ".icons/material/language-rust.svg" %} Rust</a>
+                <a href="{{ 'reference/icechunk-js/' | url }}">{% include ".icons/material/language-javascript.svg" %} JavaScript</a>
+                <a href="{{ 'languages/#r' | url }}">{% include ".icons/material/language-r.svg" %} R</a>
+                <a href="{{ 'languages/#experimental' | url }}">{% include ".icons/material/language-java.svg" %} Java</a>
+                <a href="{{ 'languages/#experimental' | url }}">{% include ".icons/simple/julia.svg" %} Julia</a>
+                <a href="{{ 'languages/' | url }}">More →</a>
+            </div>
+            <a
+                href="{{ page.next_page.url | url }}"
+                title="{{ page.next_page.title | e }}"
+                class="hero-cta-button md-button"
+            >
+                Read the docs
+            </a>
+        </div>
+    </div>
+  </section>
+{% endblock %}
+
+<!-- Content -->
+{% block content %}
+    {% set panes = [
+        ("scale", "speedometer", "Scale and Speed", "Gigabytes to petabytes. Never the bottleneck."),
+        ("zero-copy-ingest", "file-link-outline", "Zero-Copy Ingest", "HDF5, NetCDF, h5ad, TIFF, ND2, GRIB and more"),
+        ("versioning", "source-branch", "Versioning", "Cite exact versions and collaborate on branches"),
+        ("consistency", "check-all", "ACID Transactions", "Commits are all or nothing. No partial reads."),
+        ("format-and-client-only", "server-off", "No Server Required", "Client and format only. No service to run."),
+    ] %}
+    <div class="mdx-container">
+        <div id="home-content" class="md-grid md-typeset">
+            <div class="panes">
+                {% for anchor, icon, title, line in panes %}
+                <a class="pane" href="#{{ anchor }}">
+                    <span class="pane-icon">{% include ".icons/material/" ~ icon ~ ".svg" %}</span>
+                    <span class="pane-title">{{ title }}</span>
+                    <span class="pane-line">{{ line }}</span>
+                    <span class="pane-more">{% include ".icons/material/chevron-down.svg" %}</span>
+                </a>
+                {% endfor %}
+            </div>
+            {{ page.content }}
+            <div class="by-line-wrapper">
+                <div class="by-line-container">
+                    <div class="by-line">
+                        <span>created with</span> <span class="heart-container"><img class="heart-image" src="{{ 'assets/hero/heart.svg' | url }}"></span> <span>by</span>
+                    </div>
+                    <div class="by-line">
+                        <a href="https://earthmover.io" target="_blank"> <img class="earthmover-wordmark" src="{{ 'assets/earthmover/workmark.svg' | url }}"></a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+{% endblock %}

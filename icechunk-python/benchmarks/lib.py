@@ -60,7 +60,7 @@ def get_task_chunk_shape(
         if c == s or left is None:
             task_chunk_shape.append(c)
         else:
-            q, r = divmod(s, c)
+            q, _ = divmod(s, c)
             if q > left:
                 task_chunk_shape.append(left * c)
             else:

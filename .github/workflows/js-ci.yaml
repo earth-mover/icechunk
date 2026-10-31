@@ -1,0 +1,282 @@
+name: JS CI
+
+env:
+  DEBUG: napi:*
+  APP_NAME: icechunk
+  MACOSX_DEPLOYMENT_TARGET: "10.13"
+  CARGO_INCREMENTAL: "1"
+  PIXI_VERSION: "v0.82.1"
+
+on:
+  push:
+    branches:
+      - main
+      - "support/**"
+    paths:
+      - "icechunk/**"
+      - "icechunk-js/**"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "icechunk/**"
+      - "icechunk-js/**"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: stable - ${{ matrix.settings.target }} - node@22
+    runs-on: ${{ matrix.settings.host }}
+    defaults:
+      run:
+        shell: ${{ matrix.settings.shell || 'bash' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            # setup-pixi cannot activate an environment on windows, so the shell
+            # wraps every command. `pwsh -Command {0}` silently runs nothing, so
+            # this uses the Git bash that the runner image ships.
+            shell: pixi run -m icechunk-python/pyproject.toml -e js bash -e {0}
+          - host: macos-latest
+            target: aarch64-apple-darwin
+          - host: ubuntu-latest
+            target: wasm32-wasip1-threads
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: ${{ matrix.settings.host != 'windows-latest' }}
+          manifest-path: icechunk-python/pyproject.toml
+          environments: js
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # pixi.lock pins rustc, so a toolchain bump invalidates the cache
+          key: ${{ matrix.settings.target }}-${{ hashFiles('icechunk-python/pixi.lock') }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Unshadow the MSVC linker
+        # Git bash puts a GNU `link` ahead of MSVC's link.exe on PATH, and rustc
+        # picks the wrong one.
+        if: runner.os == 'Windows'
+        run: rm -f /usr/bin/link.exe
+      # napi builds for the host when no target is given, so the two native
+      # lanes need no target argument at all.
+      - name: Build
+        if: matrix.settings.target != 'wasm32-wasip1-threads'
+        run: just js-build
+      - name: Build wasm
+        if: matrix.settings.target == 'wasm32-wasip1-threads'
+        run: just js-build-wasi
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: |
+            icechunk-js/${{ env.APP_NAME }}.*.node
+            icechunk-js/${{ env.APP_NAME }}.*.wasm
+          if-no-files-found: error
+
+  build-linux-gnu:
+    name: stable - x86_64-unknown-linux-gnu - node@22
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./icechunk-js
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
+      - name: Install rust
+        # the runner image ships an older stable; track the current one
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: x86_64-unknown-linux-gnu
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Setup toolchain
+        # The napi-cross toolchain ships GCC 4.8 which lacks C11
+        # <stdatomic.h>, breaking aws-lc-sys. Use cmake builder with
+        # system GCC override for that crate only.
+        run: |
+          echo "AWS_LC_SYS_CMAKE_BUILDER=1" >> $GITHUB_ENV
+          echo "AWS_LC_SYS_TARGET_CC=gcc" >> $GITHUB_ENV
+          echo "AWS_LC_SYS_TARGET_CXX=g++" >> $GITHUB_ENV
+        shell: bash
+      - name: Install dependencies
+        run: yarn install
+      - name: Build
+        run: yarn build --target x86_64-unknown-linux-gnu --use-napi-cross
+        shell: bash
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bindings-x86_64-unknown-linux-gnu
+          path: |
+            icechunk-js/${{ env.APP_NAME }}.*.node
+            icechunk-js/${{ env.APP_NAME }}.*.wasm
+          if-no-files-found: error
+
+  test-macOS-windows-binding:
+    name: Test bindings on ${{ matrix.settings.target }} - node@22
+    needs:
+      - build
+    defaults:
+      run:
+        shell: ${{ matrix.settings.shell || 'bash' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - host: windows-latest
+            target: x86_64-pc-windows-msvc
+            # setup-pixi cannot activate an environment on windows, so the shell
+            # wraps every command. `pwsh -Command {0}` silently runs nothing, so
+            # this uses the Git bash that the runner image ships.
+            shell: pixi run -m icechunk-python/pyproject.toml -e js bash -e {0}
+          - host: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.settings.host }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: ${{ matrix.settings.host != 'windows-latest' }}
+          manifest-path: icechunk-python/pyproject.toml
+          environments: js
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: bindings-${{ matrix.settings.target }}
+          path: ./icechunk-js
+      - name: Test bindings
+        run: just js-test
+
+  test-linux-binding:
+    name: Test bindings on x86_64-unknown-linux-gnu - node@22
+    needs:
+      - build-linux-gnu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: js
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: bindings-x86_64-unknown-linux-gnu
+          path: ./icechunk-js
+      - name: Test bindings
+        run: just js-test
+
+  test-wasi:
+    name: Test WASI target
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+          environments: js
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: bindings-wasm32-wasip1-threads
+          path: ./icechunk-js
+      - name: Test bindings
+        run: just js-test-wasi
+
+  publish:
+    name: Publish
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./icechunk-js
+    permissions:
+      contents: write # to publish the release
+      id-token: write # for npm provenance attestation
+    needs:
+      - test-macOS-windows-binding
+      - test-linux-binding
+      - test-wasi
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 24
+          cache: yarn
+          cache-dependency-path: icechunk-js/yarn.lock
+      - name: Install dependencies
+        run: yarn install
+      - name: Create npm dirs
+        run: yarn napi create-npm-dirs
+      - name: Include licenses in npm packages
+        run: |
+          cp --remove-destination ../LICENSE ./LICENSE
+          for package_dir in npm/*/; do
+            cp --remove-destination ../LICENSE "${package_dir}LICENSE"
+          done
+      - name: Download all artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          path: ./icechunk-js/artifacts
+      - name: Move artifacts
+        run: yarn artifacts
+      - name: List packages
+        run: ls -R ./npm
+        shell: bash
+      - name: Publish
+        run: |
+          npm config set provenance true
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          VERSION=$(node -p "require('./package.json').version")
+          if echo "$VERSION" | grep -q "-"; then
+            TAG=${VERSION%%-*}; TAG=${VERSION#"$TAG"-}; TAG=${TAG%%.*}
+            npm publish --access public --tag "$TAG"
+          else
+            npm publish --access public
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

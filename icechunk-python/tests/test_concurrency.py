@@ -5,19 +5,20 @@ import time
 import uuid
 from random import randrange
 from threading import Event
+from typing import Any
 
 import pytest
 from termcolor import colored
 
 import icechunk
 import zarr
-from tests.conftest import write_chunks_to_minio
+from tests.conftest import Permission, write_chunks_to_minio
 
 N = 15
 
 
 async def write_to_store(
-    array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier
+    array: "zarr.Array[Any]", x: int, y: int, barrier: asyncio.Barrier
 ) -> None:
     await barrier.wait()
     await asyncio.sleep(random.uniform(0, 0.5))
@@ -25,7 +26,9 @@ async def write_to_store(
     # await asyncio.sleep(0)
 
 
-async def read_store(array: zarr.Array, x: int, y: int, barrier: asyncio.Barrier) -> None:
+async def read_store(
+    array: "zarr.Array[Any]", x: int, y: int, barrier: asyncio.Barrier
+) -> None:
     await barrier.wait()
     while True:
         value = array[x, y]
@@ -48,9 +51,10 @@ async def list_store(store: icechunk.IcechunkStore, barrier: asyncio.Barrier) ->
         await asyncio.sleep(0.1)
 
 
-async def test_concurrency() -> None:
+async def test_concurrency(any_spec_version: int | None) -> None:
     repo = icechunk.Repository.open_or_create(
         storage=icechunk.in_memory_storage(),
+        create_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -93,7 +97,7 @@ async def test_concurrency() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_thread_concurrency() -> None:
+async def test_thread_concurrency(any_spec_version: int | None) -> None:
     """Run multiple threads doing different type of operations for SECONDS_TO_RUN seconds.
 
     The threads execute 5 types of operations: reads, native writes, virtual writes, deletes and lists.
@@ -118,7 +122,7 @@ async def test_thread_concurrency() -> None:
     config = icechunk.RepositoryConfig.default()
     store_config = icechunk.s3_store(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         s3_compatible=True,
@@ -126,23 +130,25 @@ async def test_thread_concurrency() -> None:
     container = icechunk.VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
     config.inline_chunk_threshold_bytes = 0
+    access_key_id, secret_access_key = Permission.MODIFY.keys()
     credentials = icechunk.containers_credentials(
         {
             "s3://testbucket": icechunk.s3_credentials(
-                access_key_id="minio123", secret_access_key="minio123"
+                access_key_id=access_key_id,
+                secret_access_key=secret_access_key,
             )
         }
     )
 
     storage = icechunk.s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
         prefix="multithreaded-test__" + str(time.time()),
-        access_key_id="minio123",
-        secret_access_key="minio123",
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
     )
 
     # Open the store
@@ -150,6 +156,7 @@ async def test_thread_concurrency() -> None:
         storage=storage,
         config=config,
         authorize_virtual_chunk_access=credentials,
+        spec_version=any_spec_version,
     )
 
     session = repo.writable_session("main")
@@ -158,7 +165,7 @@ async def test_thread_concurrency() -> None:
     group = zarr.group(store=store, overwrite=True)
     group.create_array("array", shape=(1_000,), chunks=(1,), dtype="i4", compressors=None)
 
-    def do_virtual_writes(start, stop) -> int:
+    def do_virtual_writes(start: Event, stop: Event) -> int:
         n = 0
         start.wait()
         while not stop.is_set():
@@ -173,7 +180,7 @@ async def test_thread_concurrency() -> None:
             n += 1
         return n
 
-    def do_native_writes(start, stop) -> int:
+    def do_native_writes(start: Event, stop: Event) -> int:
         async def do() -> int:
             n = 0
             while not stop.is_set():
@@ -188,7 +195,7 @@ async def test_thread_concurrency() -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_reads(start, stop) -> int:
+    def do_reads(start: Event, stop: Event) -> int:
         buffer_prototype = zarr.core.buffer.default_buffer_prototype()
 
         async def do() -> int:
@@ -203,7 +210,7 @@ async def test_thread_concurrency() -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_deletes(start, stop) -> int:
+    def do_deletes(start: Event, stop: Event) -> int:
         async def do() -> int:
             n = 0
             while not stop.is_set():
@@ -216,7 +223,7 @@ async def test_thread_concurrency() -> None:
         start.wait()
         return asyncio.run(do())
 
-    def do_lists(start, stop) -> int:
+    def do_lists(start: Event, stop: Event) -> int:
         async def do() -> int:
             n = 0
             while not stop.is_set():
@@ -246,7 +253,7 @@ async def test_thread_concurrency() -> None:
             lists.append(pool.submit(do_lists, start, stop))
 
         start.set()
-        time.sleep(SECONDS_TO_RUN)
+        await asyncio.sleep(SECONDS_TO_RUN)
         stop.set()
 
         virtual_writes_count = sum(future.result() for future in virtual_writes)

@@ -1,1 +1,9 @@
 *.ipynb linguist-detectable=false
+
+# Generated NAPI-RS codes
+icechunk-js/index.js                    linguist-detectable=false
+icechunk-js/index.d.ts                  linguist-detectable=false
+icechunk-js/icechunk.wasi-browser.js    linguist-detectable=false
+icechunk-js/icechunk.wasi.cjs           linguist-detectable=false
+icechunk-js/wasi-worker-browser.mjs     linguist-detectable=false
+icechunk-js/wasi-worker.mjs             linguist-detectable=false

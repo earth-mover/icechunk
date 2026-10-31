@@ -1,30 +1,54 @@
-//! General design:
-//! - Most things are async even if they don't need to be. Async propagates unfortunately. If
-//!   something can be async sometimes it needs to be async always. In our example: fetching from
-//!   storage.
-//! - There is a high level interface that knows about arrays, groups, user attributes, etc. This
-//!   is the [`repository::Repository`] type.
-//! - There is a low level interface that speaks zarr keys and values, and is used to provide the
-//!   zarr store that will be used from python. This is the [`zarr::Store`] type.
-//! - There is a translation language between low and high levels. When user writes to a zarr key,
-//!   we need to convert that key to the language of arrays and groups. This is implemented it the
-//!   [`zarr`] module
-//! - There is an abstract type for loading and saving of the Arrow datastructures.
-//!   This is the [`Storage`] trait. It knows how to fetch and write arrow.
-//!   We have:
-//!     - an in memory implementation
-//!     - an s3 implementation that writes to parquet
-//!     - a caching wrapper implementation
-//! - The datastructures are represented by concrete types in the [`mod@format`] modules.
-//!   These datastructures use Arrow RecordBatches for representation.
+//! A transactional storage engine for Zarr.
+//!
+//! Icechunk provides version-controlled, transactional access to Zarr data on cloud
+//! object storage. It adds a layer of indirection between Zarr keys and on-disk storage,
+//! enabling:
+//!
+//! - **Serializable isolation** - Reads are isolated from concurrent writes and always
+//!   use a committed snapshot. Writes are committed atomically and never partially visible.
+//! - **Time travel** - Previous snapshots remain accessible after new ones are written.
+//! - **Version control** - Repositories support branches (mutable) and tags (immutable)
+//!   that reference snapshots.
+//!
+//! # Core concepts
+//!
+//! A **repository** contains a Zarr hierarchy (groups and arrays) with full version history.
+//! Each update creates a new **snapshot** with a unique ID. **Branches** are mutable
+//! references to snapshots (like Git branches), while **tags** are immutable references
+//! (like Git tags). The default branch is `main`.
+//!
+//! # Key types
+//!
+//! - [`Repository`] - Handle to a versioned data store
+//! - [`session::Session`] - Transaction context for reading/writing data
+//! - [`Store`] - Zarr-compatible key-value interface backed by a Session
+//!
+//! # Architecture
+//!
+//! ```text
+//! Repository ─creates─► Session
+//!                           ├── ChangeSet (uncommitted modifications)
+//!                           └── AssetManager (typed I/O with caching)
+//!                                   └── Storage (S3, GCS, Azure, local, etc.)
+//! ```
+//!
+
+#[cfg(feature = "shuttle")]
+extern crate shuttle_tokio as tokio;
+
 pub mod asset_manager;
 pub mod change_set;
 pub mod cli;
+pub mod compat;
 pub mod config;
 pub mod conflicts;
+pub mod diff;
+pub mod display;
 pub mod error;
-pub mod format;
+pub mod feature_flags;
+pub use icechunk_format as format;
 pub mod inspect;
+pub mod migrations;
 pub mod ops;
 pub mod refs;
 pub mod repository;
@@ -33,79 +57,318 @@ pub mod storage;
 pub mod store;
 #[cfg(test)]
 pub mod strategies;
-mod stream_utils;
 pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};
 pub use repository::Repository;
-pub use storage::{
-    ObjectStorage, Storage, StorageError, new_in_memory_storage,
-    new_local_filesystem_storage, new_s3_storage,
-};
+pub use storage::Attribution;
+#[cfg(feature = "object-store-fs")]
+pub use storage::new_local_filesystem_storage;
+#[cfg(feature = "object-store-s3")]
+pub use storage::new_s3_object_store_storage;
+#[cfg(feature = "s3")]
+pub use storage::new_s3_storage;
+pub use storage::{ObjectStorage, Storage, StorageError, new_in_memory_storage};
 pub use store::Store;
+
+pub use icechunk_types::user_agent;
+pub use icechunk_types::user_agent_product;
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    #[expect(unused_imports)]
+    use rstest::rstest;
+    use rstest_reuse::{self, *};
+
+    use std::sync::Arc;
+
+    use bytes::Bytes;
+
+    use crate::{
+        Repository, Storage, asset_manager::AssetManager, format::Path, storage,
+        storage::logging::LoggingStorage,
+    };
+
+    use crate::format::format_constants::SpecVersionBin;
+
+    #[template]
+    #[rstest]
+    #[case::v1(SpecVersionBin::V1)]
+    #[case::v2(SpecVersionBin::V2)]
+    pub fn spec_version_cases(#[case] spec_version: SpecVersionBin) {}
+
+    /// A V2 repo whose history is `INITIAL -> c0 -> .. -> c4` on `main`, with a
+    /// tag at `c2` and both a tag and a branch at `c4`, so the ancestries of
+    /// the three refs converge.
+    pub(crate) async fn repo_with_converging_refs(
+        backend: &Arc<dyn Storage + Send + Sync>,
+    ) -> Result<Repository, Box<dyn std::error::Error>> {
+        let repo = Repository::create(Arc::clone(backend))
+            .spec_version(SpecVersionBin::V2)
+            .execute()
+            .await?;
+        for i in 0..5u32 {
+            let mut session = repo.writable_session("main").await?;
+            let path: Path = format!("/g{i}").as_str().try_into().unwrap();
+            session.add_group(path, Bytes::new()).await?;
+            let snap = session.commit("commit").max_concurrent_nodes(8).execute().await?;
+            if i == 2 {
+                repo.create_tag("mid", &snap).await?;
+            }
+            if i == 4 {
+                repo.create_tag("tip", &snap).await?;
+                repo.create_branch("other", &snap).await?;
+            }
+        }
+        Ok(repo)
+    }
+
+    /// An `AssetManager` over `backend` that caches nothing, so every fetch
+    /// reaches storage, paired with the [`LoggingStorage`] recording those
+    /// fetches. For tests that count reads.
+    pub(crate) fn logging_asset_manager(
+        backend: &Arc<dyn Storage + Send + Sync>,
+        storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
+    ) -> (Arc<LoggingStorage>, Arc<AssetManager>) {
+        logging_asset_manager_inner(backend, storage_settings, spec_version, None)
+    }
+
+    /// Like [`logging_asset_manager`], but the wrapper claims native id-prefix
+    /// listing whatever the backend says, so `AssetManager` takes the fan-out
+    /// path instead of the single listing it uses for backends that only filter.
+    pub(crate) fn fanning_out_logging_asset_manager(
+        backend: &Arc<dyn Storage + Send + Sync>,
+        storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
+    ) -> (Arc<LoggingStorage>, Arc<AssetManager>) {
+        logging_asset_manager_inner(backend, storage_settings, spec_version, Some(true))
+    }
+
+    fn logging_asset_manager_inner(
+        backend: &Arc<dyn Storage + Send + Sync>,
+        storage_settings: storage::Settings,
+        spec_version: SpecVersionBin,
+        native_id_prefixes: Option<bool>,
+    ) -> (Arc<LoggingStorage>, Arc<AssetManager>) {
+        let logging = LoggingStorage::new(Arc::clone(backend));
+        let logging = Arc::new(match native_id_prefixes {
+            Some(native) => logging.with_native_id_prefixes(native),
+            None => logging,
+        });
+        let logging_dyn: Arc<dyn Storage + Send + Sync> = Arc::clone(&logging) as _;
+        let asset_manager = Arc::new(AssetManager::new_no_cache(
+            logging_dyn,
+            storage_settings,
+            spec_version,
+            1,
+            100,
+        ));
+        (logging, asset_manager)
+    }
+}
 
 mod private {
     /// Used to seal traits we don't want user code to implement, to maintain compatibility.
-    /// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
+    /// See <https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed>
     pub trait Sealed {}
 }
 
 #[cfg(feature = "logs")]
-#[allow(clippy::type_complexity)]
+type BaseSubscriber = tracing_subscriber::layer::Layered<
+    Option<
+        Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>,
+    >,
+    tracing_subscriber::Registry,
+>;
+
+#[cfg(feature = "logs")]
+#[expect(clippy::type_complexity)]
 static LOG_FILTER: std::sync::LazyLock<
     std::sync::Mutex<
         Option<
             tracing_subscriber::reload::Handle<
                 tracing_subscriber::EnvFilter,
                 tracing_subscriber::layer::Layered<
-                    tracing_error::ErrorLayer<tracing_subscriber::Registry>,
-                    tracing_subscriber::Registry,
+                    tracing_error::ErrorLayer<BaseSubscriber>,
+                    BaseSubscriber,
                 >,
             >,
         >,
     >,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
+/// Holds the OTLP tracer provider so spans can be flushed at shutdown.
+#[cfg(feature = "otel")]
+static TRACER_PROVIDER: std::sync::OnceLock<opentelemetry_sdk::trace::SdkTracerProvider> =
+    std::sync::OnceLock::new();
+
+/// Set once `shutdown_telemetry` has run, so repeated calls are a no-op.
+#[cfg(feature = "otel")]
+static TELEMETRY_SHUTDOWN: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Build the OTLP span exporter and tracer when an endpoint is configured.
+///
+/// Returns `None` when no endpoint env var is set (export disabled) or when the
+/// exporter fails to build. The icechunk-specific `ICECHUNK_OTLP_ENDPOINT` takes
+/// precedence over the standard `OTEL_EXPORTER_OTLP_ENDPOINT`, so a global
+/// collector can be overridden just for icechunk.
+///
+/// Must be called from within a Tokio runtime context: the tonic channel spawns
+/// a background driver task on the current runtime, which must stay alive for
+/// spans to be exported and flushed.
+#[cfg(feature = "otel")]
+fn build_otel_tracer() -> Option<opentelemetry_sdk::trace::SdkTracer> {
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::{SpanExporter, WithExportConfig as _};
+    use opentelemetry_sdk::{Resource, trace::SdkTracerProvider};
+
+    let endpoint = std::env::var("ICECHUNK_OTLP_ENDPOINT")
+        .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
+        .ok()?;
+
+    let exporter =
+        match SpanExporter::builder().with_tonic().with_endpoint(endpoint).build() {
+            Ok(exporter) => exporter,
+            Err(err) => {
+                eprintln!("Error building OpenTelemetry exporter: {err}");
+                return None;
+            }
+        };
+
+    let service_name = std::env::var("ICECHUNK_OTEL_SERVICE_NAME")
+        .or_else(|_| std::env::var("OTEL_SERVICE_NAME"))
+        .unwrap_or_else(|_| "icechunk".to_string());
+    let resource = Resource::builder().with_service_name(service_name).build();
+    let provider = SdkTracerProvider::builder()
+        .with_resource(resource)
+        .with_batch_exporter(exporter)
+        .build();
+
+    let tracer = provider.tracer("icechunk");
+    // Keep the provider alive so `shutdown_telemetry` can flush it.
+    let _ = TRACER_PROVIDER.set(provider);
+    Some(tracer)
+}
+
+/// The filter controlling which spans are exported over OTLP. Fixed at startup.
+#[cfg(feature = "otel")]
+fn otel_export_filter() -> tracing_subscriber::EnvFilter {
+    // TODO: allow changing this at runtime
+    std::env::var("ICECHUNK_OTEL_FILTER")
+        .ok()
+        .map(tracing_subscriber::EnvFilter::new)
+        .unwrap_or_else(|| tracing_subscriber::EnvFilter::new("icechunk=info"))
+}
+
+/// Flush and shut down the OpenTelemetry exporter, if one is active.
+///
+/// Call before process exit so the final batch of spans is exported. Idempotent,
+/// and a no-op when the `otel` feature is disabled or no exporter was started.
+#[cfg(feature = "otel")]
+pub fn shutdown_telemetry() {
+    use std::sync::atomic::Ordering;
+    if TELEMETRY_SHUTDOWN.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if let Some(provider) = TRACER_PROVIDER.get()
+        && let Err(err) = provider.shutdown()
+    {
+        eprintln!("Error shutting down telemetry: {err}");
+    }
+}
+
+/// No-op operation for callers with otel feature disabled
+#[cfg(not(feature = "otel"))]
+pub fn shutdown_telemetry() {}
+
+/// Parses `log_filter_directive`.
+/// If it is `None`, reads `ICECHUNK_LOG` with a `warn` default.
+#[cfg(feature = "logs")]
+pub fn log_filter(log_filter_directive: Option<&str>) -> tracing_subscriber::EnvFilter {
+    use tracing::Level;
+    use tracing_subscriber::EnvFilter;
+
+    log_filter_directive.map(EnvFilter::new).unwrap_or_else(|| {
+        EnvFilter::from_env("ICECHUNK_LOG").add_directive(Level::WARN.into())
+    })
+}
+
 #[cfg(feature = "logs")]
 pub fn initialize_tracing(log_filter_directive: Option<&str>) {
-    use tracing::Level;
+    initialize_tracing_with_layer(log_filter_directive, None);
+}
+
+/// Does [`initialize_tracing`]. The first call also puts `layer` at the stack bottom.
+/// Later calls only reload the console filter and drop `layer`.
+#[cfg(feature = "logs")]
+pub fn initialize_tracing_with_layer(
+    log_filter_directive: Option<&str>,
+    layer: Option<
+        Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>,
+    >,
+) {
     use tracing_error::ErrorLayer;
     use tracing_subscriber::{
-        EnvFilter, Layer, Registry, layer::SubscriberExt, reload, util::SubscriberInitExt,
+        Layer as _, Registry, fmt::writer::BoxMakeWriter, layer::SubscriberExt as _,
+        reload, util::SubscriberInitExt as _,
     };
 
     // We have two Layers. One keeps track of the spans to feed the ICError instances.
-    // The other is the one spitting logs to stdout. Filtering only applies to the second Layer.
+    // The other writes human-readable logs to the console (stderr by default, or
+    // stdout if ICECHUNK_LOG_TO_STDOUT is set). Filtering only applies to the second Layer.
 
-    let filter = log_filter_directive.map(EnvFilter::new).unwrap_or_else(|| {
-        EnvFilter::from_env("ICECHUNK_LOG").add_directive(Level::WARN.into())
-    });
+    let filter = log_filter(log_filter_directive);
     match LOG_FILTER.lock() {
         Ok(mut guard) => match guard.as_ref() {
             Some(handle) => {
                 if let Err(err) = handle.reload(filter) {
-                    println!("Error reloading log settings: {err}")
+                    eprintln!("Error reloading log settings: {err}");
                 }
             }
             None => {
                 let (filter, handle) = reload::Layer::new(filter);
                 *guard = Some(handle);
-                let stdout_layer =
-                    tracing_subscriber::fmt::layer().pretty().with_filter(filter);
+
+                let writer = if std::env::var("ICECHUNK_LOG_TO_STDOUT").is_ok() {
+                    BoxMakeWriter::new(std::io::stdout)
+                } else {
+                    BoxMakeWriter::new(std::io::stderr)
+                };
+                let console_layer = tracing_subscriber::fmt::layer()
+                    .pretty()
+                    .with_writer(writer)
+                    .with_filter(filter);
 
                 let error_span_layer = ErrorLayer::default();
 
+                // Appended last so the console filter's `S` type — and thus the
+                // `LOG_FILTER` reload handle stored above — is unchanged. A `None`
+                // layer is a no-op, so "OTel disabled" needs no separate path.
+                #[cfg(feature = "otel")]
+                let otel_layer = build_otel_tracer().map(|tracer| {
+                    tracing_opentelemetry::OpenTelemetryLayer::new(tracer)
+                        .with_filter(otel_export_filter())
+                });
+                #[cfg(not(feature = "otel"))]
+                let otel_layer: Option<
+                    tracing_subscriber::layer::Identity,
+                > = None;
+
                 if let Err(err) = Registry::default()
+                    .with(layer)
                     .with(error_span_layer)
-                    .with(stdout_layer)
+                    .with(console_layer)
+                    .with(otel_layer)
                     .try_init()
                 {
-                    println!("Error initializing logs: {err}");
+                    eprintln!("Error initializing logs: {err}");
                 }
             }
         },
         Err(err) => {
-            println!("Error setting up logs: {err}")
+            eprintln!("Error setting up logs: {err}");
         }
     }
 }

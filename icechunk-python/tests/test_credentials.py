@@ -1,23 +1,28 @@
 import pickle
-import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from icechunk import (
+    AzureCredentials,
+    AzureRefreshableCredential,
     IcechunkError,
     Repository,
     S3Options,
     S3StaticCredentials,
     Storage,
+    azure_credentials,
+    azure_refreshable_credentials,
     s3_refreshable_credentials,
     s3_storage,
 )
+from tests.conftest import Permission
 
 
 def get_good_credentials() -> S3StaticCredentials:
-    return S3StaticCredentials(access_key_id="minio123", secret_access_key="minio123")
+    return S3StaticCredentials(*Permission.MODIFY.keys())
 
 
 def get_bad_credentials() -> S3StaticCredentials:
@@ -31,7 +36,7 @@ def get_bad_credentials() -> S3StaticCredentials:
 def test_refreshable_credentials_grant_access(scatter_initial_credentials: bool) -> None:
     good_storage = s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
@@ -41,7 +46,7 @@ def test_refreshable_credentials_grant_access(scatter_initial_credentials: bool)
     )
     bad_storage = s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
@@ -73,7 +78,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
         with pytest.raises(IcechunkError, match="bad creds"):
             st = s3_storage(
                 region="us-east-1",
-                endpoint_url="http://localhost:9000",
+                endpoint_url="http://localhost:4200",
                 allow_http=True,
                 bucket="testbucket",
                 prefix="this-repo-does-not-exist",
@@ -83,7 +88,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
     else:
         st = s3_storage(
             region="us-east-1",
-            endpoint_url="http://localhost:9000",
+            endpoint_url="http://localhost:4200",
             allow_http=True,
             bucket="testbucket",
             prefix="this-repo-does-not-exist",
@@ -97,7 +102,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
     st = Storage.new_s3(
         config=S3Options(
             region="us-east-1",
-            endpoint_url="http://localhost:9000",
+            endpoint_url="http://localhost:4200",
             allow_http=True,
             force_path_style=True,
         ),
@@ -112,7 +117,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
     st = Storage.new_s3(
         config=S3Options(
             region="us-east-1",
-            endpoint_url="http://localhost:9000",
+            endpoint_url="http://localhost:4200",
             allow_http=True,
             force_path_style=True,
         ),
@@ -121,7 +126,7 @@ def test_refreshable_credentials_errors(scatter_initial_credentials: bool) -> No
         # we intentionally pass something that has the wrong type
         credentials=s3_refreshable_credentials(returns_something_else),  # type: ignore [arg-type]
     )
-    with pytest.raises(IcechunkError, match="cannot be converted"):
+    with pytest.raises(IcechunkError, match="S3StaticCredentials"):
         assert not Repository.exists(st)
 
 
@@ -135,7 +140,7 @@ class ExpirableCredentials:
     def __call__(self) -> S3StaticCredentials:
         try:
             s = self.path.read_text()
-        except Exception:
+        except Exception:  # noqa: BLE001
             s = ""
 
         s += "."
@@ -143,9 +148,7 @@ class ExpirableCredentials:
 
         # The return an expired credential for 3 times, then we return credentials with no expiration
         expires = None if len(s) >= self.expired_times else datetime.now(UTC)
-        return S3StaticCredentials(
-            access_key_id="minio123", secret_access_key="minio123", expires_after=expires
-        )
+        return S3StaticCredentials(*Permission.MODIFY.keys(), expires_after=expires)
 
 
 @pytest.mark.parametrize(
@@ -160,7 +163,7 @@ def test_s3_refreshable_credentials_refresh(
 
     st = s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
@@ -191,6 +194,7 @@ def test_s3_refreshable_credentials_refresh(
 def test_s3_refreshable_credentials_pickle_with_optimization(
     tmp_path: Path,
     scatter_initial_credentials: bool,
+    any_spec_version: int | None,
 ) -> None:
     """Verifies pickled repos don't need to call get_credentials again if scatter_initial_credentials=True"""
     path = tmp_path / "calls.txt"
@@ -198,23 +202,53 @@ def test_s3_refreshable_credentials_pickle_with_optimization(
 
     st = s3_storage(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         force_path_style=True,
         bucket="testbucket",
-        prefix="test_refreshable_credentials_pickle_optimization-"
-        + str(int(time.time() * 1000)),
+        prefix=f"test_refreshable_credentials_pickle_optimization-{uuid.uuid4()}",
         get_credentials=creds_obj,
         scatter_initial_credentials=scatter_initial_credentials,
     )
     # let's create and use a repo
-    repo = Repository.create(storage=st)
+    repo = Repository.create(
+        storage=st,
+        spec_version=any_spec_version,
+    )
     assert Repository.exists(st)
     assert Repository.exists(st)
 
     # now we pickle it, use the copy, and check get_credentials is not called again
     repo = pickle.loads(pickle.dumps(repo))
-    repo.ancestry(branch="main")
+    list(repo.ancestry(branch="main"))
 
     called_only_once = path.read_text() == "."
     assert called_only_once == scatter_initial_credentials
+
+
+def get_azure_bearer() -> AzureRefreshableCredential.BearerToken:
+    return AzureRefreshableCredential.BearerToken("token", expires_after=None)
+
+
+@pytest.mark.parametrize(
+    "scatter_initial_credentials",
+    [False, True],
+)
+def test_azure_refreshable_credentials_accept_variant_factory(
+    scatter_initial_credentials: bool,
+) -> None:
+    """Regression for #2137: mypy rejected a factory returning a concrete variant."""
+    assert isinstance(get_azure_bearer(), AzureRefreshableCredential)
+    creds = azure_refreshable_credentials(
+        get_azure_bearer, scatter_initial_credentials=scatter_initial_credentials
+    )
+    assert isinstance(creds, AzureCredentials.Refreshable)
+    any_creds = azure_credentials(
+        get_credentials=get_azure_bearer,
+        scatter_initial_credentials=scatter_initial_credentials,
+    )
+    assert isinstance(any_creds, AzureCredentials.Refreshable)
+    assert isinstance(
+        AzureCredentials.Refreshable(pickle.dumps(get_azure_bearer), get_azure_bearer()),
+        AzureCredentials.Refreshable,
+    )

@@ -4,9 +4,10 @@ name: Codespell
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'support/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'support/**']
+  merge_group:
 
 permissions:
   contents: read
@@ -18,8 +19,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Annotate locations with typos
-        uses: codespell-project/codespell-problem-matcher@v1.2.0
+        uses: codespell-project/codespell-problem-matcher@9ba2c57125d4908eade4308f32c4ff814c184633 # v1.2.0
       - name: Codespell
-        uses: codespell-project/actions-codespell@v2
+        uses: codespell-project/actions-codespell@8f01853be192eb0f849a5c7d721450e7a467c579 # v2.2
+        with:
+          skip: .git*,*.svg,*.lock,*lock.json,*.css,.codespellrc,*.cjs,*/assets/illustrated/*
+          ignore_words_list: crate,firs,anc,asend
+          check_hidden: true

@@ -1,5 +1,5 @@
 #![allow(clippy::panic, clippy::unwrap_used, clippy::expect_used)]
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use icechunk::{
@@ -9,7 +9,7 @@ use icechunk::{
     session::{Session, SessionError},
     storage::new_in_memory_storage,
 };
-use itertools::Itertools;
+use itertools::Itertools as _;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,13 +21,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let storage: Arc<dyn Storage + Send + Sync> = Arc::new(InMemoryStorage::new());
 let storage: Arc<dyn Storage + Send + Sync> =
     Arc::new(MemCachingStorage::new(storage, 100_000_000));
-let mut ds = Repository::create(Arc::clone(&storage));
+let repo = Repository::create(Arc::clone(&storage)).execute().await?;
+let mut ds = repo.writable_session("main").await?;
 ```
 "#,
     );
 
     let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
-    let repo = Repository::create(None, Arc::clone(&storage), HashMap::new()).await?;
+    let repo = Repository::create(Arc::clone(&storage)).execute().await?;
     let mut ds = repo.writable_session("main").await?;
 
     println!();
@@ -102,11 +103,11 @@ ds.add_array(array1_path.clone(), zarr_meta1).await?;
     print_nodes(&ds).await?;
 
     println!("## Committing");
-    let v1_id = ds.commit("some message", Default::default()).await?;
+    let v1_id = ds.commit("some message").max_concurrent_nodes(8).execute().await?;
     println!(
         r#"
 ```
-ds.commit("some message", Default::default()).await?;
+ds.commit("some message").execute().await?;
 => {v1_id:?}
 ```
  "#
@@ -148,11 +149,11 @@ let chunk = ds.get_chunk_ref(&array1_path, &ChunkIndices(vec![0])).await.unwrap(
 
     println!();
     println!("## Committing");
-    let v2_id = ds.commit("a message", Default::default()).await?;
+    let v2_id = ds.commit("a message").max_concurrent_nodes(8).execute().await?;
     println!(
         r#"
 ```
-ds.flush("a message", Default::default()).await?;
+ds.commit("a message").anonymous().execute().await?;
 => {v2_id:?}
 ```
  "#
@@ -201,11 +202,11 @@ ds.set_chunk(
 
     println!();
     println!("## Committing");
-    let v3_id = ds.commit("commit", Default::default()).await?;
+    let v3_id = ds.commit("commit").max_concurrent_nodes(8).execute().await?;
     println!(
         r#"
 ```
-ds.flush("commit", Default::default()).await?;
+ds.commit("commit").anonymous().execute().await?;
 => {v3_id:?}
 ```
  "#
@@ -237,7 +238,7 @@ let ds = Repository::update(Arc::clone(&storage), ObjectId::from("{v2_id:?}"));
 async fn print_nodes(ds: &Session) -> Result<(), SessionError> {
     println!("### List of nodes");
     let rows = ds
-        .list_nodes()
+        .list_nodes(&Path::root())
         .await?
         .map(|n| n.unwrap())
         .sorted_by_key(|n| n.path.clone())

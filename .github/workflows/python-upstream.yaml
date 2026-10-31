@@ -4,212 +4,455 @@ on:
   push:
     branches:
       - main
+      - "support/**"
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+  merge_group:
   schedule:
     - cron: "0 0 * * *" # Daily “At 00:00” UTC
   workflow_dispatch:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # event_name keeps a push to main from cancelling the running nightly
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  issues: write
 
-defaults:
-  run:
-    working-directory: ./icechunk-python
+env:
+  PIXI_VERSION: "v0.82.1"
+  # Title of the issue the pytest reporter keeps up to date. Pinned here (it is
+  # also the action's default) so the comment and close steps below can find that issue.
+  UPSTREAM_ISSUE_TITLE: "⚠️ Nightly upstream-dev CI failed ⚠️"
+  # Titles of the issues the setup, mypy and xarray backends reporters keep up to date
+  SETUP_ISSUE_TITLE: "Nightly upstream dependency installation failed"
+  MYPY_ISSUE_TITLE: "Nightly MyPy type checking failed with upstream dependencies"
+  XARRAY_ISSUE_TITLE: "Nightly Xarray backends tests failed"
 
 jobs:
-  build:
-    name: upstream-dev
-    runs-on: ubuntu-latest
+  build-wheels:
+    name: build-wheels
+    # Two jobs wait on this compile, so it gets the paid 8-core runner; forks do not
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'ubuntu24-8-core-amd64' }}
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Install Just
-        run: sudo snap install --edge --classic just
-      - name: Stand up MinIO
-        run: |
-          docker compose up -d minio
-
-      - name: Wait for MinIO to be ready
-        run: |
-          for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: '3.13'
+          persist-credentials: false
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
 
+      # ci-wheel, as in python-check: these jobs test compatibility, not speed,
+      # and it builds much faster than the release profile
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        run: just profile=ci-wheel build-wheels
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          working-directory: icechunk-python
-          # target: ${{ matrix.platform.target }}
-          args: --release --out dist --find-interpreter
-          # manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
+          name: upstream-wheels
+          path: icechunk-python/dist
+
+  build:
+    name: upstream-dev
+    needs: [build-wheels]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      setup-outcome: ${{ steps.setup.outcome }}
+      mypy-outcome: ${{ steps.mypy.outcome }}
+      pytest-outcome: ${{ steps.pytest-icechunk.outcome }}
+    if: ${{
+      (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
+      || github.event_name == 'workflow_dispatch'
+      || github.event_name == 'schedule'
+      }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Stand up RustFS
+        run: just rustfs-up
+
+      - name: Wait for RustFS to be ready
+        run: just rustfs-wait
+
+      - name: Download wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: upstream-wheels
+          path: icechunk-python/dist
 
       - name: setup
-        shell: bash
-        working-directory: icechunk-python
+        id: setup
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          uv pip install --group upstream --pre
-          uv pip install icechunk --no-deps --find-links dist --force-reinstall --pre
-          uv pip list
+          just python-upstream-setup
 
       - name: mypy
-        shell: bash
-        working-directory: icechunk-python
+        id: mypy
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          mypy python
+          just python-upstream-mypy
 
-      - name: Restore cached hypothesis directory
+      - name: Restore cached hypothesis examples
         id: restore-hypothesis-cache
-        uses: actions/cache/restore@v4
+        if: always() && github.ref == 'refs/heads/main'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: icechunk-python/.hypothesis/
+          path: icechunk-python/.hypothesis/examples/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            cache-hypothesis-
+            cache-hypothesis-${{ runner.os }}-
 
       - name: describe environment
-        shell: bash
-        working-directory: icechunk-python
+        if: steps.setup.outcome == 'success'
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip list
+          just python-upstream-describe
 
       - name: pytest
-        id: status
-        shell: bash
-        working-directory: icechunk-python
+        id: pytest-icechunk
+        if: steps.setup.outcome == 'success'
+        env:
+          HYPOTHESIS_EXPERIMENTAL_OBSERVABILITY: "1"
+          HYPOTHESIS_PROFILE: ${{ github.event_name == 'pull_request' && 'ci' || 'nightly' }}
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pytest -n 4 --report-log output-pytest-log.jsonl
+          # later flag wins over the recipe's default --hypothesis-profile=nightly
+          just python-upstream-pytest "--hypothesis-profile=$HYPOTHESIS_PROFILE"
 
       # explicitly save the cache so it gets updated, also do this even if it fails.
-      - name: Save cached hypothesis directory
+      - name: Save cached hypothesis examples
         id: save-hypothesis-cache
-        if: always()
-        uses: actions/cache/save@v4
+        if: always() && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: icechunk-python/.hypothesis/
+          path: icechunk-python/.hypothesis/examples/
           key: cache-hypothesis-${{ runner.os }}-${{ github.run_id }}
 
-      - name: Generate and publish the report
-        if: |
-          failure()
-          && steps.status.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
-        uses: xarray-contrib/issue-from-pytest-log@v1
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: upstream-dev-logs
+          path: |
+            icechunk-python/setup-output.log
+            icechunk-python/mypy-output.log
+            icechunk-python/output-pytest-log.jsonl
+          if-no-files-found: ignore
+
+  build-report:
+    name: upstream-dev-report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: build
+    permissions:
+      issues: write # needed to create/update issues on nightly failures
+    if: |
+      always()
+      && (needs.build.outputs.setup-outcome == 'failure' || needs.build.outputs.mypy-outcome == 'failure' || needs.build.outputs.pytest-outcome == 'failure')
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: upstream-dev-logs
+          path: icechunk-python
+
+      - name: Create or update setup failure issue
+        if: needs.build.outputs.setup-outcome == 'failure'
+        shell: bash
+        run: |
+          # Read the template and setup output
+          template=$(cat .github/setup-failure-template.md)
+
+          setup_output="No setup output captured"
+          if [ -f "icechunk-python/setup-output.log" ]; then
+            setup_output=$(cat icechunk-python/setup-output.log)
+          fi
+
+          # Replace placeholders
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
+          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
+          issue_body="${issue_body//\{\{SETUP_OUTPUT\}\}/$setup_output}"
+
+          # Check for existing open issue with same title
+          issue_title="$SETUP_ISSUE_TITLE"
+          existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing_issue" ]; then
+            echo "Found existing open issue #$existing_issue, updating it..."
+            echo "$issue_body" | gh issue edit "$existing_issue" --body-file -
+            echo "Updated existing issue #$existing_issue"
+          else
+            echo "No existing open issue found, creating new one..."
+            echo "$issue_body" | gh issue create \
+              --title "$issue_title" \
+              --body-file - \
+              --label "CI"
+            echo "Created new issue"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Create or update mypy failure issue
+        if: needs.build.outputs.mypy-outcome == 'failure'
+        shell: bash
+        run: |
+          # Read the template and mypy output
+          template=$(cat .github/mypy-failure-template.md)
+
+          mypy_output="No mypy output captured"
+          if [ -f "icechunk-python/mypy-output.log" ]; then
+            mypy_output=$(cat icechunk-python/mypy-output.log)
+          fi
+
+          # Replace placeholders
+          issue_body="${template//\{\{WORKFLOW\}\}/$WORKFLOW_NAME}"
+          issue_body="${issue_body//\{\{RUN_ID\}\}/$RUN_ID}"
+          issue_body="${issue_body//\{\{RUN_URL\}\}/$RUN_URL}"
+          issue_body="${issue_body//\{\{DATE\}\}/$(date -u)}"
+          issue_body="${issue_body//\{\{MYPY_OUTPUT\}\}/$mypy_output}"
+
+          # Check for existing open issue with same title
+          issue_title="$MYPY_ISSUE_TITLE"
+          existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
+
+          if [ -n "$existing_issue" ]; then
+            echo "Found existing open issue #$existing_issue, updating it..."
+            echo "$issue_body" | gh issue edit "$existing_issue" --body-file -
+            echo "Updated existing issue #$existing_issue with latest mypy output"
+          else
+            echo "No existing open issue found, creating new one..."
+            echo "$issue_body" | gh issue create \
+              --title "$issue_title" \
+              --body-file - \
+              --label "CI"
+            echo "Created new issue"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.workflow }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: Generate and publish the pytest report
+        if: needs.build.outputs.pytest-outcome == 'failure'
+        uses: xarray-contrib/issue-from-pytest-log@35b4e0a9e06f8e7e261778289cf4b968b722662d # v1.6.2
         with:
           log-path: icechunk-python/output-pytest-log.jsonl
+          issue-title: ${{ env.UPSTREAM_ISSUE_TITLE }}
 
+        # Every reporter above rewrites an existing issue's *body*, which
+        # notifies nobody: a nightly that has been failing for a week reads
+        # exactly like one that never failed. Comment as well, so whoever
+        # watches the issue hears about it.
+      - name: Comment on the failure issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
+          MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
+          PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
+        run: |
+          comment_on() {
+            number=$(gh issue list --state open --limit 200 --json number,title |
+              jq -r --arg t "$1" 'map(select(.title == $t)) | .[0].number // empty')
+            if [ -z "$number" ]; then
+              echo "no open issue titled '$1'"
+              return
+            fi
+            gh issue comment "$number" --body \
+              "Failed again in tonight's run: $RUN_URL — the issue body has the current failures."
+          }
+          [ "$SETUP_OUTCOME" != failure ] || comment_on "$SETUP_ISSUE_TITLE"
+          [ "$MYPY_OUTCOME" != failure ] || comment_on "$MYPY_ISSUE_TITLE"
+          [ "$PYTEST_OUTCOME" != failure ] || comment_on "$UPSTREAM_ISSUE_TITLE"
 
   xarray-backends:
     name: xarray-tests-upstream
+    needs: [build-wheels]
     runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      pytest-outcome: ${{ steps.pytest-xarray-backends.outcome }}
     if: ${{
       (contains(github.event.pull_request.labels.*.name, 'test-upstream') && github.event_name == 'pull_request')
       || github.event_name == 'workflow_dispatch'
       || github.event_name == 'schedule'
       }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: "icechunk"
+          persist-credentials: false
 
-      - name: Stand up MinIO
-        working-directory: icechunk
-        run: |
-          docker compose up -d minio
-
-      - name: Wait for MinIO to be ready
-        working-directory: icechunk
-        run: |
-          for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-
-      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
         with:
-          repository: "pydata/xarray"
-          path: "xarray"
-          fetch-depth: 0 # Fetch all history for all branches and tags.
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
 
-      - uses: actions/setup-python@v5
+      - name: Download wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          python-version: '3.11'
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          working-directory: icechunk/icechunk-python
-          args: --release --out dist --find-interpreter
+          name: upstream-wheels
+          path: icechunk-python/dist
 
       - name: setup
-        shell: bash
-        working-directory: icechunk/icechunk-python
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          uv pip install icechunk --group upstream --find-links dist --pre
-          uv pip install pytest-mypy-plugins
-          uv pip list
+          just xarray-upstream-setup
+
+      - name: Stand up RustFS
+        run: just rustfs-up
+
+      - name: Wait for RustFS to be ready
+        run: just rustfs-wait
 
       - name: pytest
-        id: status
-        shell: bash
-        working-directory: icechunk/icechunk-python
+        id: pytest-xarray-backends
         env:
           ICECHUNK_XARRAY_BACKENDS_TESTS: 1
         run: |
-          set -e
-          python3 -m venv .venv
-          source .venv/bin/activate
-          # pass xarray's pyproject.toml so that pytest can find the `flaky` fixture
-          pytest -c=../../xarray/pyproject.toml -W ignore tests/run_xarray_backends_tests.py --report-log output-pytest-log.jsonl
+          just xarray-upstream-pytest
 
-      - name: Generate and publish the report
-        if: |
-          failure()
-          && steps.status.outcome == 'failure'
-          && github.event_name == 'schedule'
-          && github.repository_owner == 'earth-mover'
-        uses: xarray-contrib/issue-from-pytest-log@v1
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          log-path: icechunk/icechunk-python/output-pytest-log.jsonl
-          issue-title: "Nightly Xarray backends tests failed"
+          name: xarray-backends-logs
+          path: icechunk-python/output-pytest-log.jsonl
+          if-no-files-found: ignore
+
+  xarray-report:
+    name: xarray-tests-upstream-report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: xarray-backends
+    permissions:
+      issues: write # needed to create/update issues on nightly failures
+    if: |
+      always()
+      && needs.xarray-backends.outputs.pytest-outcome == 'failure'
+      && github.event_name == 'schedule'
+      && github.repository_owner == 'earth-mover'
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: xarray-backends-logs
+          path: xarray-backends-logs
+
+      - name: Generate and publish the xarray backends report
+        uses: xarray-contrib/issue-from-pytest-log@35b4e0a9e06f8e7e261778289cf4b968b722662d # v1.6.2
+        with:
+          log-path: xarray-backends-logs/output-pytest-log.jsonl
+          issue-title: ${{ env.XARRAY_ISSUE_TITLE }}
+
+        # The report only rewrites the issue body, which notifies nobody
+      - name: Comment on the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          number=$(gh issue list --state open --limit 200 --json number,title |
+            jq -r --arg t "$XARRAY_ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "no open issue for the xarray backends failure"
+            exit 0
+          fi
+          gh issue comment "$number" --body \
+            "Failed again in tonight's run: $RUN_URL — the issue body has the current failures."
+
+  close-issues:
+    name: nightly-close
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    needs: [build, xarray-backends]
+    permissions:
+      issues: write # needed to close the failure issues once the nightly passes again
+    if: always() && github.event_name == 'schedule' && github.repository_owner == 'earth-mover'
+    steps:
+      - name: Close the failure issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
+          MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
+          PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
+          XARRAY_OUTCOME: ${{ needs.xarray-backends.outputs.pytest-outcome }}
+        run: |
+          close() {
+            number=$(gh issue list --state open --limit 200 --json number,title |
+              jq -r --arg t "$1" 'map(select(.title == $t)) | .[0].number // empty')
+            if [ -z "$number" ]; then
+              echo "no open issue titled '$1'"
+              return
+            fi
+            gh issue close "$number" --comment \
+              "The nightly passed this step again: $RUN_URL. Closing. A later failure opens a new issue."
+          }
+          [ "$SETUP_OUTCOME" != success ] || close "$SETUP_ISSUE_TITLE"
+          [ "$MYPY_OUTCOME" != success ] || close "$MYPY_ISSUE_TITLE"
+          [ "$PYTEST_OUTCOME" != success ] || close "$UPSTREAM_ISSUE_TITLE"
+          [ "$XARRAY_OUTCOME" != success ] || close "$XARRAY_ISSUE_TITLE"
+
+    # The jobs above are `continue-on-error` so upstream breakage does not block
+    # anything, which also leaves the run itself green: a nightly failing for days
+    # is invisible in the Actions list. Reflect the outcome in the run status.
+  nightly-status:
+    name: nightly-status
+    runs-on: ubuntu-latest
+    needs: [build-wheels, build, xarray-backends]
+    if: always() && github.event_name == 'schedule'
+    steps:
+      - name: Fail the run if any nightly job failed
+        env:
+          SETUP_OUTCOME: ${{ needs.build.outputs.setup-outcome }}
+          MYPY_OUTCOME: ${{ needs.build.outputs.mypy-outcome }}
+          PYTEST_OUTCOME: ${{ needs.build.outputs.pytest-outcome }}
+          XARRAY_OUTCOME: ${{ needs.xarray-backends.outputs.pytest-outcome }}
+          # A job can also die before those steps run — a broken wheel build, say
+          WHEELS_RESULT: ${{ needs.build-wheels.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          XARRAY_RESULT: ${{ needs.xarray-backends.result }}
+        run: |
+          failed=""
+          [ "$SETUP_OUTCOME" != failure ] || failed="$failed setup"
+          [ "$MYPY_OUTCOME" != failure ] || failed="$failed mypy"
+          [ "$PYTEST_OUTCOME" != failure ] || failed="$failed pytest"
+          [ "$XARRAY_OUTCOME" != failure ] || failed="$failed xarray-backends"
+          [ "$WHEELS_RESULT" = success ] || failed="$failed build-wheels"
+          [ "$BUILD_RESULT" != failure ] || failed="$failed upstream-dev-job"
+          [ "$XARRAY_RESULT" != failure ] || failed="$failed xarray-backends-job"
+          if [ -n "$failed" ]; then
+            echo "::error::nightly upstream-dev failed:$failed"
+            exit 1
+          fi
+          echo "nightly upstream-dev is clean"

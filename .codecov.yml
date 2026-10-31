@@ -1,0 +1,29 @@
+codecov:
+  require_ci_to_pass: yes
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+    patch:
+      default:
+        target: auto
+        threshold: 0%
+        base: auto
+
+ignore:
+  - "icechunk-python/tests/"
+  - "icechunk-python/integration_tests/"
+  - "icechunk/tests/"
+  - "icechunk/examples/"
+  - "icechunk-macros/"
+  - "**/*test*.rs"
+  - "design-docs/"
+
+comment:
+  # flags surfaces the rust/python split; diff shows patch coverage
+  layout: "condensed_header, diff, flags, condensed_files"
+  behavior: default
+  require_changes: false

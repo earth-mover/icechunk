@@ -1,5 +1,581 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
+  - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.
+  - A commit or flush checks the flags for its session content before it uploads data.
+  - With `commit` disabled, `Repository.writable_session` and `Repository.rearrange_session` raise `IcechunkError`.
+  - An expiration that deletes expired branches or tags also needs the `delete_branch` or `delete_tag` flag.
+  - An array resize that removes chunks needs `update_chunks`. Chunk writes to a new array need only `create_new_nodes`.
+  - Each flag guards one operation. To freeze a branch, also disable `reset_branch`, `delete_branch`, `create_branch` and `move_node`. The design doc 013 lists the flag interactions.
+- New environment variable `ICECHUNK_TLS_CA_FILE`: when set to a PEM file of CA certificates, Icechunk trusts only those certificates for all storage types. Use it in processes that cannot use the system trust store, such as a sandboxed macOS process. TLS certificate errors now include a hint that mentions the variable ([#2517](https://github.com/earth-mover/icechunk/pull/2517)).
+- `StorageTimeoutSettings` now applies to the `object_store` backends (`gcs_storage`, `azure_storage`, `http_storage` and `s3_object_store_storage`). They honor `connect_timeout_ms` and `operation_attempt_timeout_ms`, which take precedence over the same options in the backend `config`. `read_timeout_ms` and `operation_timeout_ms` still apply only to the S3 client.
+- A timeout of 0 in `StorageTimeoutSettings` disables that timeout, including the client default.
+
+### Fixes
+
+- The S3 client (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) has a default per-attempt timeout of 10 minutes. A server that accepted a request and never answered used to make the request wait forever. Now the attempt fails and is retried. Set `operation_attempt_timeout_ms` to change the limit, or to 0 to disable it.
+
+## Python Icechunk Library 2.3.1
+
+### Features
+
+- `set_logs_destination("python")` sends Icechunk logs to the Python `logging` module instead of the console. Each event goes to the logger for its Rust module, for example `icechunk.repository.builder`. `set_logs_filter` and `ICECHUNK_LOG` apply to the active destination. To set the destination at import, use `ICECHUNK_LOG_DESTINATION`. `ICECHUNK_PYTHON_LOG_QUEUE_SIZE` sets how many records can wait for slow handlers ([#2513](https://github.com/earth-mover/icechunk/pull/2513)).
+- The `icechunk` command line tool has two new subcommands. `icechunk inspect <repo> [<ref>]` prints a snapshot as JSON. `icechunk diff <repo> <from> <to>` prints one line per change between two refs ([#2467](https://github.com/earth-mover/icechunk/pull/2467)).
+- Wheels are published for free threaded Python 3.15, with the `abi3t` stable ABI ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
+
+### Fixes
+
+- `Repository.ops_log_async` and `Repository.async_ancestry` no longer block the asyncio event loop. They used to read the repo info file from storage before they returned the iterator. That read now happens on the first iteration, so storage errors are raised there instead of at the call. The same applies to `Repository.ops_log` and `Repository.ancestry`, which share the implementation.
+- Repo info updates honor the `max_tries` setting in `RepoUpdateRetryConfig` and no longer add 5 extra retries. Unset fields use the repo update defaults instead of the storage retry defaults ([#2475](https://github.com/earth-mover/icechunk/pull/2475)).
+- The type stubs declare `AzureRefreshableCredential.BearerToken`, `.SasToken` and `.AccessKey` as subclasses of `AzureRefreshableCredential`, as they are at runtime ([#2137](https://github.com/earth-mover/icechunk/issues/2137), [#2461](https://github.com/earth-mover/icechunk/pull/2461)).
+- `SpecVersion` and `ConflictType` use the default enum `repr()` ([#2472](https://github.com/earth-mover/icechunk/pull/2472)).
+
+### Security
+
+- Updated `rustls`, `rustls-webpki` and `webpki-root-certs` for RUSTSEC-2026-0346, -0347, -0348, -0349, -0382 and -0383. The S3 client no longer includes the old `rustls` 0.21 TLS stack ([#2489](https://github.com/earth-mover/icechunk/pull/2489), [#2497](https://github.com/earth-mover/icechunk/pull/2497)).
+
+## Python Icechunk Library 2.3.0
+
+### Features
+
+- Requests icechunk makes to the object store now identify themselves in the `User-Agent` header: the product token is `icechunk/<version>`,
+chunk requests add `array=<path>; chunk=<coords>` and manifest requests add `array=<path>`. `Repository.create`, `open` and
+`open_or_create` accept `attribution=Attribution(client=..., workload=..., principal=...)` to add caller labels to every request
+([#1799](https://github.com/earth-mover/icechunk/issues/1799), [#1153](https://github.com/earth-mover/icechunk/issues/1153)). With `Attribution(client="weatherlib/0.9", workload="nightly-ingest", principal="u_123")`, a chunk read on S3 sends:
+
+  ```
+  aws-sdk-rust/1.3.14 os/linux lang/rust/1.98.0 weatherlib/0.9 icechunk/2.3.0 (workload=nightly-ingest; principal=u_123; array=g/temperature; chunk=0/1/2)
+  ```
+
+### Fixes
+
+- `storage_class`, `metadata_storage_class` and `chunks_storage_class` now apply to the `object_store` backends — `gcs_storage`, `azure_storage` and `s3_object_store_storage`. The value is passed to the provider unchanged, so use its own names ([#904](https://github.com/earth-mover/icechunk/issues/904), [#2364](https://github.com/earth-mover/icechunk/issues/2364)).
+
+### Performance
+
+- Decoded virtual chunk locations no longer keep a 1 KiB decompression buffer each, which cuts memory when garbage collection and chunk statistics walk manifests with many virtual chunks ([#2436](https://github.com/earth-mover/icechunk/pull/2436)).
+
+### Breaking changes
+
+- Rust only: the minimum supported Rust version is 1.95.0 ([#2443](https://github.com/earth-mover/icechunk/pull/2443)).
+- Rust only: `Repository::open`, `Repository::create` and `Repository::open_or_create` take only the storage and return a `RepositoryBuilder`. Optional settings are set by methods on the builder, followed by `.execute().await`. Python and JavaScript APIs are unchanged ([#2445](https://github.com/earth-mover/icechunk/pull/2445)).
+
+## Python Icechunk Library 2.3.0a1
+
+### Features
+
+- Garbage collection and chunk statistics warn when the open file limit is too low ([#2413](https://github.com/earth-mover/icechunk/pull/2413)).
+- Garbage collection treats store throttling as back pressure. A congestion controller adapts the number of deletes in flight instead of failing the run ([#2408](https://github.com/earth-mover/icechunk/pull/2408)).
+- Garbage collection stops after `max_consecutive_delete_failures` delete batches fail in a row. Phases that depend on a failed phase are skipped and reported in `GCSummary.skipped_phases` ([#2405](https://github.com/earth-mover/icechunk/pull/2405)).
+- Manifest walks limit the memory of decoded manifests with a second budget, 4 GiB by default ([#2407](https://github.com/earth-mover/icechunk/pull/2407)).
+- Wheels are published for free threaded Python 3.14 ([#2421](https://github.com/earth-mover/icechunk/pull/2421)).
+
+### Performance
+
+- `Session.fork` on a session with no changes (the most common case) no longer writes a snapshot. This removes a full snapshot write and a repo metadata update from every fork of a clean session.
+- The snapshot a fork is based on is no longer recorded in the repo metadata.
+- Garbage collection and chunk statistics share a parallel manifest walker. Fetch, decode and per manifest work run in separate worker pools ([#2404](https://github.com/earth-mover/icechunk/pull/2404)).
+- Object listing runs on a pool of tasks and deletes run on their own task. On an 8 core in-region instance against S3, listing rises from 130k to about 800k keys per second. A new `max_concurrent_listings` setting limits the pool ([#2406](https://github.com/earth-mover/icechunk/pull/2406)).
+- The garbage collection deleter absorbs completed batches while it waits for the collector ([#2415](https://github.com/earth-mover/icechunk/pull/2415)).
+- Nodes are decoded only when they are needed ([#2395](https://github.com/earth-mover/icechunk/pull/2395)).
+
+### Breaking changes
+
+- `ForkSession.flush` now raises. Merge the fork back into the session that created it with `Session.merge` and flush that one instead. We don't expect anybody was relying on this.
+
+## Python Icechunk Library 2.2.2
+
+### Fixes
+
+- Fix a garbage collection deadlock on machines with few CPUs ([#2389](https://github.com/earth-mover/icechunk/pull/2389)).
+
+## Python Icechunk Library 2.2.1
+
+### Features
+
+- `icechunk-js` can read HTTP(S) virtual chunks in the browser via `Repository.setHttpVirtualChunkFetcher()` and `createHttpVirtualChunkFetcher()` ([#2363](https://github.com/earth-mover/icechunk/pull/2363)).
+
+### Fixes
+
+- Update tests to deal with Tigris and other stores listing whole-second timestamps ([#2368](https://github.com/earth-mover/icechunk/pull/2368)).
+- `reset_branch` conflict errors report the actual branch tip instead of the expected parent twice ([#2360](https://github.com/earth-mover/icechunk/pull/2360)).
+- Repositories with more than one million snapshots are readable again ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+- Metadata files that could not be read back are no longer written: large files are validated before upload ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+
+### Performance
+
+- Speed up manifest metadata lookups during commits, reads, and manifest preloading in repositories with many manifests by using binary search instead of linear scans ([#2381](https://github.com/earth-mover/icechunk/pull/2381)).
+- Garbage collection lists 32 ways in parallel on S3 and GCS, one listing per possible first character of an object id. Listing a 2.8 million object repository drops from 299 s to 15 s. Azure and local storage keep a single listing ([#2371](https://github.com/earth-mover/icechunk/pull/2371), [#2385](https://github.com/earth-mover/icechunk/pull/2385)).
+- Garbage collection fetches each snapshot once, concurrently, and lists the snapshots prefix once ([#2358](https://github.com/earth-mover/icechunk/pull/2358)).
+- Branch and tag lookups no longer deserialize every snapshot's metadata ([#2377](https://github.com/earth-mover/icechunk/pull/2377)).
+- `upgrade_icechunk_repository` walks the v1 ancestry from prefetched snapshot infos. A 285,824 snapshot migration drops from 451 s to 209 s ([#2383](https://github.com/earth-mover/icechunk/pull/2383)).
+- Repo info accessors no longer re-validate the whole file on every call ([#2388](https://github.com/earth-mover/icechunk/pull/2388)).
+
+## Python Icechunk Library 2.2.0
+
+### Features
+
+- The `inspect_*` methods now report a `header` for the file they read: the library version that wrote it, and that file's spec version, file type and compression ([#2347](https://github.com/earth-mover/icechunk/pull/2347)).
+- Add `hf_storage`, a preset for Hugging Face Storage Buckets. It takes the bucket's `namespace`. It sets the gateway endpoint, the region and path-style URLs. The gateway discards user metadata, so Icechunk cannot recover from a lost response to a conditional write ([#2346](https://github.com/earth-mover/icechunk/pull/2346)).
+- Add `branch` (`list`, `create`, `delete`), `tag` (`list`, `create`, `delete`) and `ancestry` subcommands to the `icechunk` command line interface ([#2299](https://github.com/earth-mover/icechunk/pull/2299)).
+
+### Fixes
+
+- Fix garbage collection deleting still-referenced transaction logs when the host and object-store clocks are skewed ([#2310](https://github.com/earth-mover/icechunk/pull/2310)).
+- Deleting a chunk key that cannot exist (coordinates outside the chunk grid, missing node, or a group path) is now a no-op instead of raising, matching zarr-python's stores. Writing a chunk outside the grid is still rejected ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
+- `to_icechunk` no longer passes `synchronizer` and `zarr_version` to xarray's `ZarrStore.open_group`; xarray removed both parameters and passing them made `to_icechunk` fail with a `TypeError` on xarray development versions ([#2312](https://github.com/earth-mover/icechunk/pull/2312)).
+- Writing a chunk with length 0 is now rejected instead of being committed. A chunk must decode to the full chunk shape, so no valid chunk is ever zero bytes long, and such a chunk could only fail once it was read back — long after the commit that introduced it. This is how a sparse GeoTIFF's unstored tiles (`offset = 0, byteCount = 0`) used to reach a repository. Applies to inline, virtual and materialized chunks alike, which means Icechunk deliberately rejects an empty write at a chunk key where a plain key-value store would accept it, in the same way it already rejects invalid zarr keys and invalid metadata. To record that a chunk is not stored at all, delete it rather than writing a zero-length one; it then reads back as the array's fill value ([#2328](https://github.com/earth-mover/icechunk/issues/2328)).
+- Object metadata keys no longer contain `_`: they are now `icspecver`, `icclient`, `icfiletype`, `iccompalg` and `icechunkwriteid`. S3 gateways fronted by nginx dropped the old names, which failed writes with `AccessDenied: There were headers present in the request which were not signed`. The old names stay available as `*_DEPRECATED` constants ([#2354](https://github.com/earth-mover/icechunk/pull/2354)).
+- S3 endpoints whose URL includes a path no longer fail with `NoSuchBucket`. Hugging Face Storage Buckets use such a URL: `https://s3.hf.co/<namespace>`. The AWS SDK joins the endpoint path and the bucket name without a separator. Requests therefore addressed `/<namespace><bucket>/<key>`. Icechunk now appends the missing `/`. Endpoints without a path, such as Tigris, R2 and MinIO, keep the same behavior ([#2346](https://github.com/earth-mover/icechunk/pull/2346)).
+
+### Performance
+
+- Writing to a store no longer copies the NumPy buffer: `set` and `set_if_not_exists` pass the buffer through instead of converting it to `bytes`. `PyStore.set` and `PyStore.set_if_not_exists` now accept `BytesLike` ([#2332](https://github.com/earth-mover/icechunk/pull/2332)).
+
+## Python Icechunk Library 2.1.2
+
+### Features
+
+- Add an exception tree: all Icechunk errors now derive from `IcechunkError` and are grouped into catchable categories. Every exception carries a stable machine-readable `kind` code (see the new `icechunk.ErrorKind` enum), and the full diagnostic report is attached as a PEP 678 note ([#2267](https://github.com/earth-mover/icechunk/pull/2267)).
+- Add `ManifestConfig.max_concurrent_manifest_fetches_during_commit` to control how many manifests are fetched and updated concurrently during a commit, amend, flush, or `rewrite_manifests`. Defaults to `1` (serial) ([#2274](https://github.com/earth-mover/icechunk/pull/2274)).
+
+### Fixes
+
+- `shift_array` and `reindex_array` on an array with a rectilinear chunk grid used to silently corrupt the array: chunk indices were relabeled without updating the chunk grid, leaving chunk payloads that no longer matched the sizes of their new grid positions. These operations now fail up front unless the array's metadata declares a regular chunk grid ([#2257](https://github.com/earth-mover/icechunk/pull/2257)).
+- A conditional write whose success response was lost in transit (connection drop, proxy timeout) used to surface as a spurious conflict after the transparent retry's precondition failed against Icechunk's own write: "tag already exists", "config was updated by other session", or a commit parent mismatch. Conditional writes are now stamped with a unique write id and read back on suspicious failures, so a write that landed is recognized as a success ([#2156](https://github.com/earth-mover/icechunk/pull/2156)).
+- Conditional operations on `object_store`-backed storage no longer strip quotes from ETags, which caused endless commit retries against stores that compare ETags exactly, such as `object_store` 0.14.1's `InMemory` and `LocalFileSystem` ([#2289](https://github.com/earth-mover/icechunk/pull/2289)).
+- Fix `to_icechunk` and `icechunk.dask.store_dask` failing with `AttributeError: 'function' object has no attribute 'session'` when the `dask-array` package is installed ([#2292](https://github.com/earth-mover/icechunk/pull/2292)).
+
+## Python Icechunk Library 2.1.1
+
+### Features
+
+- Add `read_headers`, `write_headers`, and `headers` arguments to `s3_storage`, `s3_object_store_storage`, `tigris_storage`, `r2_storage`, and `gcs_storage` to attach custom HTTP headers to object-store requests ([#2246](https://github.com/earth-mover/icechunk/issues/2246)).
+
+### Fixes
+
+- Fix redirect storage failing to resolve HTTP backends: URLs with `http+icechunk`, `http+ic`, `https+icechunk`, or `https+ic` schemes are now correctly stripped to plain `http`/`https` targets ([#2262](https://github.com/earth-mover/icechunk/pull/2262)).
+
+## Python Icechunk Library 2.1.0
+
+This release introduces on-disk [spec version 2.1](https://icechunk.io/en/stable/reference/spec-v2-1/), an additive change that is forward- and backward-compatible with spec 2.0.
+
+### Features
+
+- Add a read-only Rust API to inspect metadata file headers ([#2216](https://github.com/earth-mover/icechunk/pull/2216)).
+- Add a `headers` argument to `http_storage` (and `ObjectStoreConfig.Http`) to inject static HTTP headers, such as an `authorization` bearer token, into every request ([#2143](https://github.com/earth-mover/icechunk/pull/2143)).
+- Add optional, experimental [OpenTelemetry export](https://icechunk.io/en/stable/guides/observability/): when `ICECHUNK_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` are set, tracing spans are exported over OTLP/gRPC. Off by default for Rust library builds via the new `otel` Cargo feature ([#2234](https://github.com/earth-mover/icechunk/pull/2234)).
+- Add explicit `icechunk.credentials.LocalFileSystemAccess` and `icechunk.credentials.HttpAccess` credential sentinels for authorizing virtual chunk containers that need no credentials ([#2194](https://github.com/earth-mover/icechunk/issues/2194)).
+- Build Python wheels with the `abi3-py312` stable ABI, greatly reducing the number of published wheels. The minimum supported Python version remains 3.12 ([#2213](https://github.com/earth-mover/icechunk/pull/2213)).
+
+### Deprecations
+
+- Passing `None` as a value in `authorize_virtual_chunk_access` is deprecated and now emits a `DeprecationWarning`; it will be unsupported in a future release. Pass an explicit credential (e.g. `S3Credentials.FromEnv()`, `s3_anonymous_credentials()`) or the `icechunk.credentials.LocalFileSystemAccess` / `icechunk.credentials.HttpAccess` sentinel instead ([#2194](https://github.com/earth-mover/icechunk/issues/2194)).
+
+### Fixes
+
+- Expiration now records the full ancestry of pruned transaction logs in a new optional `pruned_ancestor_tx_logs` field on `SnapshotInfo`, so `diff`, `amend`, `rebase`, and `inspect` produce correct results after expiration ([#2184](https://github.com/earth-mover/icechunk/pull/2184)).
+- The native S3 backend used to write every object under a leading slash (`/chunks/...`) when `prefix` was empty, which made repositories unreadable by external tools and could cause garbage collection to silently orphan objects. Pre-existing "rooted" repositories are detected and handled automatically. Creating new repositories at an empty prefix on an object store is no longer allowed. Existing empty-prefix repositories can still be opened and updated ([#2239](https://github.com/earth-mover/icechunk/issues/2239)).
+- Preserve all URL parts (userinfo, port, query, fragment, and empty path segments) when storing virtual chunk locations ([#2219](https://github.com/earth-mover/icechunk/pull/2219)).
+- Honor the port when reading virtual chunks from HTTP stores, so a reference like `http://host:8080/...` is fetched from the correct port ([#2223](https://github.com/earth-mover/icechunk/issues/2223)).
+- The objects returned by the async iteration APIs (`Store.list`/`list_prefix`/`list_dir`/`array_chunk_iterator`, `Repository.async_ancestry`/`ops_log_async`) are now correctly typed and named as async iterators (`AsyncCloseableIterator`) rather than the misleading `PyAsyncGenerator`, and gained an `aclose()` method so `contextlib.aclosing(...)` and deterministic early-exit cleanup work ([#2240](https://github.com/earth-mover/icechunk/pull/2240)).
+
+### Breaking Changes
+
+- Stop publishing 32-bit wheels: `musllinux` for `i686` and `armv7l`, and `manylinux_2_28` for `armv7l`. Users on these platforms must now build from source ([#2214](https://github.com/earth-mover/icechunk/pull/2214)).
+- Console logs now go to stderr instead of stdout, so they no longer corrupt a host program's output. Set `ICECHUNK_LOG_TO_STDOUT` to any value before importing `icechunk` to restore the previous behavior.
+
+### Documentation
+
+- Add a guide on handling sensitive data ([#2195](https://github.com/earth-mover/icechunk/pull/2195)).
+- Update the Virtual Datasets guide to cover reading netCDF files with `h5py` ([#2207](https://github.com/earth-mover/icechunk/pull/2207)).
+- Document that GDAL can now read Icechunk repositories ([#2222](https://github.com/earth-mover/icechunk/pull/2222)).
+
+## Python Icechunk Library 2.0.6
+
+### Features
+
+- Add anonymous credential support for Azure Blob Storage ([#2168](https://github.com/earth-mover/icechunk/pull/2168)).
+
+### Fixes
+
+- Don't force creation of a directory when opening a repo in local file storage ([#2145](https://github.com/earth-mover/icechunk/pull/2145)).
+- Implement decompression and flatbuffer verification on spawn_blocking tasks ([#2164](https://github.com/earth-mover/icechunk/pull/2164)).
+
+## Python Icechunk Library 2.0.5
+
+### Features
+
+- Add `Store.array_chunk_iterator` for batched, per-array enumeration of chunk references (used by the VirtualiZarr parser) ([#2124](https://github.com/earth-mover/icechunk/pull/2124)).
+- Add `checksum_algorithm` option (and `ChecksumAlgorithm` enum) on `S3Options` to override the AWS SDK's default `x-amz-checksum-*` header for S3-compatible providers that reject it ([#2115](https://github.com/earth-mover/icechunk/pull/2115)).
+
+### Fixes
+
+- Reject invalid `session.move` calls (moving a group inside itself, or moving a node under an array) with clearer errors ([#2102](https://github.com/earth-mover/icechunk/pull/2102)).
+- Defer `icechunk.dask` import in `_XarrayDatasetWriter.write_lazy` so it isn't required on early-exit paths ([#2133](https://github.com/earth-mover/icechunk/pull/2133)).
+
+## Python Icechunk Library 2.0.4
+
+### Fixes
+
+- Ignore checksum error on empty 304 response from Scaleway S3 Object storage
+- Don't allow non-regular chunk grids on format 1
+
+## Python Icechunk Library 2.0.3
+
+### Fixes
+
+- Fix an issue where temporary configuration used during migration was persisted to the migrated repo
+
+## Python Icechunk Library 2.0.2
+
+### Features
+
+- Add async `from_store` and make `walk` public on `GroupNode` ([#2074](https://github.com/earth-mover/icechunk/pull/2074)).
+- Add `set_virtual_refs_arr` with numpy arrays ([#2049](https://github.com/earth-mover/icechunk/pull/2049)).
+
+### Fixes
+
+- Fix SVG ancestry graph text invisible on dark backgrounds ([#2070](https://github.com/earth-mover/icechunk/pull/2070)).
+- Show effective default values in config reprs ([#2062](https://github.com/earth-mover/icechunk/pull/2062)).
+- Pass storage settings to virtual chunk fetchers ([#2061](https://github.com/earth-mover/icechunk/pull/2061)).
+
+## Python Icechunk Library 2.0.1
+
+This release brings minor fixes to unintended backwards incompatible changes.
+
+- Fix `icechunk.store` module renamed to `icechunk.zarr`
+- Fix build from `sdist`
+- Optimize set_virtual_refs to do a single node lookup by @TomNicholas in #2045
+
+## Python Icechunk Library 2.0.0
+
+Icechunk 2 is here! This release represents the next evolution of the Icechunk library and on-disk format,
+shaped by hundreds of commits from dozens of contributors.
+
+Icechunk 2 brings new features, stronger consistency guarantees, and higher performance across several
+workloads, all while maintaining format compatibility. Icechunk 2 can read and write your existing
+Icechunk 1 repos, and when you're ready to upgrade the format, a single function call migrates
+your repos quickly and safely.
+
+Migrate your existing repos using our [migration guide](https://icechunk.io/en/stable/migration-2/) and review the [breaking changes](https://icechunk.io/en/stable/breaking-changes-2/) from Icechunk 1.
+
+We hope you enjoy the new release!
+
+### Features
+
+#### Expanded platform support
+
+**JavaScript + WebAssembly**: Icechunk now has Javascript bindings, bringing full support for both Node.js (or NAPI compatible runtimes) and browser environments (with WASM-WASI) via the `@earthmover/icechunk` npm package. You can create, open, read, and write repositories from JavaScript or TypeScript.
+
+In the browser, Icechunk supports in-memory storage, read-only fetch-based access to public
+S3-compatible repositories, and a custom storage interface that lets you plug in any
+JavaScript networking library (e.g., `@aws-sdk/client-s3`). Native Node.js builds additionally
+support S3, GCS, Azure Blob, R2, Tigris, and local filesystem backends directly. When possible, native Node.js builds should be preferred for full performance over the WASM builds. See the [JavaScript documentation](https://icechunk.io/en/stable/icechunk-js/) for more.
+
+**Python**: Initial support for free-threading. This feature is lightly tested and we welcome contributions to make it work better.
+
+#### Array Operations
+
+**[Rectilinear Chunk Grids](https://icechunk.io/en/stable/zarr/#rectilinear-chunk-grids)**: Support for Zarr 3 rectilinear (variable-sized) chunk grids, where each chunk along a dimension can have a different size. Chunk shapes can be specified inline (fully listed) or run-length encoded.
+
+**[Move](https://icechunk.io/en/stable/moving-nodes/)**: [`session.move(from_path, to_path)`](https://icechunk.io/en/stable/reference/#icechunk.Session.move) moves or renames arrays and groups. Unlike vanilla Zarr, this is a cheap metadata-only operation that doesn't require copying any chunks. Requires a dedicated `rearrange_session` (cannot be mixed with data writes).
+
+**[Shift & Reindex](https://icechunk.io/en/stable/moving-chunks/)**:
+
+- [`shift_array(path, offset)`](https://icechunk.io/en/stable/reference/#icechunk.Session.shift_array): shift all chunks by a chunk offset
+- [`reindex_array(array_path, forward, backward=None)`](https://icechunk.io/en/stable/reference/#icechunk.Session.reindex_array): arbitrary chunk coordinate transformation via a user-provided function, with an optional inverse
+
+**More ergonomic distributed writes**: Icechunk no longer requires committing changes before executing distributed writes. `ForkSession` is now based on an [anonymous snapshot](https://icechunk.io/en/stable/version-control/#flush-anonymous-snapshots) that captures uncommitted state, allowing writes but disallowing commits. Fork sessions are serializable (picklable) for distribution to workers, and are merged back via [`session.merge(fork_session)`](https://icechunk.io/en/stable/reference/#icechunk.Session.merge) as before.
+
+#### Version Control
+
+**[Ops log](https://icechunk.io/en/stable/repository-features/#operations-log)**: A new [`Repository.ops_log`](https://icechunk.io/en/stable/reference/#icechunk.Repository.ops_log) method shows all operations executed on the repository. Unlike `Repository.ancestry`, this
+keeps track of every type of operation, from branch deletion to garbage collection.
+
+**[Amend](https://icechunk.io/en/stable/version-control/#amending-a-snapshot)**: [`amend()`](https://icechunk.io/en/stable/reference/#icechunk.Session.amend) replaces the previous commit on a branch instead of creating a new one.
+
+**[Anonymous Snapshots](https://icechunk.io/en/stable/version-control/#creating-anonymous-snapshots)**: [`session.flush(message)`](https://icechunk.io/en/stable/reference/#icechunk.Session.flush) creates a detached snapshot without advancing the branch. In Icechunk 2, these are first-class citizens tracked in the repo info and ops log.
+
+**Beautiful ancestry trees**: `ancestry` now renders as a visual commit graph with Unicode glyphs, ANSI-colored
+  branch and tag labels in the terminal, and SVG diagrams in Jupyter notebooks. See examples on our [version control page](https://icechunk.io/en/stable/version-control/).
+
+**[Empty Commits](https://icechunk.io/en/stable/version-control/#empty-snapshots)**: `allow_empty = True` on [`Session.commit`](https://icechunk.io/en/stable/reference/#icechunk.Session.commit) permits commits with no data changes.
+
+**Rebase attempt tracking**: Rebase attempts are recorded in snapshot metadata, giving visibility into conflict resolution history.
+
+#### Repository-level features
+
+**[Repository Status](https://icechunk.io/en/stable/repository-features/#repository-status)**: Repos can be marked `Online` or `ReadOnly` with a reason. Status is checked before operations proceed.
+
+**[Feature Flags](https://icechunk.io/en/stable/repository-features/#feature-flags)**: Repositories now have toggleable flags that allowing enabling/disabling certain operations (e.g., `move_node`, `create_tag`, `delete_tag`). Not all operations are feature-flagged yet. Feel free to request the ones you need by opening an issue.
+
+**[Repository-Level Metadata](https://icechunk.io/en/stable/repository-features/#repository-metadata)**: Key-value metadata on the repo itself, not just on snapshots.
+
+#### Storage Backends
+
+**[HTTP Storage Backend](https://icechunk.io/en/stable/storage/#http-storage)**: Read-only access to repositories served over HTTP/HTTPS, enabling public or CDN-hosted repos.
+
+**[Redirect Storage](https://icechunk.io/en/stable/storage/#redirect-storage)**: `RedirectStorage` follows HTTP 302 redirects to resolve the actual storage backend (S3, R2, Tigris, GCS). Useful for CDN/load-balancing scenarios.
+
+#### Other
+
+**Object Reprs**: All Python classes now define complete string, executable, and HTML reprs.
+
+**Ancestry Graph**: A new method [`Repository.ancestry_graph()`](https://icechunk.io/en/stable/reference/#icechunk.Repository.ancestry_graph) will display a (ASCII string or SVG) plot of the history of commits, branches, and tags.
+**Inspect functions**: A more complete set of `inspect` functions so that you can understand the state of your repo: [`inspect_snapshot`](https://icechunk.io/en/stable/reference/#icechunk.Repository.inspect_snapshot), [`inspect_repo_info`](https://icechunk.io/en/stable/reference/#icechunk.Repository.inspect_repo_info), [`inspect_manifest`](https://icechunk.io/en/stable/reference/#icechunk.Repository.inspect_manifest), and [`inspect_transaction_log`](https://icechunk.io/en/stable/reference/#icechunk.Repository.inspect_transaction_log).
+
+**IC1 → IC2 Migration**: [`icechunk.upgrade_icechunk_repository()`](https://icechunk.io/en/stable/reference/#icechunk.upgrade_icechunk_repository) with dry-run support. See the [migration guide](https://icechunk.io/en/stable/migration-2/).
+
+#### Virtual datasets
+
+**[Relative virtual chunks (`vcc://` URLs)](https://icechunk.io/en/stable/virtual/#relative-virtual-chunk-containers)**: Virtual chunk locations can reference named Virtual Chunk Containers: `vcc://container-name/relative/path`. Assets can be relocated without breaking references by just changing the VCCs.
+
+**Zstd dictionary compression**: Virtual chunk URLs (often repetitive S3 paths) are automatically compressed using a trained zstd dictionary per manifest.
+
+### Consistency
+
+In Icechunk 1.0, refs (branches/tags) and repository config were independent objects in storage. Updates could race, and operations like
+garbage collection or configuration changes had no way to get a consistent view of the full repository state.
+
+In Icechunk 2.0, all repository state is referenced from a unified repo table of contents (`toc`) object. Every mutation, whether it's a commit, branch operation, config change, GC, or expiration, is applied to the freshest state using optimistic concurrency control with automatic retry and backoff on conflict.
+
+### Performance
+
+**Parallel flush**: Array nodes are flushed in parallel during commit, significantly speeding up commits modifying multiple arrays.
+
+**NodeSnapshot cache**: A small cache for frequently accessed snapshot nodes, reducing deserialization cost and speeding up operations such as Zarr's `tree`.
+
+**Faster ancestry/GC**: All snapshot info in the repo `toc` file enables O(1) ancestry lookups and fast expiration calculations (no sequential snapshot reads).
+
+**Concurrent transaction log fetching in rebase**: Transaction logs are now fetched concurrently during rebase, speeding up conflict detection.
+
+**Virtual References Optimizations**: Many low-level optimizations were made for common workloads involving manifests with large numbers of virtual references. Our internal benchmarks show 3X speedup.
+
+### Reliability & Storage
+
+**[Expanded retries](https://icechunk.io/en/stable/flaky-networks/)**: Retries on HTTP 408 (timeout), 429 (rate limit), 499 (client closed), plus connection reset and stalled stream detection. Configurable `max_tries`, backoff, and per-operation timeouts.
+
+**[Timeout settings](https://icechunk.io/en/stable/flaky-networks/#timeouts-storagetimeoutsettings)**: `TimeoutSettings` wired through to S3 client: connect, read, operation, and attempt timeouts. Stalled stream protection with configurable grace period.
+
+**[User agent headers](https://icechunk.io/en/stable/faq/#how-can-i-identify-icechunk-requests-in-my-server-logs)**: All requests include `icechunk-rust-<version>` for tracing.
+
+**GC consistency**: Handles concurrent repo modifications during GC via retry with exponential backoff. Detects and re-processes when new snapshots appear during collection. Proper parent rewriting when deleting snapshot chains.
+
+## Python Icechunk Library 1.1.21
+
+### Fixes
+
+- Fix `list_prefix` stopping too early when non-matching nodes precede valid children in sort order ([#1842](https://github.com/earth-mover/icechunk/pull/1842)).
+
+### Documentation
+
+- Updated [version policy](https://icechunk.io/version-policy) with support window, migration, and compatibility guarantees ([#1769](https://github.com/earth-mover/icechunk/pull/1769)).
+
+## Python Icechunk Library 1.1.20
+
+### Fixes
+
+- Don't override all storage defaults when user passes a config ([#1699](https://github.com/earth-mover/icechunk/pull/1699)).
+- Allow delete + recreate in rebase ([#1742](https://github.com/earth-mover/icechunk/pull/1742)).
+- Don't panic when writing manifest fails ([#1609](https://github.com/earth-mover/icechunk/pull/1609)).
+- Retry on HTTP 429 and 499 status codes ([#1768](https://github.com/earth-mover/icechunk/pull/1768)).
+- Retry on Connection Reset errors while streaming bytes ([#1795](https://github.com/earth-mover/icechunk/pull/1795)).
+- Throw a clear error when attempting to open a v2 repository from v1 icechunk ([#1749](https://github.com/earth-mover/icechunk/pull/1749)).
+
+## Python Icechunk Library 1.1.19
+
+### Fixes
+
+- Retry when stalled streams error out. This should help avoid the "0B/s" error that sometimes occurs.
+  The default `network_stream_timeout_seconds` has been reduced to 10s to match the AWS default.
+  If you have previously set this parameter to 0, we recommend unsetting it and working with the defaults now.
+
+## Python Icechunk Library 1.1.18
+
+### Fixes
+
+- Bug where `RepositoryConfig.clear_virtual_chunk_containers()` was not respected.
+- Minor bug in merge conflict report.
+
+## Python Icechunk Library 1.1.17
+
+### Features
+
+- Add warning for large number of chunks in a single commit.
+
+### Fixes
+
+- Retry on HTTP Status 408.
+- Update S3 SDK dependency to avoid a CVE in one of their dependencies.
+
+## Python Icechunk Library 1.1.16
+
+### Features
+
+- Extend storage stats calculation to include virtual and inline chunks.
+- New methods `Session.chunk_type` and `Session.chunk_type_async` for returning the chunk type (native, inline, virtual, and uninitialized).
+
+### Fixes
+
+- Anonymous GCS credentials when setting `icechunk.gcs_credentials(anonymous=True)` now works.
+- Fix anonymous S3 storage access for public buckets.
+
+## Python Icechunk Library 1.1.15
+
+### Features
+
+- Increase the maximum allowed size of manifests and snapshot files.
+
+### Fixes
+
+- Retry with backoff on `429 - Too many requests` from GCS.
+
+## Python Icechunk Library 1.1.14
+
+### Fixes
+
+- Solve issue resolving virtual chunks in URLs with special characters
+
+## Python Icechunk Library 1.1.13
+
+### Features
+
+- Add support for requester pays in S3: `s3_storage(..., requester_pays=True)`.
+- Add support for network proxy when using S3 compatible storage, using
+  environment variables:
+  - `HTTPS_PROXY` (this is probably the one you want),
+  - `HTTP_PROXY`,
+  - `ALL_PROXY`,
+  - `NO_PROXY`
+
+## Python Icechunk Library 1.1.12
+
+### Features
+
+- Added `RepositoryConfig.merge` method.
+
+### Fixes
+
+- Virtual chunk containers now accept URLs starting with `gs://`, as well as ones starting with `gcs://`.
+
+## Python Icechunk Library 1.1.11
+
+### Features
+
+- New function `azure_store` and added support for virtual chunks in Azure.
+  Virtual chunks must have URLs starting with `azure://`, `az://` or `abfs://`.
+
+## Python Icechunk Library 1.1.10
+
+### Fixes
+
+- Internal testing and documentation build fixes
+- Compatibility with `Xarray<2025.06.0`.
+
+## Python Icechunk Library 1.1.9
+
+### Features
+
+- Add `authorized_virtual_container_prefixes` to `Repository` to access the prefixes currently whitelisted for virtual chunk access
+
+### Fixes
+
+- Improvements for `anonymous` access to GCS Storage
+
+### Breaking Changes
+
+- This release removes the `windows x86` wheels from the PyPI release.
+
+## Python Icechunk Library 1.1.8
+
+### Features
+
+- Support for `anonymous` access to GCS Storage
+
+## Python Icechunk Library 1.1.7
+
+### Features
+
+- New `Session.flush` method allows creating new snapshots without updating the current branch.
+  This is useful to store temporary updates, that can later be made permanent by pointing
+  a tag to them (`Repository.create_tag`), or a new branch (`Repository.create_branch`), or
+  an existing branch (`Repository.reset_branch`).
+- Added `from_snapshot_id` argument to `reset_branch`. This allows to safely reset a branch,
+  conditionally on its current tip snapshot.
+- Added support for `align_chunks` and `split_every` arguments in `to_icechunk`.
+
+### Performance
+
+- `Store.list_dir` is more than an order of magnitude faster in repositories with
+  thousands of groups/arrays. `Store.list_prefix` is also faster.
+- Increased default snapshot cache size to 500k groups/arrays. This is a better default as we see
+  people creating larger Icechunk repositories. Of course, this can be modified using
+  [`icechunk.CachingConfig`](https://icechunk.io/en/stable/configuration/#caching).
+
+### Fixes
+
+- `S3Options` getters and setters added to interface stub file for proper type checking.
+
+## Python Icechunk Library 1.1.6
+
+### Features
+
+- `Storage.new_tigris` now uses the new Tigris endpoint `t3.storage.dev` by default.
+- Repositories in Tigris object store now use the
+  `X-Tigris-Consistent` header for better consistency.
+
+### Fixes
+
+- `ForkSession` can now be used without serializing it.
+
+### Performance
+
+- Significant speed improvements for `Store.list_prefix` and
+  `Store.getsize_prefix` when prefix is not empty.
+
+## Python Icechunk Library 1.1.5
+
+### Features
+
+- Add synchronous `Repository.reopen()` method. There was previously only an async version `Repository.reopen_async()`.
+- S3 Storage now uses environment variables `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`.
+- Emit a warning if `icechunk` is misspelled when configuring logs.
+- Better Ceph Object Gateway compatibility.
+
+## Python Icechunk Library 1.1.4
+
+### Fixes
+
+- Msgpack format error when trying to pickle distributed stores in repositories with
+  virtual chunk containers.
+
+## Python Icechunk Library 1.1.3
+
+### Fixes
+
+- Fix issue retrieving groups and arrays with certain special
+  characters in their names
+
+## Python Icechunk Library 1.1.2
+
+### Features
+
+- New `config` getter in `Session` objects to get the repository configuration.
+- Per-repo network concurrency limit. The zarr-python + dask + Icechunk stack
+  can be too eager in launching concurrent HTTP requests. This can overload
+  the machine, timing out some requests and producing an error. There is a new
+  `max_concurrent_requests` field in `RepositoryConfig` to limit this. This will
+  limit concurrent HTTP requests to this value. Default is 256. See the [docs](https://icechunk.io/en/stable/performance/) for more.
+- Ability to tune and disable network stream stall detection. `s3_storage` like
+  functions now take an optional `network_stream_timeout_seconds` with a 60
+  seconds default. If configured to 0, stream stall detection is disabled
+  completely.
+
 ## Python Icechunk Library 1.1.1
 
 ### Features
@@ -15,7 +591,7 @@
 
 ### Features
 
-- Icechunk has an [asynchronous API](https://icechunk.io/en/latest/async/) now.
+- Icechunk has an [asynchronous API](https://icechunk.io/en/stable/async/) now.
   - Icechunk internals continue to be fully asynchronous. Most "normal" use cases
     don't need the async API, the synchronous API will deliver the same performance.
   - The async API is useful to get optimal concurrency in operations involving
@@ -34,7 +610,7 @@
     - `Repository.writable_session_async()`
     - `Session.commit_async()`
     - `Session.rebase_async()`
-    - There are many more, check the [API reference](https://icechunk.io/en/latest/reference/)
+    - There are many more, check the [API reference](https://icechunk.io/en/stable/reference/)
 - Icechunk default log level is `warn` now, instead of `error`.
 - Emit a log warning and recommendation when manifests are too large for the configured cache
   size, which makes Icechunk less performant.
@@ -113,16 +689,16 @@ This version has some minor API changes but it is on-disk format compatible with
 written with this release candidate.
 
 Changes to code may be needed for users that are using distributed coordinated sessions or virtual datasets.
-Please refer to our [migration guide](https://icechunk.io/en/latest/icechunk-python/migration/).
+Please refer to our [migration guide](https://icechunk.io/en/stable/icechunk-python/migration/).
 
 ### Features
 
-- New [`Repository.transaction`](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.Repository.transaction)
+- New [`Repository.transaction`](https://icechunk.io/en/stable/icechunk-python/reference/#icechunk.Repository.transaction)
 context manager creates and commits write sessions upon exit.
 - Easier manifest preload and split configuration, combining conditions with `|` and `&` magic methods.
 - More secure and explicit control over virtual chunk resolution. This improvement motivated the changes
-in API for [`Repository.open`](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.Repository.open) and
-[`Repository.create`](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.Repository.create) for virtual datasets.
+in API for [`Repository.open`](https://icechunk.io/en/stable/icechunk-python/reference/#icechunk.Repository.open) and
+[`Repository.create`](https://icechunk.io/en/stable/icechunk-python/reference/#icechunk.Repository.create) for virtual datasets.
 
 ### Fixes
 
@@ -150,8 +726,8 @@ significantly improves performance for very large arrays.
 - Virtual chunks can now be resolved using HTTP(s) protocol. This extends virtual datasets
   that can now be stored outside of an object store.
 - Users can now configure how they want to retry failed requests to the object store. See
-  [StorageRetriesSettings](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.StorageRetriesSettings).
-- Support dynamically changing log levels. See [`set_logs_filter` function](https://icechunk.io/en/latest/icechunk-python/reference/#icechunk.set_logs_filter).
+  [StorageRetriesSettings](https://icechunk.io/en/stable/icechunk-python/reference/#icechunk.StorageRetriesSettings).
+- Support dynamically changing log levels. See [`set_logs_filter` function](https://icechunk.io/en/stable/icechunk-python/reference/#icechunk.set_logs_filter).
 - Support for anonymous access to GCS buckets.
 - The first snapshot has a known id now. This allows to check if a directory is an Icechunk
   repo by looking for the `1CECHNKREP0F1RSTCMT0` path in the `snapshots` subdir.
@@ -160,7 +736,7 @@ significantly improves performance for very large arrays.
 
 - Large arrays can now have multiple manifests, significantly improving memory usage,
   read, and write time performance. See the relevant section in the
-  [documentation](https://icechunk.io/en/latest/icechunk-python/performance/#splitting-manifests).
+  [documentation](https://icechunk.io/en/stable/icechunk-python/performance/#splitting-manifests).
 
 ### Fixes
 

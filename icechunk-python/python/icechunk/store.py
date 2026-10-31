@@ -1,8 +1,14 @@
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import Iterable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
-from icechunk._icechunk_python import PyStore, VirtualChunkSpec
+import numpy as np
+
+from icechunk._icechunk_python import AsyncCloseableIterator, PyStore, VirtualChunkSpec
+
+__all__ = [
+    "IcechunkStore",
+]
 from zarr.abc.store import (
     ByteRequest,
     OffsetByteRequest,
@@ -36,12 +42,10 @@ def _byte_request_to_tuple(
 
 class IcechunkStore(Store, SyncMixin):
     _store: PyStore
-    _for_fork: bool
 
     def __init__(
         self,
         store: PyStore,
-        for_fork: bool,
         read_only: bool | None = None,
         *args: Any,
         **kwargs: Any,
@@ -58,28 +62,35 @@ class IcechunkStore(Store, SyncMixin):
             )
         self._store = store
         self._is_open = True
-        self._for_fork = for_fork
 
     def __eq__(self, value: object) -> bool:
         if not isinstance(value, IcechunkStore):
             return False
         return self._store == value._store
 
+    def __repr__(self) -> str:
+        return repr(self._store)
+
+    def __str__(self) -> str:
+        return str(self._store)
+
+    def _repr_html_(self) -> str:
+        return self._store._repr_html_()
+
     def __getstate__(self) -> object:
         # for read_only sessions we allow pickling, this allows distributed reads without forking
-        writable = not self.session.read_only
-        if writable and not self._for_fork:
+        session = self._store.session
+        if not session.read_only and not session.is_fork:
             raise ValueError(
                 "You must opt-in to pickle writable sessions in a distributed context "
                 "using Session.fork(). "
-                # link to docs
+                "See https://icechunk.io/en/stable/icechunk-python/parallel/#cooperative-distributed-writes. "
                 "If you are using xarray's `Dataset.to_zarr` method to write dask arrays, "
                 "please use `icechunk.xarray.to_icechunk` instead. "
             )
         d = self.__dict__.copy()
         # we serialize the Rust store as bytes
         d["_store"] = self._store.as_bytes()
-        d["_for_fork"] = self._for_fork
         return d
 
     def __setstate__(self, state: Any) -> None:
@@ -89,7 +100,7 @@ class IcechunkStore(Store, SyncMixin):
         self.__dict__ = state
 
     def with_read_only(self, read_only: bool = False) -> Store:
-        new_store = IcechunkStore(store=self._store, for_fork=False, read_only=read_only)
+        new_store = IcechunkStore(store=self._store, read_only=read_only)
         new_store._is_open = False
         return new_store
 
@@ -97,7 +108,7 @@ class IcechunkStore(Store, SyncMixin):
     def session(self) -> "Session":
         from icechunk.session import ForkSession, Session
 
-        if self._for_fork:
+        if self._store.session.is_fork:
             return ForkSession(self._store.session)
         else:
             return Session(self._store.session)
@@ -219,7 +230,7 @@ class IcechunkStore(Store, SyncMixin):
             raise TypeError(
                 f"IcechunkStore.set(): `value` must be a Buffer instance. Got an instance of {type(value)} instead."
             )
-        return await self._store.set(key, value.to_bytes())
+        return await self._store.set(key, value.as_buffer_like())
 
     async def set_if_not_exists(self, key: str, value: Buffer) -> None:
         """
@@ -230,7 +241,7 @@ class IcechunkStore(Store, SyncMixin):
         key : str
         value : Buffer
         """
-        return await self._store.set_if_not_exists(key, value.to_bytes())
+        return await self._store.set_if_not_exists(key, value.as_buffer_like())
 
     def set_virtual_ref(
         self,
@@ -249,7 +260,8 @@ class IcechunkStore(Store, SyncMixin):
         key : str
             The chunk to store the reference under. This is the fully qualified zarr key eg: 'array/c/0/0/0'
         location : str
-            The location of the chunk in storage. This is absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'
+            The location of the chunk in storage, as a URL. This is the absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'.
+            The object key is the URL path, used verbatim (``//`` and ``.``/``..`` are preserved). Characters reserved in a URL that are part of the key must be percent-encoded, in particular ``?`` -> ``%3F``, ``#`` -> ``%23`` and ``%`` -> ``%25``.
         offset : int
             The offset in bytes from the start of the file location in storage the chunk starts at
         length : int
@@ -262,6 +274,59 @@ class IcechunkStore(Store, SyncMixin):
         return self._store.set_virtual_ref(
             key, location, offset, length, checksum, validate_container
         )
+
+    def array_chunk_iterator(
+        self,
+        array_path: str,
+        batch_size: int = 100_000,
+    ) -> AsyncCloseableIterator[
+        tuple[
+            "np.ndarray[tuple[int, int], np.dtype[np.uint32]]",  # coords (n, ndim)
+            "np.ndarray[tuple[int], np.dtype[np.uint8]]",  # kinds (n,)
+            list[str],  # paths
+            "np.ndarray[tuple[int], np.dtype[np.uint64]]",  # offsets (n,)
+            "np.ndarray[tuple[int], np.dtype[np.uint64]]",  # lengths (n,)
+            dict[int, bytes],  # inlined
+        ]
+    ]:
+        """Async iterator yielding columnar batches of chunk references for one array.
+
+        Each batch is a 6-tuple; row ``i`` across the columns describes one
+        chunk (columns are aligned in lock-step)::
+
+            coords:   np.ndarray[uint32, (n, ndim)]  chunk grid coordinates
+            kinds:    np.ndarray[uint8]              values of icechunk.ChunkType
+                                                      (native=1, virtual=2, inline=3)
+            paths:    list[str]                      URL (virtual) | chunk_id (native) | "" (inline)
+            offsets:  np.ndarray[uint64]             byte offset within the source
+                                                      URL (virtual) or chunk file
+                                                      (native); 0 for inline
+            lengths:  np.ndarray[uint64]             byte length; equals
+                                                      ``len(bytes)`` for inline
+            inlined:  dict[int, bytes]               *Inline rows only*. Keyed by
+                                                      the row index ``i`` in this
+                                                      batch. Rows whose kind is
+                                                      virtual, native, or missing
+                                                      are NOT present in this dict.
+
+        Native and virtual rows share the same ``(path, offset, length)`` shape;
+        the only structural difference is that ``paths[i]`` holds a bare
+        ``chunk_id`` for native rows vs a fully-resolved URL for virtual rows.
+        Consumers can therefore treat both uniformly as virtual references
+        after prepending a URL prefix to the chunk_id.
+
+        Virtual locations are passed through the session's resolver before
+        yielding — relative ``vcc://name/path`` forms expand to absolute URLs;
+        absolute URLs pass through unchanged. Missing chunks are not yielded.
+
+        Parameters
+        ----------
+        array_path : str
+            Zarr path to the array (e.g. ``"a"`` or ``"/group/var"``).
+        batch_size : int
+            Maximum number of rows per batch.
+        """
+        return self._store.array_chunk_iterator(array_path, batch_size)
 
     async def set_virtual_ref_async(
         self,
@@ -280,7 +345,8 @@ class IcechunkStore(Store, SyncMixin):
         key : str
             The chunk to store the reference under. This is the fully qualified zarr key eg: 'array/c/0/0/0'
         location : str
-            The location of the chunk in storage. This is absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'
+            The location of the chunk in storage, as a URL. This is the absolute path to the chunk in storage eg: 's3://bucket/path/to/file.nc'.
+            The object key is the URL path, used verbatim (``//`` and ``.``/``..`` are preserved). Characters reserved in a URL that are part of the key must be percent-encoded, in particular ``?`` -> ``%3F``, ``#`` -> ``%23`` and ``%`` -> ``%25``.
         offset : int
             The offset in bytes from the start of the file location in storage the chunk starts at
         length : int
@@ -352,6 +418,146 @@ class IcechunkStore(Store, SyncMixin):
             array_path, chunks, validate_containers
         )
 
+    def set_virtual_refs_arr(
+        self,
+        array_path: str,
+        chunk_grid_shape: tuple[int, ...],
+        locations: list[str],
+        offsets: "np.ndarray[Any, np.dtype[np.uint64]]",
+        lengths: "np.ndarray[Any, np.dtype[np.uint64]]",
+        *,
+        validate_containers: bool = True,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime | str | None = None,
+    ) -> list[tuple[int, ...]] | None:
+        """Store virtual references for an array from flat arrays of locations, offsets, and lengths.
+
+        More efficient than ``set_virtual_refs`` as it avoids creating
+        per-chunk ``VirtualChunkSpec`` Python objects. The locations list
+        is iterated in Rust (borrowing strings directly from CPython),
+        and the offset/length numpy arrays are accessed via zero-copy.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store.
+            Example: "/groupA/groupB/outputs/my-array"
+        chunk_grid_shape : tuple[int, ...]
+            Shape of the chunk grid (number of chunks per dimension).
+            The product must equal the length of the arrays.
+            Arrays are assumed to be flattened in C (row-major) order.
+        locations : list[str]
+            URLs to external files containing chunk data. Empty strings
+            represent missing chunks and are silently skipped.
+            Example: ["s3://bucket/file1.nc", "s3://bucket/file2.nc"]
+            Each is a URL; the object key is its path, used verbatim (``//`` and
+            ``.``/``..`` are preserved). Characters reserved in a URL that are part
+            of the key must be percent-encoded (``?`` -> ``%3F``, ``#`` -> ``%23``,
+            ``%`` -> ``%25``).
+        offsets : np.ndarray
+            1-D uint64 array of byte offsets within each file.
+        lengths : np.ndarray
+            1-D uint64 array of byte lengths of each chunk.
+        validate_containers : bool
+            If True, validate that locations match registered virtual
+            chunk containers. Default is True.
+        arr_offset : tuple[int, ...] | None
+            Optional offset to add to computed chunk indices. Useful for
+            append operations where new chunks should be written at an
+            offset from (0, 0, ...). Must have the same length as
+            chunk_grid_shape. Default is None.
+        checksum : datetime | str | None
+            Optional checksum for all chunks. Can be a datetime
+            (last modified time) or a string (ETag). Default is None.
+
+        Returns
+        -------
+        list[tuple[int, ...]] | None
+            If all virtual references were successfully updated, returns None.
+            If there were validation errors, returns the chunk indices of
+            all failed references.
+        """
+        return self._store.set_virtual_refs_arr(
+            array_path,
+            list(chunk_grid_shape),
+            locations,
+            offsets,
+            lengths,
+            validate_containers=validate_containers,
+            arr_offset=list(arr_offset) if arr_offset is not None else None,
+            checksum=checksum,
+        )
+
+    async def set_virtual_refs_arr_async(
+        self,
+        array_path: str,
+        chunk_grid_shape: tuple[int, ...],
+        locations: list[str],
+        offsets: "np.ndarray[Any, np.dtype[np.uint64]]",
+        lengths: "np.ndarray[Any, np.dtype[np.uint64]]",
+        *,
+        validate_containers: bool = True,
+        arr_offset: tuple[int, ...] | None = None,
+        checksum: datetime | str | None = None,
+    ) -> list[tuple[int, ...]] | None:
+        """Store virtual references for an array from flat arrays (async).
+
+        Async variant of ``set_virtual_refs_arr``. The vref construction
+        still requires the GIL (to borrow strings from the Python list),
+        but the store insertion releases it. Use ``asyncio.gather()`` to
+        overlap vref building for one array with store insertion for another.
+
+        Parameters
+        ----------
+        array_path : str
+            The path to the array inside the Zarr store.
+            Example: "/groupA/groupB/outputs/my-array"
+        chunk_grid_shape : tuple[int, ...]
+            Shape of the chunk grid (number of chunks per dimension).
+            The product must equal the length of the arrays.
+            Arrays are assumed to be flattened in C (row-major) order.
+        locations : list[str]
+            URLs to external files containing chunk data. Empty strings
+            represent missing chunks and are silently skipped.
+            Example: ["s3://bucket/file1.nc", "s3://bucket/file2.nc"]
+            Each is a URL; the object key is its path, used verbatim (``//`` and
+            ``.``/``..`` are preserved). Characters reserved in a URL that are part
+            of the key must be percent-encoded (``?`` -> ``%3F``, ``#`` -> ``%23``,
+            ``%`` -> ``%25``).
+        offsets : np.ndarray
+            1-D uint64 array of byte offsets within each file.
+        lengths : np.ndarray
+            1-D uint64 array of byte lengths of each chunk.
+        validate_containers : bool
+            If True, validate that locations match registered virtual
+            chunk containers. Default is True.
+        arr_offset : tuple[int, ...] | None
+            Optional offset to add to computed chunk indices. Useful for
+            append operations where new chunks should be written at an
+            offset from (0, 0, ...). Must have the same length as
+            chunk_grid_shape. Default is None.
+        checksum : datetime | str | None
+            Optional checksum for all chunks. Can be a datetime
+            (last modified time) or a string (ETag). Default is None.
+
+        Returns
+        -------
+        list[tuple[int, ...]] | None
+            If all virtual references were successfully updated, returns None.
+            If there were validation errors, returns the chunk indices of
+            all failed references.
+        """
+        return await self._store.set_virtual_refs_arr_async(
+            array_path,
+            list(chunk_grid_shape),
+            locations,
+            offsets,
+            lengths,
+            validate_containers=validate_containers,
+            arr_offset=list(arr_offset) if arr_offset is not None else None,
+            checksum=checksum,
+        )
+
     async def delete(self, key: str) -> None:
         """Remove a key from the store
 
@@ -371,9 +577,12 @@ class IcechunkStore(Store, SyncMixin):
         return await self._store.delete_dir(prefix)
 
     @property
-    def supports_partial_writes(self) -> bool:
-        """Does the store support partial writes?"""
-        return self._store.supports_partial_writes
+    def supports_partial_writes(self) -> Literal[False]:
+        """Does the store support partial writes?
+
+        Partial writes are no longer used by Zarr, so this is always false.
+        """
+        return self._store.supports_partial_writes  # type: ignore[return-value]
 
     async def set_partial_values(
         self, key_start_values: Iterable[tuple[str, int, BytesLike]]
@@ -405,12 +614,12 @@ class IcechunkStore(Store, SyncMixin):
     def supports_deletes(self) -> bool:
         return self._store.supports_deletes
 
-    def list(self) -> AsyncIterator[str]:
+    def list(self) -> AsyncCloseableIterator[str]:
         """Retrieve all keys in the store.
 
         Returns
         -------
-        AsyncIterator[str, None]
+        AsyncCloseableIterator[str]
         """
         # This method should be async, like overridden methods in child classes.
         # However, that's not straightforward:
@@ -421,7 +630,7 @@ class IcechunkStore(Store, SyncMixin):
         # wrap the async method in a sync method.
         return self._store.list()
 
-    def list_prefix(self, prefix: str) -> AsyncIterator[str]:
+    def list_prefix(self, prefix: str) -> AsyncCloseableIterator[str]:
         """Retrieve all keys in the store that begin with a given prefix. Keys are returned relative
         to the root of the store.
 
@@ -431,14 +640,14 @@ class IcechunkStore(Store, SyncMixin):
 
         Returns
         -------
-        AsyncIterator[str, None]
+        AsyncCloseableIterator[str]
         """
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to
         # wrap the async method in a sync method.
         return self._store.list_prefix(prefix)
 
-    def list_dir(self, prefix: str) -> AsyncIterator[str]:
+    def list_dir(self, prefix: str) -> AsyncCloseableIterator[str]:
         """
         Retrieve all keys and prefixes with a given prefix and which do not contain the character
         “/” after the given prefix.
@@ -449,7 +658,7 @@ class IcechunkStore(Store, SyncMixin):
 
         Returns
         -------
-        AsyncIterator[str, None]
+        AsyncCloseableIterator[str]
         """
         # The zarr spec specefies that that this and other
         # listing methods should not be async, so we need to

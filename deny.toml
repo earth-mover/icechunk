@@ -1,10 +1,29 @@
 [graph]
 all-features = true
+# shuttle crates are only used for concurrency testing and lack license metadata.
+exclude = [
+  "shuttle",
+  "shuttle-tokio",
+  "shuttle-tokio-impl",
+  "shuttle-tokio-impl-inner",
+  "shuttle-tokio-macros-impl",
+]
 
 [advisories]
 version = 2
 # only fail for direct unmaintained dependencies, this can only be used with rustc 1.85
 unmaintained = "workspace"
+ignore = [
+  # generator crate: transitive dev-dependency via noxious-client, only used in tests
+  "RUSTSEC-2020-0151",
+  # h2 unbounded empty DATA frames (low severity): patched only in h2 >= 0.4.16.
+  # The h2 0.3 line has no patched release. It is a transitive dev-dependency via
+  # noxious-client -> reqwest 0.11 -> hyper 0.14, only used in tests.
+  "RUSTSEC-2026-0258",
+  # crypto-bigint < 0.7.6, only via aws-sigv4's SigV4a signing. Lift once
+  # aws-sigv4 depends on crypto-bigint >= 0.7.6.
+  "RUSTSEC-2026-0387",
+]
 
 [licenses]
 # List of explicitly allowed licenses
@@ -21,9 +40,10 @@ allow = [
   "MPL-2.0",
   "ISC",
   "OpenSSL",
-  "Unicode-DFS-2016",
   "CC0-1.0",
   "Unicode-3.0",
+  "Zlib",
+  "CDLA-Permissive-2.0",
 ]
 # The confidence threshold for detecting a license from license text.
 # The higher the value, the more closely the license text must be to the

@@ -38,6 +38,7 @@ pip-selfcheck.json
 htmlcov/
 .tox/
 .coverage
+.coverage-fragments/
 .cache
 nosetests.xml
 coverage.xml
@@ -58,9 +59,6 @@ coverage.xml
 *.pot
 
 .DS_Store
-
-# Sphinx documentation
-docs/_build/
 
 # PyCharm
 .idea/

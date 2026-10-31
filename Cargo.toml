@@ -1,23 +1,250 @@
 [workspace]
-members = ["icechunk", "icechunk-python", "icechunk-macros"]
+members = [
+  "icechunk",
+  "icechunk-types",
+  "icechunk-format",
+  "icechunk-storage",
+  "icechunk-s3",
+  "icechunk-arrow-object-store",
+  "icechunk-python",
+  "icechunk-macros",
+  "icechunk-js",
+]
 default-members = ["icechunk"]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.95.0"
+edition = "2024"
+readme = "README.md"
+
+[workspace.dependencies]
+# Internal crates
+icechunk = { path = "icechunk", version = "2.3.1" }
+icechunk-arrow-object-store = { path = "icechunk-arrow-object-store", version = "2.3.1", default-features = false }
+icechunk-format = { path = "icechunk-format", version = "2.3.1" }
+icechunk-macros = { path = "icechunk-macros", version = "2.3.1" }
+icechunk-s3 = { path = "icechunk-s3", version = "2.3.1" }
+icechunk-storage = { path = "icechunk-storage", version = "2.3.1" }
+icechunk-types = { path = "icechunk-types", version = "2.3.1" }
+
+# External dependencies
+anyhow = "1.0.102"
+assert_fs = "1.1.4"
+async-recursion = "1.1.1"
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+aws-config = "1.8.15"
+aws-credential-types = "1.2.14"
+# the default "rustls" feature pulls rustls 0.21 through the hyper 0.14 client
+aws-sdk-s3 = { version = "1.127.0", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
+aws-smithy-http-client = { version = "1.5.0", default-features = false, features = ["rustls-aws-lc"] }
+aws-smithy-runtime = "1.11.3"
+aws-smithy-types-convert = { version = "0.61.1", features = ["convert-chrono", "convert-streams"] }
+backon = "1.6.0"
+base32 = "0.5.1"
+bytes = { version = "1.11.1", features = ["serde"] }
+chrono = { version = "0.4.44", features = ["serde"] }
+clap = { version = "4.6", features = ["derive"] }
+criterion = { version = "0.8.2", features = ["async_tokio"] }
+dialoguer = "0.12.0"
+dirs = "7.0.0"
+flatbuffers = "25.12.19"
+flexbuffers = "25.12.19"
+fs_extra = "1.3.0"
+futures = "0.3.32"
+http = "1.4.0"
+itertools = "0.15.0"
+miette = { version = "7.6.0", features = ["fancy"] }
+noxious-client = "1.0"
+numpy = "0.30.0"
+object_store = { version = "0.14.0", default-features = false }
+opentelemetry = { version = "0.33", default-features = false, features = ["trace"] }
+opentelemetry-otlp = { version = "0.33", default-features = false, features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["trace"] }
+percent-encoding = "2.3.2"
+port_check = "0.3.0"
+pretty_assertions = "1.4.1"
+proptest = "1.11.0"
+proptest-state-machine = "0.8.0"
+pyo3 = { version = "0.30.1", features = ["chrono", "experimental-async", "multiple-pymethods"] }
+pyo3-async-runtimes = { version = "0.30.0", features = ["tokio-runtime"] }
+pyo3-bytes = "0.8.0"
+quick_cache = "0.7.0"
+quote = "1.0"
+rand = "0.10.1"
+regex = "1.12.3"
+reqwest = "0.13"
+rlimit = "0.11.0"
+rmp-serde = "1.3.1"
+rstest = "0.27.0"
+rstest_reuse = "0.7.0"
+rustls-pki-types = { version = "1.14.0", features = ["std"] }
+rustls-webpki = "0.103.16"
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_bytes = "0.11.19"
+serde_json = "1.0.150"
+serde_with = "3.20.0"
+serde_yaml_ng = "0.10.0"
+shuttle = "0.9.1"
+shuttle-tokio = { version = "1.0.0", features = ["rt-multi-thread", "macros"] }
+strsim = "0.11"
+syn = { version = "3.0", features = ["full"] }
+tempfile = "3.27.0"
+test-log = { version = "0.2.21", default-features = false, features = ["trace", "color", "unstable"] }
+test-strategy = "0.4.5"
+thiserror = "2.0.18"
+tokio = "1.52.3"
+tokio-util = { version = "0.7.18", features = ["io-util"] }
+tracing = "0.1.44"
+tracing-chrome = "0.7"
+tracing-error = "0.2.1"
+tracing-opentelemetry = { version = "0.34", default-features = false }
+tracing-samply = "0.1.5"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+typed-path = "0.12.3"
+typetag = "0.2.22"
+url = { version = "2.5.8", features = ["serde"] }
+urlencoding = "2.1.3"
+uuid = { version = "1.23", features = ["v4"] }
+warp = { version = "0.4.3", features = ["server"] }
+wiremock = "0.6.5"
+zstd = "0.14.0"
+
+[workspace.lints.rust]
+# Safety
+unsafe_code = "warn"
+# Correctness
+bare_trait_objects = "warn"
+unreachable_pub = "warn"
+# Allow `#[cfg(feature = "shuttle")]` in crates that don't define the feature.
+# `icechunk_macros::tokio_test` expands to `#[cfg(not(feature = "shuttle"))]` so
+# every downstream crate that uses the macro inherits the cfg.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("shuttle"))'] }
+# Clarity
+elided_lifetimes_in_paths = "warn"
+missing_debug_implementations = "warn"
+trivial_numeric_casts = "warn"
+unused_qualifications = "warn"
+
 [workspace.lints.clippy]
+# Safety & correctness
+exit = "warn"
 expect_used = "warn"
-unwrap_used = "warn"
 panic = "warn"
 todo = "warn"
+undocumented_unsafe_blocks = "warn"
 unimplemented = "warn"
+unwrap_used = "warn"
+# Clarity & style
+allow_attributes = "warn"
+clone_on_ref_ptr = "warn"
 dbg_macro = "warn"
+doc_markdown = "warn"
+implicit_clone = "warn"
+manual_let_else = "warn"
+semicolon_if_nothing_returned = "warn"
+uninlined_format_args = "warn"
+unused_result_ok = "warn"
+unused_trait_names = "warn"
+# Performance
+inefficient_to_string = "warn"
+large_types_passed_by_value = "warn"
+needless_pass_by_value = "warn"
+# Cargo
+cargo_common_metadata = "warn"
+create_dir = "warn"
+wildcard_dependencies = "warn"
+
 
 [workspace.metadata.release]
-allow-branch = ["main", "release-*"]
+allow-branch = ["main", "release-*", "support/v*"]
 sign-commit = true
 sign-tag = true
 push = false
 
+# Recommended configs for maximizing runtime speed
+# https://nnethercote.github.io/perf-book/build-configuration.html#maximizing-runtime-speed
+# This impacts compile time (since it becomes serial instead of parallel)
+# but can lead to 20-30% faster runtime
+[profile.release]
+lto = "thin"
+codegen-units = 1
 
+# Some settings for faster compiles when benchmarking
+# inherits from "release" by default
+# keep this in sync with `perf` below
+[profile.bench]
+opt-level = 2
+lto = "off"
+codegen-units = 8
+debug = 1
+
+# Wheels for CI test jobs: opt-level 2 keeps test workloads fast while
+# skipping the LTO + single-codegen-unit compile cost of `release`.
+[profile.ci-wheel]
+inherits = "release"
+opt-level = 2
+lto = "off"
+codegen-units = 8
+
+# Optimized profile for benchmarking with maturin/PyO3 compatibility
+# maturin doesn't work well with --profile bench for ... reasons.
+# keep this in sync with `bench` above.
 [profile.perf]
 inherits = "release"
+opt-level = 2
+lto = "off"
+codegen-units = 8
 debug = 1
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only" # allow file:line info in backtraces
+
+# Enable higher optimizations for dependencies, but not our code
+# Setting it to "2" because gets most optimizations, without
+# the compile time impact of "3"
+[profile.dev.package."*"]
+opt-level = 2
+
+# Full debug profile for use with lldb/gdb
+[profile.dbg]
+inherits = "dev"
+opt-level = 0
+debug = true
+
+[profile.dbg.package."*"]
+opt-level = 0
+debug = true
+
+# The CI profile optimizes for reduced compile times, since they
+# dominate runtime in github actions, and cache between runs
+# doesn't always work well.
+[profile.ci]
+inherits = "dev"
+opt-level = 0
+debug = 0
+# Jobs build once from a restored cache, so incremental state is never reused.
+incremental = false
+# Only the symbol table goes; llvm-cov reads its own sections, so coverage is unaffected.
+strip = "symbols"
+
+# Dependencies tend to cache better between runs,
+# enable a small bit of optimization in this case.
+[profile.ci.package."*"]
+opt-level = 1
+
+# The docs builder starts from an empty cargo cache on every build and only
+# needs an importable extension module, so nothing here trades compile time
+# for runtime speed.
+[profile.docs]
+inherits = "ci"
+
+[profile.docs.package."*"]
+opt-level = 0
+
+# For convenience with cargo-samply
+[profile.samply]
+inherits = "bench"

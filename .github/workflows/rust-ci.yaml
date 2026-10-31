@@ -1,50 +1,46 @@
-# This is mostly copied from the rust-analyzer repo
-# https://github.com/rust-lang/rust-analyzer/blob/12e7aa3132217cc6a6c1151d468be35d7b365999/.github/workflows/ci.yaml
-
 name: Rust CI
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
-  pull_request_target:
-    types: [opened, reopened, synchronize, labeled]
+  merge_group:
   push:
     branches:
       - main
+      - 'support/**'
   schedule:
     # three times a day to run the integration tests that take a long time
     - cron:  '33 3,10,15 * * *'
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # don't cancel main runs: the post-job cache saves only happen there
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
 
 env:
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   CI: 1
   RUST_BACKTRACE: short
-  RUSTFLAGS: "-D warnings -W unreachable-pub -W bare-trait-objects"
+  RUSTFLAGS: "-D warnings"
   RUSTUP_MAX_RETRIES: 10
-  RUST_CHANNEL: '1.87.0'
+  MSRV: '1.95.0'
+  PIXI_VERSION: "v0.82.1"
 
 jobs:
-  rust-ci:
+  rust:
     name: Rust CI
-    # Run for all events, but apply different logic based on the event type
-    if: |
-      github.event_name == 'pull_request' ||
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'pull_request_target' &&
-       github.event.pull_request.head.repo.full_name != github.repository)
-    timeout-minutes: 20
+    # Headroom for the slow macos-15-intel runner
+    timeout-minutes: 45
     runs-on: ${{ matrix.os }}
-    # Apply environment protection only for external PRs and sensitive events
-    environment: ${{
-      (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-      || github.event_name == 'push'
-      || github.event_name == 'schedule'
-      && 'ci-with-secrets' || '' }}
+    permissions:
+      contents: read
+    env:
+      # The macOS legs run only cargo and the MSRV check, unless the integration tests below run
+      PIXI_SLIM: ${{ startsWith(matrix.os, 'macos') && github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' && !contains(github.event.pull_request.labels.*.name, 'run-integration-tests') }}
     defaults:
       run:
         working-directory: ./
@@ -52,135 +48,686 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-13, macos-latest]
+        # ubuntu-latest runs as the parallel ubuntu-* jobs below
+        os: [ubuntu-24.04-arm, macos-15-intel, macos-latest]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # For pull_request_target, checkout the PR head
-          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
-      # Docker services - only for tests that need secrets (internal/external PRs with secrets, push, schedule)
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: ${{ env.PIXI_SLIM }}
+          cache-write: ${{ github.ref == 'refs/heads/main' }}
+          environments: ${{ env.PIXI_SLIM == 'true' && 'rust-test' || 'default' }}
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Check if MSRV is up to date
+        run: just check-msrv "$MSRV"
+
       - name: Stand up docker services
-        if: |
-          (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') &&
-          (
-            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-            github.event_name == 'push' ||
-            github.event_name == 'schedule' ||
-            (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-          )
-        run: docker compose up -d
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          just contup
 
       - name: Wait for containers to be ready
-        if: |
-          (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') &&
-          (
-            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-            github.event_name == 'push' ||
-            github.event_name == 'schedule' ||
-            (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-          )
-        run: |
-          for _ in {1..10}; do
-              if curl --silent --fail http://minio:9000/minio/health/live; then
-              break
-              fi
-              sleep 3
-          done
-          docker compose exec -T minio mc alias set minio http://minio:9000 minio123 minio123
-          for _ in {1..20}; do
-              if curl --silent --fail "http://azurite:10000/devstoreaccount1/testcontainer?sv=2023-01-03&ss=btqf&srt=sco&spr=https%2Chttp&st=2025-01-06T14%3A53%3A30Z&se=2035-01-07T14%3A53%3A00Z&sp=rwdftlacup&sig=jclETGilOzONYp4Y0iK9SpVRLGyehaS5lg5booJ9VYA%3D&restype=container"; then
-              break
-              fi
-              sleep 3
-          done
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: just contwait
 
-      # Common setup steps for all scenarios
-      - name: Install Just
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: sudo snap install --edge --classic just
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # The rust cache includes a dep on the Python version (when building icechunk-python)
+          # so we need to bump the version here whenever Python version is updated
+          # Currently: 3.12
+          prefix-key: "rust-py312"
+          shared-key: "rust"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run tests with Docker services
+        if: matrix.os == 'ubuntu-24.04-arm'
+        env:
+          RUST_LOG: icechunk=trace
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          HF_BUCKET: ${{ vars.HF_BUCKET }}
+          HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+          HF_ACCESS_KEY_ID: ${{ secrets.HF_ACCESS_KEY_ID }}
+          HF_SECRET_ACCESS_KEY: ${{ secrets.HF_SECRET_ACCESS_KEY }}
+
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+
+        run: |
+          just profile=ci compile-tests "--locked"
+          just profile=ci test
+
+      - name: Run doc tests
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          just profile=ci doctest
+
+      - name: Run examples
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          just profile=ci run-all-examples
+
+      - name: Run unit tests only
+        if: matrix.os != 'ubuntu-24.04-arm'
+        run: |
+          just profile=ci unit-test
+
+      # Runs nightly, on manual dispatch, or on any PR labeled
+      # `run-integration-tests`
+      - name: Run integration tests against object stores
+        if: >-
+          github.event_name == 'schedule'
+          || github.event_name == 'workflow_dispatch'
+          || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          HF_BUCKET: ${{ vars.HF_BUCKET }}
+          HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+          HF_ACCESS_KEY_ID: ${{ secrets.HF_ACCESS_KEY_ID }}
+          HF_SECRET_ACCESS_KEY: ${{ secrets.HF_SECRET_ACCESS_KEY }}
+
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+
+        run: just profile=ci test-integration false
+
+  ubuntu-msrv:
+    name: Rust MSRV (ubuntu-latest)
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Check if MSRV is up to date
+        run: just check-msrv "$MSRV"
+
+      # Keyed separately because the MSRV toolchain differs from the stable one used by the other jobs.
+      - name: Cache MSRV dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          prefix-key: "rust-msrv-${{ env.MSRV }}"
+          shared-key: "msrv"
+          workspaces: ". -> msrv-target"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Check the workspace compiles with MSRV
+        env:
+          # keep MSRV artifacts out of the shared rust-cache
+          CARGO_TARGET_DIR: msrv-target
+        run: pixi run -m icechunk-python/pyproject.toml -e msrv cargo check --locked
+
+  ubuntu-test:
+    name: Rust tests (ubuntu-latest, ${{ matrix.partition }}/${{ strategy.job-total }})
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      # Backgrounded so the image pulls overlap the compile
+      - name: Stand up docker services
+        run: just services-start
+
+      # Separate from the coverage job's cache: these builds skip llvm-cov instrumentation.
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust-test"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Compile tests
+        run: just profile=ci compile-tests "--locked"
+
+      - name: Wait for containers to be ready
+        run: just contjoin
+
+      # slice: round-robin over all tests, so each partition gets an even share of the slow ones
+      - name: Run tests with Docker services
+        env:
+          RUST_LOG: icechunk=trace
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          HF_BUCKET: ${{ vars.HF_BUCKET }}
+          HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+          HF_ACCESS_KEY_ID: ${{ secrets.HF_ACCESS_KEY_ID }}
+          HF_SECRET_ACCESS_KEY: ${{ secrets.HF_SECRET_ACCESS_KEY }}
+
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+
+          PARTITION: ${{ matrix.partition }}
+          PARTITIONS: ${{ strategy.job-total }}
+        run: just profile=ci test --partition "slice:$PARTITION/$PARTITIONS"
+
+  ubuntu-doc-examples:
+    name: Rust doctests and examples (ubuntu-latest)
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      # Own key: the examples build icechunk alone, so their dependency features differ from the tests'.
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust-examples"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run doc tests
+        run: |
+          just profile=ci doctest
+
+      - name: Run examples
+        run: |
+          just profile=ci run-all-examples
+
+  # The Python tests against a debug-assertion build, split off the coverage job so a
+  # debug_assert! or overflow panic they reach still blocks merge.
+  ubuntu-python-debug:
+    name: Python tests, debug build (ubuntu-latest, ${{ matrix.shard }})
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Stand up RustFS
+        run: just services-start rustfs_init
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust-python-debug"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build the extension
+        run: just profile=ci develop
+
+      - name: Wait for RustFS to be ready
+        run: just rustfs-join
+
+      - name: Run Python tests
+        env:
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/3
+        run: just profile=ci pytest -n 4 -m "not hypothesis"
+
+  # Runs nightly, on manual dispatch, or on any PR labeled
+  # `run-integration-tests`
+  ubuntu-integration:
+    name: Rust integration tests (ubuntu-latest)
+    if: >-
+      github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch'
+      || contains(github.event.pull_request.labels.*.name, 'run-integration-tests')
+    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Stand up docker services
+        run: |
+          just contup
+
+      - name: Wait for containers to be ready
+        run: just contwait
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust-integration"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run integration tests against object stores
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          HF_BUCKET: ${{ vars.HF_BUCKET }}
+          HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+          HF_ACCESS_KEY_ID: ${{ secrets.HF_ACCESS_KEY_ID }}
+          HF_SECRET_ACCESS_KEY: ${{ secrets.HF_SECRET_ACCESS_KEY }}
+
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+
+        # The rooted-layout tests operate at the bucket root (empty prefix, no
+        # unique prefix), so concurrent matrix jobs would race on the same keys:
+        # run them on a single runner.
+        run: just profile=ci test-integration true
+
+  # Not a required check: these jobs re-run the tests instrumented for the codecov report.
+  # The Rust tests, doctests and examples, split in two like ubuntu-test.
+  ubuntu-coverage-rust:
+    name: Rust coverage, Rust tests (ubuntu-latest, ${{ matrix.partition }}/${{ strategy.job-total }})
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    env:
+      coverage: true
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      # Backgrounded so the image pulls overlap the compile
+      - name: Stand up docker services
+        run: just services-start
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust"
+          # partition 2 also builds the examples, so its cache covers both partitions
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.partition == 2 }}
+
+      - name: Compile tests
+        run: just profile=ci coverage=${coverage} compile-tests "--locked"
+
+      - name: Wait for containers to be ready
+        run: just contjoin
+
+      - name: Run tests with Docker services
+        env:
+          RUST_LOG: icechunk=trace
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+
+          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+          HF_BUCKET: ${{ vars.HF_BUCKET }}
+          HF_NAMESPACE: ${{ vars.HF_NAMESPACE }}
+          HF_ACCESS_KEY_ID: ${{ secrets.HF_ACCESS_KEY_ID }}
+          HF_SECRET_ACCESS_KEY: ${{ secrets.HF_SECRET_ACCESS_KEY }}
+
+          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
+          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
+          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
+          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
+
+          PARTITION: ${{ matrix.partition }}
+          PARTITIONS: ${{ strategy.job-total }}
+        run: just profile=ci coverage=${coverage} test --partition "slice:$PARTITION/$PARTITIONS"
+
+      # partition 2 does not get the slowest test, so it has time for these
+      - name: Run doc tests
+        if: matrix.partition == 2
+        run: |
+          just profile=ci coverage=${coverage} doctest
+
+      - name: Run examples
+        if: matrix.partition == 2
+        run: |
+          just profile=ci coverage=${coverage} run-all-examples
+
+      - name: Prepare coverage for upload
+        env:
+          PARTITION: ${{ matrix.partition }}
+        run: |
+          just profile=ci coverage=${coverage} coverage-report
+          mkdir coverage-part
+          mv coverage_rust.lcov "coverage-part/rust-tests-$PARTITION.lcov"
+
+      - name: Upload coverage part
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rust-coverage-rust-tests-${{ matrix.partition }}
+          path: coverage-part
+
+  # The Python tests against the instrumented extension, for the FFI coverage
+  ubuntu-coverage-python:
+    name: Rust coverage, Python tests (ubuntu-latest, ${{ matrix.shard }})
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    env:
+      coverage: true
+    strategy:
+      fail-fast: false
+      matrix:
+        # list every id below the shard count in ICECHUNK_PYTEST_SHARD
+        shard: [0, 1, 2]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Stand up RustFS
+        run: just services-start rustfs_init
+
+      # Own key: the extension build compiles the dependencies with other features than the tests
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # Currently: Python 3.12, see the rust job's cache step
+          prefix-key: "rust-py312"
+          shared-key: "rust-coverage-python"
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 0 }}
+
+      - name: Build the instrumented extension
+        run: just profile=ci coverage=${coverage} develop
+
+      - name: Wait for RustFS to be ready
+        run: just rustfs-join
+
+      - name: Run Python tests for coverage
+        env:
+          ICECHUNK_PYTEST_SHARD: ${{ matrix.shard }}/3
+        run: just profile=ci coverage=${coverage} pytest -n 4 -m "not hypothesis"
+
+      # Send the Python-line lcov too: the rust flag has always included it
+      - name: Prepare coverage for upload
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          just profile=ci coverage=${coverage} coverage-report
+          mkdir coverage-part
+          mv coverage_rust.lcov "coverage-part/rust-python-$SHARD.lcov"
+          mv coverage_python.lcov "coverage-part/python-$SHARD.lcov"
+
+      - name: Upload coverage part
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rust-coverage-python-${{ matrix.shard }}
+          path: coverage-part
+
+  # One codecov upload of all parts, and none if a part fails
+  ubuntu-coverage:
+    name: Rust coverage (ubuntu-latest)
+    needs: [ubuntu-coverage-rust, ubuntu-coverage-python]
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Download coverage parts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: rust-coverage-*
+          path: coverage-parts
+
+      - name: Upload Rust coverage to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          directory: coverage-parts
+          flags: rust
+          name: rust-coverage
+          fail_ci_if_error: false
+
+  # Keeps the required "Rust CI (ubuntu-latest)" check name. A skipped required
+  # check counts as passing, so this runs always and fails unless every job passed.
+  ubuntu-gate:
+    name: Rust CI (ubuntu-latest)
+    if: always()
+    needs: [ubuntu-msrv, ubuntu-test, ubuntu-doc-examples, ubuntu-python-debug, ubuntu-integration]
+    timeout-minutes: 5
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all ubuntu-latest jobs passed
+        env:
+          MSRV_RESULT: ${{ needs.ubuntu-msrv.result }}
+          TEST_RESULT: ${{ needs.ubuntu-test.result }}
+          DOC_EXAMPLES_RESULT: ${{ needs.ubuntu-doc-examples.result }}
+          PYTHON_DEBUG_RESULT: ${{ needs.ubuntu-python-debug.result }}
+          INTEGRATION_RESULT: ${{ needs.ubuntu-integration.result }}
+        run: |
+          echo "msrv=$MSRV_RESULT test=$TEST_RESULT doc-examples=$DOC_EXAMPLES_RESULT python-debug=$PYTHON_DEBUG_RESULT integration=$INTEGRATION_RESULT"
+          if [ "$MSRV_RESULT" != "success" ] || [ "$TEST_RESULT" != "success" ] || [ "$DOC_EXAMPLES_RESULT" != "success" ] || [ "$PYTHON_DEBUG_RESULT" != "success" ]; then
+            echo "::error::One or more ubuntu-latest Rust jobs failed"
+            exit 1
+          fi
+          # skipped when neither schedule, dispatch nor the label asked for it
+          if [ "$INTEGRATION_RESULT" != "success" ] && [ "$INTEGRATION_RESULT" != "skipped" ]; then
+            echo "::error::Integration tests failed"
+            exit 1
+          fi
+
+  shuttle:
+    name: Shuttle concurrency tests
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      # Runs after setup-pixi so the cache key hashes the pixi-pinned rustc,
+      # not the runner image's drifting rustup stable
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          # The rust cache includes a dep on the Python version (when building icechunk-python)
+          # so we need to bump the version here whenever Python version is updated
+          # Currently: 3.12
+          prefix-key: "rust-py312"
+          # own key: Code Quality no longer builds the ci-profile deps shuttle needs
+          shared-key: "shuttle"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Compile shuttle tests
+        run: just profile=ci shuttle-test --no-run
+
+      # Each shuttle run is single-threaded and every process draws fresh random proptest
+      # cases, so one process per core together runs at least proptest's default 256 cases.
+      # The shrink budget stays at the 1024 that one 256-case run gets by default.
+      - name: Run shuttle tests
+        env:
+          PROPTEST_MAX_SHRINK_ITERS: 1024
+        run: |
+          procs=$(nproc)
+          export PROPTEST_CASES=$(((256 + procs - 1) / procs))
+          echo "running $procs processes of $PROPTEST_CASES proptest cases each"
+          seq "$procs" | xargs -P "$procs" -I{} bash -o pipefail -c \
+            'just profile=ci shuttle-test -- --nocapture 2>&1 | sed -u "s/^/[shuttle {}] /"'
+
+  wasm-build:
+    name: WASM Build
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Install just
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tool: just
 
       - name: Install Rust toolchain
         run: |
-          rustup update --no-self-update ${{ env.RUST_CHANNEL }}
-          rustup component add --toolchain ${{ env.RUST_CHANNEL }} rustfmt rust-src clippy
-          rustup default ${{ env.RUST_CHANNEL }}
+          rustup update --no-self-update ${MSRV}
+          rustup default ${MSRV}
+          rustup target add wasm32-wasip1-threads
+
+      - name: Install LLVM toolchain for wasm C deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm wasi-libc libc++-dev
+
+      - name: Show wasm clang include search paths
+        run: |
+          echo | clang --target=wasm32-wasi -E -x c - -v
+          echo '#include <limits.h>' | clang --target=wasm32-wasi -E -x c - -v > /dev/null
+          ls -la /usr/include/wasm32-wasi || true
+          ls -la /usr/lib/wasm32-wasi || true
+          test -f /usr/include/wasm32-wasi/limits.h && echo "found /usr/include/wasm32-wasi/limits.h"
 
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
-          key: ${{ env.RUST_CHANNEL }}
+          key: wasm-${{ env.MSRV }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install cargo-deny
-        if: matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm'
-        run: cargo install --locked cargo-deny
+      - name: Run wasm build check
+        run: just wasm-build
 
-      # Basic checks that run for all pull requests (including external)
-      - name: Check formatting
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Cargo deny
-        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
-        run: cargo deny check
-
-      # Full checks with secrets - for internal PRs, external PRs (with approval), push, and schedule
-      - name: Check (with secrets)
-        if: |
-          (matrix.os == 'ubuntu-latest' || matrix.os == 'ubuntu-24.04-arm') &&
-          (
-            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-            github.event_name == 'push' ||
-            github.event_name == 'schedule' ||
-            (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-          )
-        env:
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
-          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
-          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-        run: just pre-commit
-
-      # Unit tests for non-Ubuntu platforms that need secrets
-      - name: Run unit tests only
-        if: |
-          (matrix.os != 'ubuntu-latest' && matrix.os != 'ubuntu-24.04-arm') &&
-          (
-            (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) ||
-            github.event_name == 'push' ||
-            github.event_name == 'schedule' ||
-            (github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name != github.repository)
-          )
-        run: cargo test --lib
-
-      # Expensive integration tests - only on schedule
-      - name: Run integration tests against object stores
-        if: github.event_name == 'schedule'
-        env:
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          AWS_BUCKET: ${{ secrets.AWS_BUCKET }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          TIGRIS_BUCKET: ${{ secrets.TIGRIS_BUCKET }}
-          TIGRIS_REGION: ${{ secrets.TIGRIS_REGION }}
-          TIGRIS_ACCESS_KEY_ID: ${{ secrets.TIGRIS_ACCESS_KEY_ID }}
-          TIGRIS_SECRET_ACCESS_KEY: ${{ secrets.TIGRIS_SECRET_ACCESS_KEY }}
-        run: cargo test --all --all-targets -- --ignored
+      - name: Run no-default-features lib tests (proxy for wasm feature set)
+        run: just wasm-proxy-test

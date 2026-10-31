@@ -3,35 +3,75 @@ from typing import Any
 import pytest
 from numpy.testing import assert_array_equal
 
-from icechunk import IcechunkStore, Repository, in_memory_storage
+from icechunk import IcechunkError, IcechunkStore, Repository, in_memory_storage
 
 pytest.importorskip("hypothesis")
-
 import hypothesis.strategies as st
-from hypothesis import assume, given, settings
+from hypothesis import given
 
 from zarr.testing.strategies import arrays, numpy_arrays
 
+# TODO: use a version guard instead, once the appropriate Zarr release is out.
+try:
+    from zarr.testing.strategies import (  # type: ignore[attr-defined, unused-ignore]
+        complex_chunked_arrays,
+    )
 
-def create() -> IcechunkStore:
-    repo = Repository.create(in_memory_storage())
+    supports_rectilinear_chunk_grids = True
+
+except ImportError:
+    supports_rectilinear_chunk_grids = False
+
+
+def create(spec_version: int | None) -> IcechunkStore:
+    repo = Repository.create(in_memory_storage(), spec_version=spec_version)
     return repo.writable_session("main").store
 
 
-icechunk_stores = st.builds(create)
+@st.composite
+def icechunk_stores(
+    draw: st.DrawFn,
+    spec_version: st.SearchStrategy[int | None] = st.sampled_from([None, 1, 2]),  # noqa: B008
+) -> IcechunkStore:
+    return create(spec_version=draw(spec_version))
 
 
-@settings(report_multiple_bugs=True, deadline=None)
-@given(data=st.data(), nparray=numpy_arrays())
-def test_roundtrip(data: st.DataObject, nparray: Any) -> None:
-    # TODO: support size-0 arrays GH392
-    assume(nparray.size > 0)
+@given(data=st.data(), nparray=numpy_arrays(), spec_version=st.sampled_from([None, 1, 2]))
+def test_roundtrip(data: st.DataObject, nparray: Any, spec_version: int | None) -> None:
+    try:
+        zarray = data.draw(
+            arrays(
+                stores=icechunk_stores(spec_version=st.just(spec_version)),
+                arrays=st.just(nparray),
+                zarr_formats=st.just(3),
+            )
+        )
+    except IcechunkError as e:
+        # Non-regular chunk grids are not supported in icechunk format version 1
+        if (
+            spec_version == 1
+            and "Non-regular chunk grids are not supported in icechunk" in e.message
+        ):
+            pass
+        else:
+            raise
+    else:
+        assert_array_equal(nparray, zarray[:])
 
-    zarray = data.draw(
-        arrays(
-            stores=icechunk_stores,
-            arrays=st.just(nparray),
-            zarr_formats=st.just(3),
+
+# FIXME: add indexing property tests too
+
+
+@pytest.mark.skipif(
+    not supports_rectilinear_chunk_grids, reason="rectilinear chunk grids are unsupported"
+)
+@given(data=st.data(), spec_version=st.sampled_from([None, 1, 2]))
+def test_roundtrip_complex_chunk_grids(
+    data: st.DataObject, spec_version: int | None
+) -> None:
+    nparray, zarray = data.draw(
+        complex_chunked_arrays(
+            stores=icechunk_stores(spec_version=st.just(spec_version)),
         )
     )
     assert_array_equal(nparray, zarray[:])

@@ -1,6 +1,6 @@
 # Icechunk
 
-![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/docs/docs/assets/logo.svg)
+![Icechunk logo](https://raw.githubusercontent.com/earth-mover/icechunk/refs/heads/main/icechunk-python/docs/docs/assets/logo.svg)
 
 <a href="https://pypi.org/project/icechunk" target="_blank"><img alt="PyPI" src="https://img.shields.io/pypi/v/icechunk?logo=pypi&logoColor=ffde57&label=pypi&style=for-the-badge"></a>
 <a href="https://anaconda.org/conda-forge/icechunk" target="_blank"><img alt="Conda Forge" src="https://img.shields.io/conda/vn/conda-forge/icechunk.svg?logo=conda-forge&style=for-the-badge"></a>
@@ -10,7 +10,7 @@
 
 ---
 > [!TIP]
-> **Icechunk 1.0 is released!** Better API, more performance and stability
+> **Icechunk 2.0 is released!** Better consistency, performance, and reliability for tensor storage
 ---
 
 Icechunk is an open-source (Apache 2.0), transactional storage engine for tensor / ND-array data designed for use on cloud object storage.
@@ -22,11 +22,39 @@ that enhance performance, collaboration, and safety in a cloud-computing context
 - This page: a general overview of the project's goals and components.
 - [Icechunk Launch Blog Post](https://earthmover.io/blog/icechunk)
 - [Frequently Asked Questions](https://icechunk.io/en/latest/faq/)
-- Documentation for [Icechunk Python](https://icechunk.io/en/latest/icechunk-python), the main user-facing
+- Documentation for [Icechunk Python](https://icechunk.io/en/latest/), the main user-facing
   library
 - Documentation for the [Icechunk Rust Crate](https://icechunk.io/en/latest/icechunk-rust)
 - The [Contributor Guide](https://icechunk.io/en/latest/contributing)
 - The [Icechunk Spec](https://icechunk.io/en/latest/spec)
+
+## Crate Structure
+
+The Rust workspace is organized into layered crates:
+
+```mermaid
+graph TD
+    python[icechunk-python] --> core[icechunk]
+    core --> arrow[icechunk-arrow-object-store]
+    core --> s3[icechunk-s3 *optional*]
+    core --> storage[icechunk-storage]
+    core --> format[icechunk-format]
+    arrow --> storage
+    s3 --> storage
+    storage --> types[icechunk-types]
+    format --> types
+```
+
+| Crate | Description |
+|-------|-------------|
+| **icechunk-macros** | Procedural macro helpers for tests and internal use |
+| **icechunk-types** | Shared foundational types (`Path`, `ETag`, `Move`, error wrappers) used across all crates |
+| **icechunk-format** | Binary format types and serialization (snapshots, manifests, transaction logs, repo info) |
+| **icechunk-storage** | Storage trait definitions and common storage utilities |
+| **icechunk-arrow-object-store** | Storage backend using Apache Arrow's `object_store` (in-memory, local, GCS, Azure, etc.) |
+| **icechunk-s3** | Native AWS S3 storage backend (optional feature) |
+| **icechunk** | Core storage engine: transactions, version control, repositories |
+| **icechunk-python** | PyO3 bindings exposing the engine to Python |
 
 ## Icechunk Overview
 
@@ -136,7 +164,7 @@ When writing data, a Zarr implementation will create these keys and populate the
 When modifying existing arrays or groups, a Zarr implementation will potentially overwrite existing keys with new data.
 
 This is generally not a problem, as long there is only one person or process coordinating access to the data.
-However, when multiple uncoordinated readers and writers attempt to access the same Zarr data at the same time, [various consistency problems](https://docs.earthmover.io/concepts/version-control-system#consistency-problems-with-zarr) emerge.
+However, when multiple uncoordinated readers and writers attempt to access the same Zarr data at the same time, [various consistency problems](https://icechunk.io/en/latest/faq/#why-was-icechunk-created) emerge.
 These consistency problems can occur in both file storage and object storage; they are particularly severe in a cloud setting where Zarr is being used as an active store for data that are frequently changed while also being read.
 
 With Icechunk, we keep the same core Zarr data model, but add a layer of indirection between the Zarr keys and the on-disk storage.

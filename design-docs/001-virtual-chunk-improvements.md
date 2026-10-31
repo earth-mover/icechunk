@@ -332,10 +332,10 @@ The repo is stored in S3 us-east-1, all virtual chunks point to Google cloud sto
 
 #### Go to local MinIO for testing
 
-All virtual chunks point to S3 us-east-1, for testing purposes the chunks for an array in `s3://bucket/prefix/array` are also copied locally and served with MinIO on port 9000.
+All virtual chunks point to S3 us-east-1, for testing purposes the chunks for an array in `s3://bucket/prefix/array` are also copied locally and served with MinIO on port 4200.
 
 * When calling `set_virtual_ref` locations are passed with `s3://` protocol.
-* The icechunk repo instance is initialized with a configuration that creates a container with `name=minio-override`, `prefix=s3://bucket/prefix/array` and `endpoint_url=localhost:9000`
+* The icechunk repo instance is initialized with a configuration that creates a container with `name=minio-override`, `prefix=s3://bucket/prefix/array` and `endpoint_url=localhost:4200`
 
 #### Multiple clouds and credential sets
 

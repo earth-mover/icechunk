@@ -108,7 +108,6 @@ def test_time_xarray_open(synth_dataset: Dataset, benchmark) -> None:
             synth_dataset.store,
             group=synth_dataset.group,
             chunks=None,
-            consolidated=False,
         )
 
 
@@ -142,7 +141,6 @@ def test_time_xarray_read_chunks_cold_cache(
             repo.readonly_session("main").store,
             group=synth_dataset.group,
             chunks=None,
-            consolidated=False,
         )
         subset = ds.isel(subsetter)
         subset[synth_dataset.load_variables].compute()
@@ -164,7 +162,6 @@ def test_time_xarray_read_chunks_hot_cache(
         repo.readonly_session("main").store,
         group=synth_dataset.group,
         chunks=None,
-        consolidated=False,
     )
     subset = ds.isel(synth_dataset.chunk_selector)
     # important this cannot be `load`

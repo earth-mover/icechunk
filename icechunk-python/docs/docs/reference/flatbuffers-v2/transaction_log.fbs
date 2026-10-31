@@ -1,0 +1,119 @@
+include "common.fbs";
+
+namespace generated;
+
+// --8<-- [start:chunk_indices]
+// A single chunk coordinate in the array's chunk grid.
+// coords MUST contain one 0-based uint32 index per array dimension.
+table ChunkIndices {
+  coords: [uint32] (required);
+}
+
+// --8<-- [end:chunk_indices]
+
+// --8<-- [start:array_updated_chunks]
+// Identifies an array and lists the chunk coordinates where a
+// reference was added, overwritten, or deleted.
+table ArrayUpdatedChunks {
+  // The node id of the array.
+  node_id: ObjectId8 (required);
+
+  // The coordinates of all chunk references that were added, overwritten,
+  // or deleted in this transaction for this array. Each ChunkIndices
+  // contains a coords vector of uint32 representing the chunk's position
+  // in the array's chunk grid.
+  // MUST be sorted in ascending lexicographic order (compare first
+  // element, break ties with second element, etc.).
+  chunks: [ChunkIndices] (required);
+}
+
+// --8<-- [end:array_updated_chunks]
+
+// --8<-- [start:move_operation]
+// Whether a node is a group or an array. Recorded in MoveOperation
+// so conflict detection can proceed without fetching the full snapshot.
+enum NodeType: ubyte { Group = 0, Array }
+
+// A single move operation, recording that a node changed path.
+// All four fields MUST be present. They are not marked `required`
+// in the flatbuffers schema to allow future schema evolution.
+table MoveOperation {
+  // The node's path in the parent snapshot (see node path definition in common.fbs).
+  from: string;
+
+  // The node's path in the current snapshot.
+  to: string;
+
+  // The node id of the moved node.
+  node_id: ObjectId8;
+
+  // Whether this node is a Group or Array.
+  node_type: NodeType;
+}
+
+// --8<-- [end:move_operation]
+
+// --8<-- [start:transaction_log]
+// The initial snapshot's transaction log MUST have all lists empty.
+// The root group created during repository initialization is not
+// recorded in the transaction log.
+//
+// All ObjectId8 lists below MUST be sorted in ascending byte order
+// (i.e. lexicographic comparison of the 8 raw bytes).
+//
+// TODO: verify this holds after amend merging — a node could
+// end up in both new_* and updated_* lists.
+// A group's node id MUST NOT appear in more than one of
+// new_groups, deleted_groups, or updated_groups.
+// Likewise for arrays across new_arrays, deleted_arrays, or updated_arrays.
+// For example, a group that is created and then has its metadata
+// modified within the same commit MUST appear only in new_groups.
+table TransactionLog {
+  // MUST be identical to the id of the corresponding snapshot.
+  id: ObjectId12 (required);
+
+  // Node ids of groups created in this transaction.
+  new_groups: [ObjectId8] (required);
+
+  // Node ids of arrays created in this transaction.
+  new_arrays: [ObjectId8] (required);
+
+  // Node ids of groups deleted in this transaction.
+  deleted_groups: [ObjectId8] (required);
+
+  // Node ids of arrays deleted in this transaction.
+  deleted_arrays: [ObjectId8] (required);
+
+  // Node ids of arrays whose user_data (see NodeSnapshot) was modified
+  // in this transaction.
+  updated_arrays: [ObjectId8] (required);
+
+  // Node ids of groups whose user_data (see NodeSnapshot) was modified
+  // in this transaction.
+  updated_groups: [ObjectId8] (required);
+
+  // Chunk ref changes made in this transaction.
+  // MUST be sorted in ascending byte order of node_id.
+  updated_chunks: [ArrayUpdatedChunks] (required);
+
+  // Nodes moved in this transaction.
+  // MUST be sorted by the `to` field (see node path sort order in common.fbs).
+  // MUST be fully collapsed: if a node was moved multiple times
+  // (e.g. A -> B, then B -> C), only the net result (A -> C) is recorded.
+  // Every moved node MUST have its own entry. When a group is moved,
+  // all of its children MUST also appear as separate entries.
+  // A move MUST NOT result in a node whose parent path no longer exists.
+  // Identity moves (from == to) MUST be omitted.
+  // If a `to` path was occupied in the parent snapshot, that path
+  // MUST also appear as a `from` in another move — moves MUST NOT
+  // implicitly delete or overwrite nodes.
+  // Introduced in spec version 2.
+  moved_nodes: [MoveOperation];
+
+  // Reserved for future use. Opaque bytes for future extensions.
+  // Introduced in spec version 2.
+  extra: [uint8];
+}
+// --8<-- [end:transaction_log]
+
+root_type TransactionLog;

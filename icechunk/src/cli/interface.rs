@@ -1,7 +1,12 @@
+//! CLI command definitions and handlers.
+
+use crate::format::{SnapshotId, snapshot::SnapshotInfo};
+use crate::inspect::snapshot_json;
 use crate::repository::VersionInfo;
+use chrono::Local;
 use clap::{Args, Parser, Subcommand};
 use dialoguer::{Input, Select};
-use futures::stream::StreamExt;
+use futures::stream::StreamExt as _;
 use serde_yaml_ng;
 use std::collections::HashMap;
 use std::fs::{File, create_dir_all};
@@ -9,7 +14,7 @@ use std::io::stdout;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Ok, Result};
+use anyhow::{Context as _, Result};
 
 use crate::storage::{
     new_azure_blob_storage, new_gcs_storage, new_local_filesystem_storage,
@@ -24,7 +29,7 @@ use dirs::config_dir;
 use super::config::{AzureRepoLocation, RepoLocation};
 
 #[derive(Debug, Parser)]
-#[clap()]
+#[command()]
 pub struct IcechunkCLI {
     #[command(subcommand)]
     cmd: Command,
@@ -32,31 +37,155 @@ pub struct IcechunkCLI {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    #[command(subcommand, about = "Manage repositories")]
-    Repo(RepoCommand),
-    #[command(subcommand, about = "Manage snapshots")]
-    Snapshot(SnapshotCommand),
     #[command(subcommand, about = "Manage configuration")]
     Config(ConfigCommand),
+    #[command(subcommand, about = "Manage repositories")]
+    Repo(RepoCommand),
+    #[command(name = "ancestry", about = "Show ancestry of a branch, tag or snapshot")]
+    Ancestry(AncestryArgs),
+    #[command(name = "inspect", about = "Show details of a snapshot as JSON")]
+    Inspect(InspectArgs),
+    #[command(
+        name = "diff",
+        about = "Show changes from a branch, tag or snapshot to one of its descendants",
+        long_about = concat!(
+            "Show changes from a branch, tag or snapshot to one of its descendants.\n",
+            "`from` must be an ancestor of `to`.\n\n",
+            "Each line starts with a status letter:\n",
+            "  A  added group or array\n",
+            "  D  deleted group or array\n",
+            "  M  group or array with updated metadata\n",
+            "  U  array with updated chunks\n",
+            "  R  moved group or array\n\n",
+            "A path can have more than one line, e.g. a new array with chunks\n",
+            "shows both `A` and `U`."
+        )
+    )]
+    Diff(DiffArgs),
+    #[command(subcommand, about = "Manage branches")]
+    Branch(BranchCommand),
+    #[command(subcommand, about = "Manage tags")]
+    Tag(TagCommand),
 }
 
 #[derive(Debug, Subcommand)]
 enum RepoCommand {
-    #[clap(name = "create", about = "Create a repository")]
+    #[command(name = "create", about = "Create a repository")]
     Create(CreateCommand),
 }
 
+#[derive(Debug, Args)]
+struct AncestryArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(
+        name = "reference",
+        default_value = "main",
+        help = "Branch, tag, or snapshot id to show ancestry for"
+    )]
+    reference: String,
+    #[arg(short = 'n', default_value_t = 10, help = "Number of snapshots to list")]
+    n: usize,
+}
+
+#[derive(Debug, Args)]
+struct InspectArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(
+        name = "reference",
+        default_value = "main",
+        help = "Branch, tag, or snapshot id to inspect"
+    )]
+    reference: String,
+}
+
+#[derive(Debug, Args)]
+struct DiffArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(
+        name = "from",
+        help = "Branch, tag, or snapshot id to diff from; must be an ancestor of `to`"
+    )]
+    from: String,
+    #[arg(name = "to", help = "Branch, tag, or snapshot id to diff to")]
+    to: String,
+}
+
 #[derive(Debug, Subcommand)]
-enum SnapshotCommand {
-    #[clap(name = "list", about = "List snapshots in a repository")]
-    List(ListCommand),
+enum BranchCommand {
+    #[command(name = "list", about = "List branches")]
+    List(BranchListArgs),
+    #[command(name = "create", about = "Create branch")]
+    Create(BranchCreateArgs),
+    #[command(name = "delete", about = "Delete branch")]
+    Delete(BranchDeleteArgs),
+}
+
+#[derive(Debug, Args)]
+struct BranchListArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+}
+
+#[derive(Debug, Args)]
+struct BranchCreateArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(name = "branch", help = "Name of the branch to create")]
+    branch: String,
+    #[arg(name = "from", help = "Branch, tag, or snapshot id to create the branch from")]
+    from: String,
+}
+
+#[derive(Debug, Args)]
+struct BranchDeleteArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(name = "branch", help = "Name of the branch to delete")]
+    branch: String,
+}
+
+#[derive(Debug, Subcommand)]
+enum TagCommand {
+    #[command(name = "list", about = "List tags")]
+    List(TagListArgs),
+    #[command(name = "create", about = "Create tag")]
+    Create(TagCreateArgs),
+    #[command(name = "delete", about = "Delete tag")]
+    Delete(TagDeleteArgs),
+}
+
+#[derive(Debug, Args)]
+struct TagListArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+}
+
+#[derive(Debug, Args)]
+struct TagCreateArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(name = "tag", help = "Name of the tag to create")]
+    tag: String,
+    #[arg(name = "target", help = "Branch, tag, or snapshot id to create the tag for")]
+    target: String,
+}
+
+#[derive(Debug, Args)]
+struct TagDeleteArgs {
+    #[arg(name = "alias", help = "Alias of the repository in the config")]
+    repo: RepositoryAlias,
+    #[arg(name = "tag", help = "Name of the tag to delete")]
+    tag: String,
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
-    #[clap(name = "init", about = "Interactively create a new config file.")]
+    #[command(name = "init", about = "Interactively create a new config file.")]
     Init(InitCommand),
-    #[clap(
+    #[command(
         name = "add",
         about = concat!(
             "Interactively add a repository to the config. ",
@@ -64,7 +193,7 @@ enum ConfigCommand {
         )
     )]
     Add(AddCommand),
-    #[clap(name = "list", about = "Print the current config.")]
+    #[command(name = "list", about = "Print the current config.")]
     List,
 }
 
@@ -89,20 +218,6 @@ struct InitCommand {
 struct AddCommand {
     #[arg(name = "alias", help = "Alias of the repository in the config")]
     repo: RepositoryAlias,
-}
-
-#[derive(Debug, Args)]
-struct ListCommand {
-    repo: RepositoryAlias,
-    #[arg(short = 'n', default_value_t = 10, help = "Number of snapshots to list")]
-    n: usize,
-    #[arg(
-        short = 'b',
-        long = "branch",
-        default_value = "main",
-        help = "Branch to list snapshots from"
-    )]
-    branch: String,
 }
 
 const CONFIG_DIR: &str = "icechunk";
@@ -151,6 +266,9 @@ async fn get_storage(
                 location.bucket.clone(),
                 location.prefix.clone(),
                 Some(credentials.clone()),
+                Vec::new(),
+                Vec::new(),
+                None, // auto-detect key layout
             )
             .context("Failed to create S3 storage")?;
             Ok(storage)
@@ -167,6 +285,9 @@ async fn get_storage(
                 location.prefix.clone(),
                 Some(credentials.clone()),
                 false,
+                Vec::new(),
+                Vec::new(),
+                None, // auto-detect key layout
             )
             .context("Failed to create Tigris storage")?;
             Ok(storage)
@@ -179,8 +300,9 @@ async fn get_storage(
                 location.prefix.clone(),
                 Some(credentials.clone()),
                 Some(object_store_config.clone()),
+                Vec::new(),
+                Vec::new(),
             )
-            .await
             .context("Failed to create GCS storage")?;
             Ok(storage)
         }
@@ -204,14 +326,49 @@ async fn get_storage(
     }
 }
 
+async fn open_repository(
+    repo_alias: &RepositoryAlias,
+    config: &CliConfig,
+) -> Result<Repository> {
+    let repo = config
+        .repos
+        .get(repo_alias)
+        .context(format!("Repository {repo_alias:?} not found in config"))?;
+    let storage = get_storage(repo).await?;
+    let config = repo.get_config().clone();
+
+    let repository = Repository::open(storage)
+        .config(config)
+        .execute()
+        .await
+        .context(format!("Failed to open repository {repo_alias:?}"))?;
+
+    Ok(repository)
+}
+
+async fn parse_reference(repository: &Repository, reference: &str) -> Result<SnapshotId> {
+    if let Ok(snapshot_id) = SnapshotId::try_from(reference) {
+        return Ok(snapshot_id);
+    }
+    if let Ok(snapshot_id) = repository.lookup_branch(reference).await {
+        return Ok(snapshot_id);
+    }
+    if let Ok(snapshot_id) = repository.lookup_tag(reference).await {
+        return Ok(snapshot_id);
+    }
+    Err(anyhow::anyhow!("`{reference}` is not a valid snapshot id, branch, or tag"))
+}
+
 async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()> {
     let repo =
         config.repos.get(&init_cmd.repo).context("Repository not found in config")?;
     let storage = get_storage(repo).await?;
 
-    let config = Some(repo.get_config().clone());
+    let config = repo.get_config().clone();
 
-    Repository::create(config, Arc::clone(&storage), HashMap::new())
+    Repository::create(storage)
+        .config(config)
+        .execute()
         .await
         .context(format!("Failed to create repository {:?}", init_cmd.repo))?;
 
@@ -220,29 +377,176 @@ async fn repo_create(init_cmd: &CreateCommand, config: &CliConfig) -> Result<()>
     Ok(())
 }
 
-async fn snapshot_list(
-    list_cmd: &ListCommand,
+async fn list_branches(
+    args: &BranchListArgs,
     config: &CliConfig,
     mut writer: impl std::io::Write,
 ) -> Result<()> {
-    let repo =
-        config.repos.get(&list_cmd.repo).context("Repository not found in config")?;
-    let storage = get_storage(repo).await?;
-    let config = Some(repo.get_config().clone());
-
-    let repository = Repository::open(config, Arc::clone(&storage), HashMap::new())
-        .await
-        .context(format!("Failed to open repository {:?}", list_cmd.repo))?;
-
-    let branch_ref = VersionInfo::BranchTipRef(list_cmd.branch.clone());
-    let ancestry = repository.ancestry(&branch_ref).await?;
-
-    let snapshots: Vec<_> = ancestry.take(list_cmd.n).collect().await;
-
-    for snapshot in snapshots {
-        writeln!(writer, "{:?}", snapshot.context("Failed to get snapshot")?)?;
+    let repository = open_repository(&args.repo, config).await?;
+    let branches = repository.list_branches().await.context("Failed to list branches")?;
+    for branch in branches {
+        let snapshot = repository.lookup_branch(branch.as_str()).await?;
+        writeln!(writer, "{snapshot}  {branch}")?;
     }
+    Ok(())
+}
 
+async fn create_branch(args: &BranchCreateArgs, config: &CliConfig) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+    let from_snapshot = parse_reference(&repository, &args.from).await?;
+    repository.create_branch(&args.branch, &from_snapshot).await.context(format!(
+        "Failed to create branch {:?} from {:?}",
+        args.branch, args.from
+    ))?;
+
+    println!(
+        "✅ Created branch {:?} from {:?} in repository {:?}",
+        args.branch, args.from, args.repo
+    );
+
+    Ok(())
+}
+
+async fn delete_branch(args: &BranchDeleteArgs, config: &CliConfig) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+
+    repository
+        .delete_branch(&args.branch)
+        .await
+        .context(format!("Failed to delete branch {:?}", args.branch))?;
+
+    println!("✅ Deleted branch {:?} in repository {:?}", args.branch, args.repo);
+
+    Ok(())
+}
+
+async fn list_tags(
+    args: &TagListArgs,
+    config: &CliConfig,
+    mut writer: impl std::io::Write,
+) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+    let tags = repository.list_tags().await.context("Failed to list tags")?;
+    for tag in tags {
+        let snapshot = repository.lookup_tag(tag.as_str()).await?;
+        writeln!(writer, "{snapshot}  {tag}")?;
+    }
+    Ok(())
+}
+
+async fn create_tag(args: &TagCreateArgs, config: &CliConfig) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+    let target_snapshot = parse_reference(&repository, &args.target).await?;
+
+    repository
+        .create_tag(&args.tag, &target_snapshot)
+        .await
+        .context(format!("Failed to create tag {:?} from {:?}", args.tag, args.target))?;
+
+    println!(
+        "✅ Created tag {:?} for {:?} in repository {:?}",
+        args.tag, target_snapshot, args.repo
+    );
+
+    Ok(())
+}
+
+async fn delete_tag(args: &TagDeleteArgs, config: &CliConfig) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+
+    repository
+        .delete_tag(&args.tag)
+        .await
+        .context(format!("Failed to delete tag {:?}", args.tag))?;
+
+    println!("✅ Deleted tag {:?} in repository {:?}", args.tag, args.repo);
+
+    Ok(())
+}
+
+fn show_snapshot(
+    mut writer: impl std::io::Write,
+    snapshot: SnapshotInfo,
+    with_meta: bool,
+) -> Result<()> {
+    writeln!(writer, "Snapshot: {}", snapshot.id)?;
+    writeln!(
+        writer,
+        "Date: {}",
+        snapshot.flushed_at.with_timezone(&Local).format("%B %d %Y  %H:%M:%S")
+    )?;
+    if with_meta && !snapshot.metadata.is_empty() {
+        writeln!(writer, "Metadata:")?;
+        for (key, value) in snapshot.metadata {
+            writeln!(writer, "  {key}: {value}")?;
+        }
+    }
+    if !snapshot.message.is_empty() {
+        writeln!(writer, "\n  {}", snapshot.message)?;
+    }
+    Ok(())
+}
+
+async fn ancestry(
+    args: &AncestryArgs,
+    config: &CliConfig,
+    mut writer: impl std::io::Write,
+) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+    let snapshot = parse_reference(&repository, &args.reference).await?;
+    let mut ancestry = Box::pin(
+        repository.ancestry(&VersionInfo::SnapshotId(snapshot)).await?.take(args.n),
+    );
+    while let Some(snapshot) = ancestry.next().await {
+        show_snapshot(&mut writer, snapshot.context("Failed to get snapshot")?, false)?;
+        writeln!(writer)?;
+    }
+    Ok(())
+}
+
+async fn inspect(
+    args: &InspectArgs,
+    config: &CliConfig,
+    mut writer: impl std::io::Write,
+) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+    let snapshot = parse_reference(&repository, &args.reference).await?;
+    let json = snapshot_json(repository.asset_manager(), &snapshot, true)
+        .await
+        .context(format!("Failed to inspect snapshot {snapshot}"))?;
+    writeln!(writer, "{json}")?;
+    Ok(())
+}
+
+async fn diff(
+    args: &DiffArgs,
+    config: &CliConfig,
+    mut writer: impl std::io::Write,
+) -> Result<()> {
+    let repository = open_repository(&args.repo, config).await?;
+    let from = parse_reference(&repository, &args.from).await?;
+    let to = parse_reference(&repository, &args.to).await?;
+    let diff = repository
+        .diff(&VersionInfo::SnapshotId(from), &VersionInfo::SnapshotId(to))
+        .await
+        .context(format!("Failed to diff {:?} and {:?}", args.from, args.to))?;
+
+    for path in diff.new_groups.iter().chain(&diff.new_arrays) {
+        writeln!(writer, "A  {path}")?;
+    }
+    for path in diff.deleted_groups.iter().chain(&diff.deleted_arrays) {
+        writeln!(writer, "D  {path}")?;
+    }
+    for path in diff.updated_groups.iter().chain(&diff.updated_arrays) {
+        writeln!(writer, "M  {path}")?;
+    }
+    for (path, chunks) in &diff.updated_chunks {
+        let noun = if chunks.len() == 1 { "chunk" } else { "chunks" };
+        writeln!(writer, "U  {path}  ({} {noun})", chunks.len())?;
+    }
+    for moved in &diff.moved_nodes {
+        writeln!(writer, "R  {} -> {}", moved.from, moved.to)?;
+    }
     Ok(())
 }
 
@@ -314,13 +618,7 @@ fn add_repo_to_config(
 
             RepositoryDefinition::S3 {
                 location: RepoLocation { bucket, prefix: Some(prefix) },
-                object_store_config: S3Options {
-                    region: Some(region),
-                    endpoint_url: None,
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                },
+                object_store_config: S3Options::default().with_region(region),
                 credentials: S3Credentials::FromEnv,
                 config: RepositoryConfig::default(),
             }
@@ -345,13 +643,9 @@ fn add_repo_to_config(
 
             RepositoryDefinition::Tigris {
                 location: RepoLocation { bucket, prefix: Some(prefix) },
-                object_store_config: S3Options {
-                    region: Some(region),
-                    endpoint_url: Some(endpoint_url),
-                    anonymous: false,
-                    allow_http: false,
-                    force_path_style: false,
-                },
+                object_store_config: S3Options::default()
+                    .with_region(region)
+                    .with_endpoint_url(endpoint_url),
                 credentials: S3Credentials::FromEnv,
                 config: RepositoryConfig::default(),
             }
@@ -417,8 +711,41 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
         Command::Repo(RepoCommand::Create(init_cmd)) => {
             repo_create(&init_cmd, &config).await
         }
-        Command::Snapshot(SnapshotCommand::List(list_cmd)) => {
-            snapshot_list(&list_cmd, &config, stdout()).await
+        Command::Ancestry(ancestry_args) => {
+            ancestry(&ancestry_args, &config, stdout()).await?;
+            Ok(())
+        }
+        Command::Inspect(inspect_args) => {
+            inspect(&inspect_args, &config, stdout()).await?;
+            Ok(())
+        }
+        Command::Diff(diff_args) => {
+            diff(&diff_args, &config, stdout()).await?;
+            Ok(())
+        }
+        Command::Branch(BranchCommand::List(list_args)) => {
+            list_branches(&list_args, &config, stdout()).await?;
+            Ok(())
+        }
+        Command::Branch(BranchCommand::Create(create_args)) => {
+            create_branch(&create_args, &config).await?;
+            Ok(())
+        }
+        Command::Branch(BranchCommand::Delete(delete_args)) => {
+            delete_branch(&delete_args, &config).await?;
+            Ok(())
+        }
+        Command::Tag(TagCommand::List(list_args)) => {
+            list_tags(&list_args, &config, stdout()).await?;
+            Ok(())
+        }
+        Command::Tag(TagCommand::Create(create_args)) => {
+            create_tag(&create_args, &config).await?;
+            Ok(())
+        }
+        Command::Tag(TagCommand::Delete(delete_args)) => {
+            delete_tag(&delete_args, &config).await?;
+            Ok(())
         }
         Command::Config(ConfigCommand::Init(init_cmd)) => {
             let new_config = config_init(&init_cmd, &config).await?;
@@ -432,17 +759,20 @@ pub async fn run_cli(args: IcechunkCLI) -> Result<()> {
         }
         Command::Config(ConfigCommand::List) => config_list(&config, stdout()).await,
     }
-    .map_err(|e| anyhow::anyhow!("❌ {}", e))
+    .map_err(|e| anyhow::anyhow!("❌ {e}"))
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use std::fs::read_dir;
 
+    use bytes::Bytes;
     use icechunk_macros::tokio_test;
 
     use super::*;
+    use crate::format::{ChunkIndices, Path, snapshot::ArrayShape};
+
+    use regex::Regex;
 
     #[tokio_test]
     async fn test_repo_create() {
@@ -464,49 +794,14 @@ mod tests {
 
         repo_create(&init_cmd, &config).await.unwrap();
 
-        let refs = path.join("refs");
+        let repo = path.join("repo");
         let snapshots = path.join("snapshots");
 
-        assert!(refs.is_dir());
+        assert!(repo.is_file());
         assert!(snapshots.is_dir());
-
-        let mut refs_contents = read_dir(refs).unwrap();
-        assert!(refs_contents.next().is_some());
 
         let mut snapshots_contents = read_dir(snapshots).unwrap();
         assert!(snapshots_contents.next().is_some());
-    }
-
-    #[tokio_test]
-    async fn test_snapshot_list() {
-        let temp = assert_fs::TempDir::new().unwrap();
-        let path = temp.path().to_path_buf();
-
-        let repo_alias = RepositoryAlias("test-repo".to_string());
-        let repo = RepositoryDefinition::LocalFileSystem {
-            path: path.clone(),
-            config: RepositoryConfig::default(),
-        };
-
-        let mut repos = HashMap::new();
-        repos.insert(repo_alias.clone(), repo);
-
-        let config = CliConfig { repos };
-
-        let init_cmd = CreateCommand { repo: repo_alias.clone() };
-
-        repo_create(&init_cmd, &config).await.unwrap();
-
-        let list_cmd =
-            ListCommand { repo: repo_alias.clone(), n: 10, branch: "main".to_string() };
-
-        let mut writer = Vec::new();
-        snapshot_list(&list_cmd, &config.clone(), &mut writer).await.unwrap();
-
-        let output = String::from_utf8(writer).unwrap();
-
-        assert_eq!(output.lines().count(), 1);
-        assert!(output.contains("SnapshotInfo"));
     }
 
     #[tokio_test]
@@ -532,5 +827,258 @@ mod tests {
         let output = String::from_utf8(writer).unwrap();
 
         assert!(output.contains("LocalFileSystem"));
+    }
+
+    #[tokio_test]
+    async fn test_ancestry() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let path = temp.path().to_path_buf();
+
+        let repo_alias = RepositoryAlias("test-repo".to_string());
+        let repo = RepositoryDefinition::LocalFileSystem {
+            path: path.clone(),
+            config: RepositoryConfig::default(),
+        };
+
+        let mut repos = HashMap::new();
+        repos.insert(repo_alias.clone(), repo);
+
+        let config = CliConfig { repos };
+
+        let init_cmd = CreateCommand { repo: repo_alias.clone() };
+        repo_create(&init_cmd, &config).await.unwrap();
+
+        let repository = open_repository(&repo_alias, &config).await.unwrap();
+        let main_tip = repository.lookup_branch("main").await.unwrap();
+
+        let args = AncestryArgs {
+            repo: repo_alias.clone(),
+            reference: main_tip.to_string(),
+            n: 10,
+        };
+        let mut writer = Vec::new();
+        ancestry(&args, &config, &mut writer).await.unwrap();
+        let output = String::from_utf8(writer).unwrap();
+        println!("{output}");
+
+        let re = Regex::new(
+            r"Snapshot: [0-9A-Z]{20}
+Date: \w+ \d{2} \d+  \d{2}:\d{2}:\d{2}
+
+  Repository initialized
+",
+        )
+        .unwrap();
+        assert!(re.is_match(output.as_str()));
+    }
+
+    async fn setup_test_repo(
+        temp: &assert_fs::TempDir,
+    ) -> (RepositoryAlias, CliConfig, SnapshotId) {
+        let path = temp.path().to_path_buf();
+
+        let repo_alias = RepositoryAlias("test-repo".to_string());
+        let repo = RepositoryDefinition::LocalFileSystem {
+            path,
+            config: RepositoryConfig::default(),
+        };
+
+        let mut repos = HashMap::new();
+        repos.insert(repo_alias.clone(), repo);
+        let config = CliConfig { repos };
+
+        let init_cmd = CreateCommand { repo: repo_alias.clone() };
+        repo_create(&init_cmd, &config).await.unwrap();
+
+        let repository = open_repository(&repo_alias, &config).await.unwrap();
+        let root = repository.lookup_branch("main").await.unwrap();
+
+        (repo_alias, config, root)
+    }
+
+    #[tokio_test]
+    async fn test_branch_lifecycle() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, root) = setup_test_repo(&temp).await;
+
+        create_branch(
+            &BranchCreateArgs {
+                repo: repo_alias.clone(),
+                branch: "feature".to_string(),
+                from: root.to_string(),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let mut writer = Vec::new();
+        list_branches(&BranchListArgs { repo: repo_alias.clone() }, &config, &mut writer)
+            .await
+            .unwrap();
+        let output = String::from_utf8(writer).unwrap();
+        assert!(output.contains("feature"));
+        assert!(output.contains("main"));
+
+        delete_branch(
+            &BranchDeleteArgs { repo: repo_alias.clone(), branch: "feature".to_string() },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let mut writer = Vec::new();
+        list_branches(&BranchListArgs { repo: repo_alias.clone() }, &config, &mut writer)
+            .await
+            .unwrap();
+        let output = String::from_utf8(writer).unwrap();
+        assert!(!output.contains("feature"));
+        assert!(output.contains("main"));
+    }
+
+    #[tokio_test]
+    async fn test_tag_lifecycle() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, root) = setup_test_repo(&temp).await;
+
+        create_tag(
+            &TagCreateArgs {
+                repo: repo_alias.clone(),
+                tag: "v1".to_string(),
+                target: root.to_string(),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let mut writer = Vec::new();
+        list_tags(&TagListArgs { repo: repo_alias.clone() }, &config, &mut writer)
+            .await
+            .unwrap();
+        let output = String::from_utf8(writer).unwrap();
+        assert!(output.contains("v1"));
+
+        delete_tag(
+            &TagDeleteArgs { repo: repo_alias.clone(), tag: "v1".to_string() },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        let mut writer = Vec::new();
+        list_tags(&TagListArgs { repo: repo_alias.clone() }, &config, &mut writer)
+            .await
+            .unwrap();
+        let output = String::from_utf8(writer).unwrap();
+        assert!(!output.contains("v1"));
+    }
+
+    #[tokio_test]
+    async fn test_parse_reference() {
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, root) = setup_test_repo(&temp).await;
+        let repository = open_repository(&repo_alias, &config).await.unwrap();
+
+        create_tag(
+            &TagCreateArgs {
+                repo: repo_alias.clone(),
+                tag: "v1".to_string(),
+                target: root.to_string(),
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+
+        // resolves a raw snapshot id
+        assert_eq!(parse_reference(&repository, &root.to_string()).await.unwrap(), root);
+
+        // resolves a branch name
+        assert_eq!(parse_reference(&repository, "main").await.unwrap(), root);
+
+        // resolves a tag name
+        assert_eq!(parse_reference(&repository, "v1").await.unwrap(), root);
+
+        // errors clearly on something that is none of the above
+        let err = parse_reference(&repository, "does-not-exist").await.unwrap_err();
+        assert!(err.to_string().contains("does-not-exist"));
+    }
+
+    #[tokio_test]
+    async fn test_inspect() {
+        // Arrange
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, root) = setup_test_repo(&temp).await;
+        let args = InspectArgs { repo: repo_alias, reference: "main".to_string() };
+        let mut writer = Vec::new();
+
+        // Act
+        inspect(&args, &config, &mut writer).await.unwrap();
+
+        // Assert
+        let info: crate::inspect::SnapshotInfoInspect =
+            serde_json::from_slice(&writer).unwrap();
+        assert_eq!(info.id, root.to_string());
+        assert_eq!(info.commit_message, "Repository initialized");
+    }
+
+    #[tokio_test]
+    async fn test_diff() {
+        // Arrange
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, root) = setup_test_repo(&temp).await;
+        let repository = open_repository(&repo_alias, &config).await.unwrap();
+        let mut session = repository.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::new()).await.unwrap();
+        session.add_group("/a".try_into().unwrap(), Bytes::new()).await.unwrap();
+        session.commit("add groups").execute().await.unwrap();
+        let args =
+            DiffArgs { repo: repo_alias, from: root.to_string(), to: "main".to_string() };
+        let mut writer = Vec::new();
+
+        // Act
+        diff(&args, &config, &mut writer).await.unwrap();
+
+        // Assert
+        assert_eq!(String::from_utf8(writer).unwrap(), "A  /\nA  /a\n");
+    }
+
+    #[tokio_test]
+    async fn test_diff_updated_array() {
+        // Arrange
+        let temp = assert_fs::TempDir::new().unwrap();
+        let (repo_alias, config, _) = setup_test_repo(&temp).await;
+        let repository = open_repository(&repo_alias, &config).await.unwrap();
+        let path: Path = "/array".try_into().unwrap();
+        let shape = ArrayShape::new(vec![(4, 4)]).unwrap();
+        let mut session = repository.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::new()).await.unwrap();
+        session.add_array(path.clone(), shape.clone(), None, Bytes::new()).await.unwrap();
+        let from = session.commit("add array").execute().await.unwrap();
+        let mut session = repository.writable_session("main").await.unwrap();
+        session
+            .update_array(&path, shape, None, Bytes::from_static(b"new"))
+            .await
+            .unwrap();
+        let coords = ChunkIndices(vec![0]);
+        let payload =
+            session.get_chunk_writer(&path, &coords).unwrap()(Bytes::from_static(b"x"))
+                .await
+                .unwrap();
+        session.set_chunk_ref(path, coords, Some(payload)).await.unwrap();
+        session.commit("update array").execute().await.unwrap();
+        let args =
+            DiffArgs { repo: repo_alias, from: from.to_string(), to: "main".to_string() };
+        let mut writer = Vec::new();
+
+        // Act
+        diff(&args, &config, &mut writer).await.unwrap();
+
+        // Assert
+        assert_eq!(
+            String::from_utf8(writer).unwrap(),
+            "M  /array\nU  /array  (1 chunk)\n"
+        );
     }
 }

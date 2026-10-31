@@ -1,4 +1,4 @@
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
@@ -14,7 +14,10 @@ from icechunk import (
     s3_store,
 )
 from icechunk.repository import Repository
-from tests.conftest import write_chunks_to_minio
+from tests.conftest import Permission, write_chunks_to_minio
+from zarr.abc.store import Store
+from zarr.core.buffer import default_buffer_prototype
+from zarr.core.buffer.cpu import Buffer
 
 
 async def write_minio_virtual_refs() -> None:
@@ -30,23 +33,25 @@ async def write_minio_virtual_refs() -> None:
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_issue_418() -> None:
+async def test_issue_418(any_spec_version: int | None) -> None:
     # See https://github.com/earth-mover/icechunk/issues/418
     await write_minio_virtual_refs()
     config = RepositoryConfig.default()
     store_config = s3_store(
         region="us-east-1",
-        endpoint_url="http://localhost:9000",
+        endpoint_url="http://localhost:4200",
         allow_http=True,
         s3_compatible=True,
         force_path_style=True,
     )
     container = VirtualChunkContainer("s3://testbucket/", store_config)
     config.set_virtual_chunk_container(container)
+    access_key_id, secret_access_key = Permission.READONLY.keys()
     credentials = containers_credentials(
         {
             "s3://testbucket": s3_credentials(
-                access_key_id="minio123", secret_access_key="minio123"
+                access_key_id=access_key_id,
+                secret_access_key=secret_access_key,
             )
         }
     )
@@ -55,6 +60,7 @@ async def test_issue_418() -> None:
         storage=in_memory_storage(),
         config=config,
         authorize_virtual_chunk_access=credentials,
+        spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -85,7 +91,7 @@ async def test_issue_418() -> None:
     store = session.store
 
     root = zarr.Group.open(store=store)
-    time = cast(zarr.core.array.Array, root["time"])
+    time = cast("zarr.core.array.Array[Any]", root["time"])
     root.require_array(name="lon", shape=((1,)), chunks=((1,)), dtype="i4")
 
     # resize the array and append a new chunk
@@ -109,10 +115,11 @@ async def test_issue_418() -> None:
     assert (await store._store.get("time/c/2")) == b"thir"
 
 
-async def test_read_chunks_from_old_array() -> None:
+async def test_read_chunks_from_old_array(any_spec_version: int | None) -> None:
     # This regression appeared during the change to manifest per array
     repo = Repository.create(
         storage=in_memory_storage(),
+        spec_version=any_spec_version,
     )
     session = repo.writable_session("main")
     store = session.store
@@ -140,3 +147,87 @@ async def test_read_chunks_from_old_array() -> None:
     root = zarr.Group.open(store=store, zarr_format=3)
     array1 = root.require_array(name="array1", shape=((2,)), chunks=((1,)), dtype="i4")
     assert array1[0] == 42
+
+
+async def test_tag_with_open_session(any_spec_version: int | None) -> None:
+    """This is an issue found by hypothesis"""
+
+    repo = Repository.create(
+        storage=in_memory_storage(),
+        spec_version=any_spec_version,
+    )
+    session = repo.writable_session("main")
+    store = session.store
+
+    await store.set(
+        "zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+    await store.set(
+        "0/zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+    session.commit("")
+    session = repo.writable_session("main")
+    store = session.store
+
+    await store.set(
+        "0/0/zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+
+    await store.set(
+        "0/zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+
+    await store.set(
+        "0./zarr.json",
+        Buffer.from_bytes(
+            b'{\n  "shape": [\n    1\n  ],\n  "data_type": "bool",\n  "chunk_grid": {\n    "name": "regular",\n    "configuration": {\n      "chunk_shape": [\n        1\n      ]\n    }\n  },\n  "chunk_key_encoding": {\n    "name": "default",\n    "configuration": {\n      "separator": "/"\n    }\n  },\n  "fill_value": false,\n  "codecs": [\n    {\n      "name": "bytes"\n    }\n  ],\n  "attributes": {},\n  "zarr_format": 3,\n  "node_type": "array",\n  "storage_transformers": []\n}'
+        ),
+    )
+
+    session.commit("")
+    session = repo.writable_session("main")
+    store = session.store
+
+    async for k in store.list_prefix(""):
+        value = await store.get(k, default_buffer_prototype())
+        assert value is not None, k
+
+
+async def test_list_missing_array(any_spec_version: int | None) -> None:
+    """This is an issue found by hypothesis"""
+
+    repo = Repository.create(
+        storage=in_memory_storage(),
+    )
+    session = repo.writable_session("main")
+
+    root = zarr.group(store=session.store)
+    group = root.create_group("foo-bar")
+    group = root.create_group("foo")
+    arrays = {"bar", "baz"}
+    for array in arrays:
+        group.create_array(name=array, shape=((2,)), chunks=((1,)), dtype="i4")
+
+    async def check_keys(store: Store) -> None:
+        keys = set([k async for k in store.list_prefix("foo")])
+        assert keys == {f"foo/{a}/zarr.json" for a in arrays} | {"foo/zarr.json"}
+
+        keys = set([k async for k in store.list_dir("foo")])
+        assert keys == arrays | {"zarr.json"}
+
+    await check_keys(session.store)
+    session.commit("commit")
+    session = repo.readonly_session(branch="main")
+    await check_keys(session.store)

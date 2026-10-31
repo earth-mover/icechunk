@@ -34,5 +34,6 @@ subprocess.run(
         "--software=icechunk-bench-712f1eb2",
         "--region=us-east-1",
         "pytest -v benchmarks/",
-    ]
+    ],
+    check=False,
 )

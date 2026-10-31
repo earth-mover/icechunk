@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import json
 import pickle
 from pathlib import Path
 from typing import Any, TypeVar
 
+import numpy as np
 import pytest
 
+import zarr
 from icechunk import IcechunkError, IcechunkStore, local_filesystem_storage
 from icechunk.repository import Repository
 from zarr.abc.store import OffsetByteRequest, RangeByteRequest, Store, SuffixByteRequest
 from zarr.core.buffer import Buffer, cpu, default_buffer_prototype
-from zarr.core.sync import _collect_aiterator, collect_aiterator
+from zarr.core.sync import _collect_aiterator, collect_aiterator, sync
 from zarr.testing.store import StoreTests
 from zarr.testing.utils import assert_bytes_equal
 
@@ -32,11 +35,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     async def set(self, store: IcechunkStore, key: str, value: Buffer) -> None:
         await store._store.set(key, value.to_bytes())
 
-    async def get(self, store: IcechunkStore, key: str) -> Buffer | None:
+    async def get(self, store: IcechunkStore, key: str) -> Buffer | None:  # type: ignore[override]
         try:
             result = await store._store.get(key)
-            if result is None:
-                return None
         except ValueError as _e:
             # Zarr python expects None to be returned if the key does not exist
             # but an IcechunkStore returns an error if the key does not exist
@@ -52,20 +53,24 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         }
         return kwargs
 
-    @pytest.fixture
-    async def store(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
+    @pytest.fixture(params=[1, 2])
+    async def store(
+        self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
+    ) -> IcechunkStore:  # type: ignore[override, unused-ignore]
         read_only = store_kwargs.pop("read_only")
-        repo = Repository.open_or_create(**store_kwargs)
+        repo = Repository.open_or_create(**store_kwargs, create_version=request.param)
         if read_only:
             session = repo.readonly_session(branch="main")
         else:
             session = repo.writable_session("main")
         return session.store
 
-    @pytest.fixture
-    async def store_not_open(self, store_kwargs: dict[str, Any]) -> IcechunkStore:
+    @pytest.fixture(params=[1, 2])
+    async def store_not_open(  # type: ignore[override, unused-ignore]
+        self, request: pytest.FixtureRequest, store_kwargs: dict[str, Any]
+    ) -> IcechunkStore:
         read_only = store_kwargs.pop("read_only")
-        repo = Repository.open_or_create(**store_kwargs)
+        repo = Repository.open_or_create(**store_kwargs, create_version=request.param)
         if read_only:
             session = repo.readonly_session(branch="main")
         else:
@@ -77,7 +82,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
 
     def test_store_eq(self, store: IcechunkStore, store_kwargs: dict[str, Any]) -> None:
         # check self equality
-        assert store == store
+        assert store == store  # noqa: PLR0124
 
         # check store equality with same inputs
         # asserting this is important for being able to compare (de)serialized stores
@@ -107,7 +112,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert store._is_open
         assert store.read_only == read_only
 
-    async def test_read_only_store_raises(
+    async def test_read_only_store_raises(  # type: ignore[override]
         self, store: IcechunkStore, store_kwargs: dict[str, Any]
     ) -> None:
         kwargs = {**store_kwargs}
@@ -128,7 +133,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
     @pytest.mark.skip(
         reason="icechunk requires opting-in to pickling at the session level"
     )
-    def test_serializable_store(self, store: IcechunkStore) -> None:
+    def test_serializable_store(self, store: IcechunkStore) -> None:  # type: ignore[override]
         foo = pickle.dumps(store)
         loaded = pickle.loads(foo)
         # pickled stores dont point to the same session instance, so they are not equal
@@ -168,8 +173,10 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             (ValueError, TypeError), match=r"Unexpected byte_range, got.*"
         ):
             await store.get(
-                "c/0/0/0", prototype=default_buffer_prototype(), byte_range=(0, 2)
-            )  # type: ignore[arg-type]
+                "c/0/0/0",
+                prototype=default_buffer_prototype(),
+                byte_range=(0, 2),  # type: ignore[arg-type]
+            )
 
     @pytest.mark.xfail(reason="Not implemented")
     async def test_store_context_manager(self, open_kwargs: dict[str, Any]) -> None:
@@ -204,7 +211,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         store_dict = dict(zip(keys, data_buf, strict=True))
         await store._set_many(store_dict.items())
         for k, v in store_dict.items():
-            assert (await self.get(store, k)).to_bytes() == v.to_bytes()
+            store_val = await self.get(store, k)
+            assert store_val is not None
+            assert store_val.to_bytes() == v.to_bytes()
 
     async def test_set_not_open(self, store_not_open: IcechunkStore) -> None:
         """
@@ -305,7 +314,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         i.e. no unwanted replacement occurs.
         """
         await store.set("foo/bar/zarr.json", self.buffer_cls.from_bytes(ARRAY_METADATA))
-        data = self.buffer_cls.from_bytes(b"")
+        # upstream uses empty values here; icechunk rejects zero-length chunks, and the
+        # content is irrelevant to what this test checks, which is listing
+        data = self.buffer_cls.from_bytes(b"x")
         store_dict = {
             "foo/bar/c/1/0/0": data,
             "foo/bar/c/0/0/0": data,
@@ -368,7 +379,29 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             pytest.skip("store does not support deletes")
         await store.delete("zarr.json")
 
-    async def test_get_partial_values(
+    async def test_delete_out_of_grid_chunk_does_not_raise(
+        self, store: IcechunkStore
+    ) -> None:
+        # A sharded array has one key per shard, so an index on the inner chunk
+        # grid (which is what `cdata_shape` counts) names a key that cannot exist.
+        arr = zarr.create_array(
+            store,
+            name="Y",
+            shape=(5,),
+            shards=(4,),
+            chunks=(2,),
+            dtype="i1",
+            fill_value=0,
+        )
+        arr[:] = np.arange(5, dtype="i1")
+        before = sorted(await _collect_aiterator(store.list_prefix("")))
+        assert "Y/c/2" not in before
+
+        await store.delete("Y/c/2")
+
+        assert sorted(await _collect_aiterator(store.list_prefix(""))) == before
+
+    async def test_get_partial_values(  # type: ignore[override]
         self,
         store: IcechunkStore,
     ) -> None:
@@ -386,25 +419,28 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         )
 
         assert len(values) == 3
+        assert values[0]
         data = values[0].to_bytes()
         assert len(data) == 5
         assert data == DEFAULT_GROUP_METADATA[:5]
 
+        assert values[1]
         data = values[1].to_bytes()
         assert len(data) == len(DEFAULT_GROUP_METADATA) - 5
         assert data == DEFAULT_GROUP_METADATA[:-5]
 
+        assert values[2]
         data = values[2].to_bytes()
         assert len(data) == len(DEFAULT_GROUP_METADATA) - 10
         assert data == DEFAULT_GROUP_METADATA[10:]
 
-    async def test_set(self, store: IcechunkStore) -> None:
+    async def test_set(self, store: IcechunkStore) -> None:  # type: ignore[override]
         await store.set("zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA))
         assert await store.exists("zarr.json")
         result = await self.get(store, "zarr.json")
-        assert result.to_bytes() == DEFAULT_GROUP_METADATA
+        assert result and result.to_bytes() == DEFAULT_GROUP_METADATA
 
-    async def test_get(self, store: IcechunkStore) -> None:
+    async def test_get(self, store: IcechunkStore) -> None:  # type: ignore[override]
         await self.set(
             store, "zarr.json", self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         )
@@ -429,7 +465,8 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             "c/1/1/0",
             "c/1/1/1",
         ]
-        values = [bytes(i) for i, _ in enumerate(keys)]
+        # non-zero sizes: icechunk rejects zero-length chunks
+        values = [bytes(i + 1) for i, _ in enumerate(keys)]
         for k, v in zip(keys, values, strict=False):
             await self.set(store, k, self.buffer_cls.from_bytes(v))
         observed_buffers = collect_aiterator(
@@ -494,7 +531,7 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         assert not await store.exists("foo/zarr.json")
         assert not await store.exists("foo/c/0/0/0")
 
-    async def test_getsize(self, store: IcechunkStore) -> None:
+    async def test_getsize(self, store: IcechunkStore) -> None:  # type: ignore[override]
         key = "k/zarr.json"
         data = self.buffer_cls.from_bytes(DEFAULT_GROUP_METADATA)
         await self.set(store, key, data)
@@ -517,7 +554,9 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
             f"{prefix}/c/1/1/0",
             f"{prefix}/c/1/1/1",
         ]
-        values = [bytes(i) for i, _ in enumerate(keys)]
+        # sizes differ per chunk so a wrong total cannot go unnoticed, but none
+        # is zero: icechunk rejects zero-length chunks
+        values = [bytes(i + 1) for i, _ in enumerate(keys)]
         for k, v in zip(keys, values, strict=False):
             await self.set(store, k, self.buffer_cls.from_bytes(v))
 
@@ -529,3 +568,55 @@ class TestIcechunkStore(StoreTests[IcechunkStore, cpu.Buffer]):
         # TODO: This maybe should be a FileNotFoundError instead of an IcechunkError
         with pytest.raises(IcechunkError):
             await store.getsize("not-a-real-key")
+
+    @pytest.mark.skipif(
+        not hasattr(Store, "_get_bytes"),
+        reason="Store._get_bytes only exists in zarr >=3.1.6,<3.3",
+    )
+    async def test_get_bytes(self, store: IcechunkStore) -> None:
+        # Override: icechunk validates metadata on zarr.json keys,
+        # so we must use valid zarr metadata instead of arbitrary bytes
+        data = DEFAULT_GROUP_METADATA
+        key = "zarr.json"
+        await self.set(store, key, self.buffer_cls.from_bytes(data))
+        assert await store._get_bytes(key, prototype=default_buffer_prototype()) == data
+        with pytest.raises((FileNotFoundError, ValueError, IcechunkError)):
+            await store._get_bytes(
+                "nonexistent_key", prototype=default_buffer_prototype()
+            )
+
+    @pytest.mark.skipif(
+        not hasattr(Store, "_get_bytes_sync"),
+        reason="Store._get_bytes_sync only exists in zarr >=3.1.6,<3.3",
+    )
+    def test_get_bytes_sync(self, store: IcechunkStore) -> None:
+        # Override: icechunk validates metadata on zarr.json keys
+        data = DEFAULT_GROUP_METADATA
+        key = "zarr.json"
+        sync(self.set(store, key, self.buffer_cls.from_bytes(data)))
+        assert store._get_bytes_sync(key, prototype=default_buffer_prototype()) == data
+
+    @pytest.mark.skipif(
+        not hasattr(Store, "_get_json"),
+        reason="Store._get_json only exists in zarr >=3.1.6,<3.3",
+    )
+    async def test_get_json(self, store: IcechunkStore) -> None:
+        # Override: icechunk validates metadata on zarr.json keys,
+        # so we must use valid zarr metadata instead of arbitrary JSON
+        data = json.loads(DEFAULT_GROUP_METADATA)
+        data_bytes = DEFAULT_GROUP_METADATA
+        key = "zarr.json"
+        await self.set(store, key, self.buffer_cls.from_bytes(data_bytes))
+        assert await store._get_json(key, prototype=default_buffer_prototype()) == data
+
+    @pytest.mark.skipif(
+        not hasattr(Store, "_get_json_sync"),
+        reason="Store._get_json_sync only exists in zarr >=3.1.6,<3.3",
+    )
+    def test_get_json_sync(self, store: IcechunkStore) -> None:
+        # Override: icechunk validates metadata on zarr.json keys
+        data = json.loads(DEFAULT_GROUP_METADATA)
+        data_bytes = DEFAULT_GROUP_METADATA
+        key = "zarr.json"
+        sync(self.set(store, key, self.buffer_cls.from_bytes(data_bytes)))
+        assert store._get_json_sync(key, prototype=default_buffer_prototype()) == data
