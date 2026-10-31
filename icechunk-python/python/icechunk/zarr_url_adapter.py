@@ -18,6 +18,7 @@ group; see [`register_url_repository_opener`][icechunk.zarr_url_adapter.register
 from __future__ import annotations
 
 import inspect
+import re
 import threading
 import warnings
 from collections.abc import Awaitable, Mapping
@@ -37,18 +38,14 @@ except ImportError as exc:  # pragma: no cover - exercised only with older zarr
 
 from icechunk._icechunk_python import (
     _open_session_from_url_async,
+    _parse_url_ref,
     _url_root_schemes,
 )
 from icechunk.config import RepositoryConfig
-from icechunk.credentials import containers_credentials, s3_static_credentials
+from icechunk.credentials import containers_credentials
 from icechunk.repository import Repository
 from icechunk.session import Session
-from icechunk.url_pipeline import (
-    _check_root_query,
-    _redact_query,
-    _to_storage_credentials,
-    parse_url_ref,
-)
+from icechunk.url_pipeline import _to_storage_credentials
 
 __all__ = [
     "OPENER_ENTRY_POINT_GROUP",
@@ -64,9 +61,11 @@ OPENER_ENTRY_POINT_GROUP = "icechunk.url_repository_openers"
 #: Root schemes resolved natively by Icechunk. Openers cannot override them.
 BUILTIN_ROOT_SCHEMES: frozenset[str] = frozenset(_url_root_schemes())
 
-# Every mode that may write. zarr rejects a read-only store in mode "a" (its
-# open-or-create default), so "a" is refused here too, before any I/O.
-_WRITE_MODES = frozenset({"a", "w", "w-", "r+"})
+
+def _redact(text: str) -> str:
+    """Hide query strings and URL userinfo, which may carry credentials, as zarr does."""
+    text = re.sub(r"//[^/@|?]*@", "//\u2026@", text)
+    return re.sub(r"\?[^|]*", "?\u2026", text)
 
 
 class URLRepositoryOpener(Protocol):
@@ -96,8 +95,8 @@ class URLRepositoryOpener(Protocol):
     - It owns its credentials. `storage_options` is a fresh dict with every
       `icechunk_*` key removed; the opener consumes its own namespaced keys
       (e.g. `arraylake_token`) and raises for keys it doesn't recognize.
-    - `read_only` is always `True` for now: the adapter only opens
-      read-only sessions.
+    - `read_only` is always `True`: the adapter only opens read-only sessions,
+      and rejects every mode but `"r"` before calling the opener.
     """
 
     def __call__(
@@ -239,23 +238,6 @@ ICECHUNK_STORAGE_OPTIONS = frozenset(
     }
 )
 
-#: fsspec-style keys accepted for built-in roots, as aliases.
-FSSPEC_STORAGE_OPTIONS = frozenset(
-    {"anon", "key", "secret", "token", "endpoint_url", "region"}
-)
-
-
-def _static_credentials_from_dict(creds: Mapping[str, Any]) -> Any:
-    allowed = {"access_key_id", "secret_access_key", "session_token", "expires_after"}
-    unknown = set(creds) - allowed
-    if unknown or not {"access_key_id", "secret_access_key"} <= set(creds):
-        raise URLPipelineError(
-            "icechunk: a dict 'icechunk_credentials' must hold S3 static credentials: "
-            "'access_key_id' and 'secret_access_key', optionally 'session_token' and "
-            f"'expires_after'; got keys {sorted(creds)}"
-        )
-    return s3_static_credentials(**creds)
-
 
 def _parse_storage_options(storage_options: Mapping[str, Any] | None) -> _Options:
     opts = _Options()
@@ -273,11 +255,10 @@ def _parse_storage_options(storage_options: Mapping[str, Any] | None) -> _Option
             f"{sorted(ICECHUNK_STORAGE_OPTIONS)}"
         )
 
-    creds = remaining.pop("icechunk_credentials", None)
-    if isinstance(creds, Mapping):
-        creds = _static_credentials_from_dict(creds)
     try:
-        opts.credentials = _to_storage_credentials(creds)
+        opts.credentials = _to_storage_credentials(
+            remaining.pop("icechunk_credentials", None)
+        )
     except TypeError as exc:
         raise URLPipelineError(
             f"icechunk: invalid 'icechunk_credentials': {exc}"
@@ -298,47 +279,6 @@ def _parse_storage_options(storage_options: Mapping[str, Any] | None) -> _Option
     return opts
 
 
-def _apply_fsspec_aliases(opts: _Options) -> None:
-    """Map the small set of fsspec-style keys onto icechunk options, in place."""
-    p = opts.passthrough
-
-    def conflict(fsspec_key: str, icechunk_key: str) -> URLPipelineError:
-        return URLPipelineError(
-            f"icechunk: storage_options {fsspec_key!r} and {icechunk_key!r} "
-            "both given; pass only one"
-        )
-
-    if "anon" in p:
-        if opts.anonymous:
-            raise conflict("anon", "icechunk_anonymous")
-        opts.anonymous = bool(p.pop("anon"))
-    if "key" in p or "secret" in p:
-        if opts.credentials is not None:
-            raise conflict("key", "icechunk_credentials")
-        if "key" not in p or "secret" not in p:
-            raise URLPipelineError(
-                "icechunk: storage_options 'key' and 'secret' must be given together"
-            )
-        opts.credentials = _to_storage_credentials(
-            s3_static_credentials(
-                access_key_id=p.pop("key"),
-                secret_access_key=p.pop("secret"),
-                session_token=p.pop("token", None),
-            )
-        )
-    if "token" in p:
-        raise URLPipelineError(
-            "icechunk: storage_options 'token' is only accepted as an S3 session token "
-            "together with 'key' and 'secret'; use 'icechunk_credentials' for other "
-            "credentials"
-        )
-    for fsspec_key, attr in (("endpoint_url", "endpoint_url"), ("region", "region")):
-        if fsspec_key in p:
-            if getattr(opts, attr) is not None:
-                raise conflict(fsspec_key, f"icechunk_{attr}")
-            setattr(opts, attr, p.pop(fsspec_key))
-
-
 # pipeline validation
 
 
@@ -351,16 +291,11 @@ def _validate_preceding(
             "'s3://bucket/repo|icechunk:'"
         )
     root, *rest = context.preceding
-    if not root.scheme:
-        raise URLPipelineError(
-            f"icechunk: the root {_redact_query(root.url)!r} has no URL scheme; spell "
-            "local paths as 'file:///absolute/path'"
-        )
     # zarr consumes `zarr:`/`zarr2:`/`zarr3:` format segments itself and only
     # accepts them last, so anything here is a container or another adapter.
     if rest:
         raise URLPipelineError(
-            f"icechunk: unsupported segment {_redact_query(rest[0].url)!r} before "
+            f"icechunk: unsupported segment {_redact(rest[0].url)!r} before "
             "'icechunk:'; the icechunk: adapter only supports a root URL that locates "
             "the repository directly (repositories inside other containers, such as "
             "'repo.zip|zip:|icechunk:', are not supported)"
@@ -368,18 +303,14 @@ def _validate_preceding(
     return root
 
 
-def _write_mode_error(mode: str) -> URLPipelineError:
-    hint = (
-        " (it is the default mode of zarr.open and zarr.open_group; pass mode='r')"
-        if mode == "a"
-        else ""
-    )
-    return URLPipelineError(
-        f"icechunk: mode {mode!r} is not supported{hint}; icechunk: URLs open "
-        "read-only sessions because zarr has no way to commit a writable session. "
-        "To write, open the repository and use `repo.writable_session(branch)`, "
-        "then `session.commit(...)`"
-    )
+def _check_mode(mode: str | None) -> None:
+    if mode != "r":
+        raise URLPipelineError(
+            f"icechunk: mode {mode!r} is not supported; pass mode='r'. icechunk: URLs "
+            "open read-only sessions because zarr has no way to commit a writable "
+            "session. To write, open the repository and use "
+            "`repo.writable_session(branch)`, then `session.commit(...)`"
+        )
 
 
 class IcechunkURLAdapter(URLPipelineAdapter):
@@ -389,22 +320,19 @@ class IcechunkURLAdapter(URLPipelineAdapter):
     Registered under zarr's `zarr.url_adapters` entry-point group as
     `icechunk`. It opens a read-only session on the ref selected by the
     segment (default `branch.main`) and returns its store and the residual
-    path. Only modes `"r"` and `None` are accepted.
+    path. Only mode `"r"` is accepted.
 
     Supported `storage_options` (all other keys are rejected for built-in
     root schemes):
 
-    - `icechunk_credentials`: S3 or GCS credentials for the root storage
-      (e.g. `icechunk.s3_static_credentials(...)`), or a dict of S3 static
-      credentials (`access_key_id`, `secret_access_key`, `session_token`).
+    - `icechunk_credentials`: S3 or GCS credentials for the root storage,
+      e.g. `icechunk.s3_static_credentials(...)`.
     - `icechunk_anonymous`: use anonymous access.
     - `icechunk_region`, `icechunk_endpoint_url`: S3 region and endpoint.
     - `icechunk_config`: an `icechunk.RepositoryConfig`.
     - `icechunk_virtual_chunk_credentials`: a mapping of virtual chunk
       container URL prefixes to credentials, passed to
       `authorize_virtual_chunk_access`.
-    - fsspec-style aliases: `anon`, `key`, `secret`, `token` (an S3 session
-      token, only with `key` and `secret`), `endpoint_url`, `region`.
 
     Without credentials or `anonymous`, S3 and GCS credentials are read from
     the environment, as for `icechunk.s3_storage()`.
@@ -417,11 +345,10 @@ class IcechunkURLAdapter(URLPipelineAdapter):
         if segment.query is not None:
             raise URLPipelineError(
                 "icechunk: segments do not accept a query string: "
-                f"{_redact_query(segment.url)!r}"
+                f"{_redact(segment.url)!r}"
             )
         root = _validate_preceding(segment, context)
-        if context.mode in _WRITE_MODES:
-            raise _write_mode_error(context.mode)
+        _check_mode(context.mode)
         opts = _parse_storage_options(context.storage_options)
         virtual_credentials = (
             containers_credentials(opts.virtual_chunk_credentials)
@@ -430,16 +357,12 @@ class IcechunkURLAdapter(URLPipelineAdapter):
         )
 
         if root.scheme in BUILTIN_ROOT_SCHEMES:
-            _apply_fsspec_aliases(opts)
             if opts.passthrough:
                 raise URLPipelineError(
                     f"icechunk: unknown storage_options {sorted(opts.passthrough)}; "
-                    f"supported keys are {sorted(ICECHUNK_STORAGE_OPTIONS)} and the "
-                    f"fsspec-style aliases {sorted(FSSPEC_STORAGE_OPTIONS)}"
+                    f"supported keys are {sorted(ICECHUNK_STORAGE_OPTIONS)}"
                 )
             try:
-                # Rust would echo the whole root, query included, in its error
-                _check_root_query(root.url)
                 pending = _open_session_from_url_async(
                     root.url,
                     segment.body,
@@ -449,7 +372,6 @@ class IcechunkURLAdapter(URLPipelineAdapter):
                     endpoint_url=opts.endpoint_url,
                     config=opts.config,
                     authorize_virtual_chunk_access=virtual_credentials,
-                    writable=False,
                 )
             except ValueError as exc:
                 raise URLPipelineError(f"icechunk: {exc}") from exc
@@ -473,7 +395,7 @@ class IcechunkURLAdapter(URLPipelineAdapter):
         if opener is None:
             raise URLPipelineError(
                 f"icechunk: unsupported root scheme {root.scheme!r} in "
-                f"{_redact_query(root.url)!r}; "
+                f"{_redact(root.url)!r}; "
                 f"supported schemes are {sorted(BUILTIN_ROOT_SCHEMES)}, plus any "
                 f"registered through the {OPENER_ENTRY_POINT_GROUP!r} entry-point group"
             )
@@ -484,7 +406,7 @@ class IcechunkURLAdapter(URLPipelineAdapter):
                 f"root schemes; the {root.scheme!r} opener owns its own credentials"
             )
         try:
-            ref = parse_url_ref(segment.body)
+            kind, name, path = _parse_url_ref(segment.body)
         except ValueError as exc:
             raise URLPipelineError(f"icechunk: {exc}") from exc
 
@@ -504,10 +426,10 @@ class IcechunkURLAdapter(URLPipelineAdapter):
             repo = await repo.reopen_async(
                 config=opts.config, authorize_virtual_chunk_access=virtual_credentials
             )
-        if ref.kind == "branch":
-            session = await repo.readonly_session_async(branch=ref.name)
-        elif ref.kind == "tag":
-            session = await repo.readonly_session_async(tag=ref.name)
+        if kind == "branch":
+            session = await repo.readonly_session_async(branch=name)
+        elif kind == "tag":
+            session = await repo.readonly_session_async(tag=name)
         else:
-            session = await repo.readonly_session_async(snapshot_id=ref.name)
-        return session, ref.path
+            session = await repo.readonly_session_async(snapshot_id=name)
+        return session, path

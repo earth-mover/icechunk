@@ -131,7 +131,7 @@ def test_entry_point_registered() -> None:
 # every example in schemes/icechunk.md
 #
 # `{snap}` stands in for the spec's literal snapshot ids, which cannot exist
-# in a test repository; the literal ids are checked by test_parse_spec_snapshot_ids.
+# in a test repository; the Rust parser tests check the literal ids.
 
 SPEC_EXAMPLES = [
     # (pipeline suffix after the root, ref ("first"/"second"), residual path)
@@ -174,20 +174,6 @@ async def test_spec_examples(
     assert session.snapshot_id == getattr(info, ref)
 
 
-@pytest.mark.parametrize(
-    ("body", "canonical"),
-    [
-        ("//FWWFQGAW742XMX0F5MF0/path/to/node/", "FWWFQGAW742XMX0F5MF0"),
-        # 20 base32 characters carry 100 bits for a 96-bit id; the spec's
-        # example sets the 4 unused bits, so it decodes to the id spelled `...VWG`
-        ("//ABCDEFGHJKMNPQRSTVWX/path/to/node/", "ABCDEFGHJKMNPQRSTVWG"),
-    ],
-)
-def test_parse_spec_snapshot_ids(body: str, canonical: str) -> None:
-    ref = ic.parse_url_ref(body)
-    assert ref == ic.UrlRef("snapshot", canonical, "path/to/node")
-
-
 async def test_spec_example_chunk_key(local_repo: RepoInfo) -> None:
     # `icechunk:path/to/node/zarr.json` addresses the metadata document
     resolution = await _resolve(local_repo.root + "|icechunk:path/to/array/c/1", mode="r")
@@ -224,7 +210,9 @@ def test_open_group_and_array(repo_kind: str, request: pytest.FixtureRequest) ->
     )
     np.testing.assert_array_equal(arr[:], np.arange(4))
 
-    arr = zarr.open_array(_p(f"{info.root}|icechunk://{info.first}/|zarr3:path/to/array"))
+    arr = zarr.open_array(
+        _p(f"{info.root}|icechunk://{info.first}/|zarr3:path/to/array"), mode="r"
+    )
     np.testing.assert_array_equal(arr[:], np.arange(4))
 
     # `zarr:` is a format segment too: a node path, format detected
@@ -260,14 +248,15 @@ def test_xarray_open_zarr(tmp_path: Path) -> None:
 # modes
 
 
-@pytest.mark.parametrize("mode", ["a", "w", "w-", "r+"])
-async def test_write_modes_rejected(
-    local_repo: RepoInfo, mode: AccessModeLiteral
+@pytest.mark.parametrize("mode", [None, "a", "w", "w-", "r+"])
+async def test_modes_other_than_r_rejected(
+    local_repo: RepoInfo, mode: AccessModeLiteral | None
 ) -> None:
-    with pytest.raises(URLPipelineError, match="writable_session"):
+    match = r"pass mode='r'\..*writable_session"
+    with pytest.raises(URLPipelineError, match=match):
         await _resolve(local_repo.root + "|icechunk:", mode=mode)
-    with pytest.raises(URLPipelineError, match="writable_session"):
-        zarr.open_group(_p(local_repo.root + "|icechunk:"), mode=mode)
+    with pytest.raises(URLPipelineError, match=match):
+        zarr.open_group(_p(local_repo.root + "|icechunk:"), mode=mode or "a")
 
 
 @pytest.mark.parametrize("ref", ["//tag.v5", "//branch.main", "//{snap}"])
@@ -288,12 +277,12 @@ def test_read_only_opens(local_repo: RepoInfo, ref: str) -> None:
     assert node.store.read_only
 
 
-def test_default_mode_a_points_to_mode_r(local_repo: RepoInfo) -> None:
-    # "a" is the default of zarr.open/open_group; the error says what to do
-    with pytest.raises(URLPipelineError, match=r"pass mode='r'\)"):
-        zarr.open(_p(f"{local_repo.root}|icechunk:path/to/node"))
-    with pytest.raises(URLPipelineError, match=r"pass mode='r'\)"):
-        zarr.open_group(_p(f"{local_repo.root}|icechunk:path/to/node"))
+def test_default_modes_point_to_mode_r(local_repo: RepoInfo) -> None:
+    # without `mode`, zarr.open/open_group use "a" and zarr.open_array passes None
+    url = f"{local_repo.root}|icechunk:path/to/array"
+    for open_ in (zarr.open, zarr.open_group, zarr.open_array):
+        with pytest.raises(URLPipelineError, match=r"pass mode='r'\."):
+            open_(_p(url))
 
 
 # ---------------------------------------------------------------------------
@@ -442,7 +431,6 @@ async def test_storage_options_icechunk_keys(capture_open: dict[str, Any]) -> No
     vcc = capture_open["authorize_virtual_chunk_access"]
     assert isinstance(vcc["s3://other/"], ic.Credentials.S3)
     assert capture_open["anonymous"] is False
-    assert capture_open["writable"] is False
 
 
 async def test_storage_options_defaults(capture_open: dict[str, Any]) -> None:
@@ -453,44 +441,14 @@ async def test_storage_options_defaults(capture_open: dict[str, Any]) -> None:
     assert capture_open["authorize_virtual_chunk_access"] is None
 
 
-async def test_storage_options_dict_credentials(capture_open: dict[str, Any]) -> None:
-    await _capture(
-        "s3://bucket|icechunk:",
-        {"icechunk_credentials": {"access_key_id": "ak", "secret_access_key": "sk"}},
-    )
-    creds = capture_open["credentials"]
-    assert isinstance(creds, ic.Credentials.S3)
-
-
-async def test_storage_options_fsspec_aliases(capture_open: dict[str, Any]) -> None:
-    await _capture(
-        "s3://bucket|icechunk:",
-        {
-            "key": "ak",
-            "secret": "sk",
-            "token": "tok",
-            "endpoint_url": "http://h:1",
-            "region": "r",
-        },
-    )
-    assert isinstance(capture_open["credentials"], ic.Credentials.S3)
-    assert capture_open["endpoint_url"] == "http://h:1"
-    assert capture_open["region"] == "r"
-
-    await _capture("s3://bucket|icechunk:", {"anon": True})
-    assert capture_open["anonymous"] is True
-
-
 @pytest.mark.parametrize(
     ("options", "match"),
     [
         ({"icechunk_bogus": 1}, "unknown storage_options"),
         ({"bogus": 1}, "unknown storage_options"),
-        ({"key": "ak"}, "together"),
-        ({"token": "t"}, "session token"),
-        ({"anon": True, "icechunk_anonymous": True}, "pass only one"),
-        ({"region": "a", "icechunk_region": "b"}, "pass only one"),
-        ({"icechunk_credentials": {"access_key_id": "ak"}}, "static credentials"),
+        # fsspec-style keys are not aliases
+        ({"anon": True}, "unknown storage_options"),
+        ({"icechunk_credentials": {"access_key_id": "ak"}}, "icechunk_credentials"),
         ({"icechunk_credentials": object()}, "icechunk_credentials"),
         ({"icechunk_config": {"a": 1}}, "RepositoryConfig"),
     ],
@@ -507,8 +465,12 @@ async def test_storage_options_invalid(
     ("url", "options", "match"),
     [
         ("file:///x|icechunk:", {"icechunk_anonymous": True}, "take no credentials"),
-        ("memory:x|icechunk:", {"region": "r"}, "only valid for S3"),
-        ("gs://b|icechunk:", {"key": "a", "secret": "b"}, "GCS credentials"),
+        ("memory:x|icechunk:", {"icechunk_region": "r"}, "only valid for S3"),
+        (
+            "gs://b|icechunk:",
+            {"icechunk_credentials": ic.s3_anonymous_credentials()},
+            "GCS credentials",
+        ),
         (
             "s3://b|icechunk:",
             {"icechunk_credentials": ic.GcsCredentials.Anonymous()},
@@ -516,10 +478,17 @@ async def test_storage_options_invalid(
         ),
         (
             "s3+http://h:1/b|icechunk:",
-            {"endpoint_url": "http://x"},
+            {"icechunk_endpoint_url": "http://x"},
             "already names the endpoint",
         ),
-        ("s3://b|icechunk:", {"anon": True, "key": "a", "secret": "b"}, "not both"),
+        (
+            "s3://b|icechunk:",
+            {
+                "icechunk_anonymous": True,
+                "icechunk_credentials": ic.s3_anonymous_credentials(),
+            },
+            "not both",
+        ),
     ],
 )
 async def test_storage_options_rejected_by_root(
@@ -553,32 +522,26 @@ def test_s3_credentials_plumbing(spelling: str) -> None:
     )
     info = _populate(ic.Repository.create(storage))
 
+    def options(key: str) -> dict[str, Any]:
+        creds = ic.s3_static_credentials(access_key_id=key, secret_access_key=key)
+        if spelling == "s3":
+            return {
+                "icechunk_credentials": creds,
+                "icechunk_endpoint_url": "http://localhost:4200",
+                "icechunk_region": "us-east-1",
+            }
+        return {"icechunk_credentials": creds}
+
     if spelling == "s3":
         url = f"s3://testbucket/{prefix}|icechunk://tag.v5/path/to/array"
-        options: dict[str, Any] = {
-            "icechunk_credentials": {
-                "access_key_id": "test123",
-                "secret_access_key": "test123",
-            },
-            "icechunk_endpoint_url": "http://localhost:4200",
-            "icechunk_region": "us-east-1",
-        }
     else:
         url = f"s3+http://localhost:4200/testbucket/{prefix}|icechunk://tag.v5/path/to/array"
-        options = {"key": "test123", "secret": "test123"}
-    arr = zarr.open_array(_p(url), mode="r", storage_options=options)
+    arr = zarr.open_array(_p(url), mode="r", storage_options=options("test123"))
     np.testing.assert_array_equal(arr[:], np.arange(4))
     assert cast(ic.IcechunkStore, arr.store).session.snapshot_id == info.first
 
     # wrong credentials are rejected by the server, not silently replaced from env
-    bad = dict(options)
-    if spelling == "s3":
-        bad["icechunk_credentials"] = {
-            "access_key_id": "nope",
-            "secret_access_key": "nope",
-        }
-    else:
-        bad.update(key="nope", secret="nope")
+    bad = options("nope")
     with pytest.raises(ic.IcechunkError):
         zarr.open_array(_p(url), mode="r", storage_options=bad)
 
@@ -922,14 +885,3 @@ def test_memory_root_is_a_name() -> None:
     assert zarr.open_group(_p(f"memory:{name}|icechunk:"), mode="r").attrs["level"]
     with pytest.raises(ic.IcechunkError):
         zarr.open_group(_p(f"memory:{name}/path/to/node|icechunk:"), mode="r")
-
-
-def test_parse_url_ref() -> None:
-    assert ic.parse_url_ref("") == ic.UrlRef("branch", "main", "")
-    assert ic.parse_url_ref("//tag.v1/a/b/") == ic.UrlRef("tag", "v1", "a/b")
-    assert ic.parse_url_ref("//branch.my%20branch") == ic.UrlRef(
-        "branch", "my branch", ""
-    )
-    for bad in ("//branch.a%2Fb", "//FWWFQGAW742XMX0F5MF", "//"):
-        with pytest.raises(ValueError):
-            ic.parse_url_ref(bad)

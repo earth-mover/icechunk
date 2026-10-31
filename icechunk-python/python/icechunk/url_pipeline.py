@@ -1,15 +1,14 @@
 """
 Helpers for Icechunk's [URL pipeline](https://github.com/jbms/url-pipeline) support (ZEP 8).
 
-These functions do not depend on zarr. The zarr adapter for the `icechunk:`
+This module does not depend on zarr. The zarr adapter for the `icechunk:`
 scheme lives in [`icechunk.zarr_url_adapter`][icechunk.zarr_url_adapter],
 which requires a zarr release with URL pipeline support.
 """
 
 from __future__ import annotations
 
-import re
-from typing import Literal, NamedTuple, cast
+from typing import cast
 
 from icechunk._icechunk_python import (
     Credentials,
@@ -17,75 +16,11 @@ from icechunk._icechunk_python import (
     S3Credentials,
     S3StaticCredentials,
     Storage,
-    _parse_url_ref,
     _storage_from_url,
 )
 from icechunk.credentials import AnyGcsCredential, AnyS3Credential
 
-__all__ = ["UrlRef", "parse_url_ref", "storage_from_url"]
-
-
-class UrlRef(NamedTuple):
-    """The ref and path selected by an `icechunk:` URL pipeline segment."""
-
-    kind: Literal["branch", "tag", "snapshot"]
-    """Which kind of ref was selected."""
-    name: str
-    """The branch name, tag name, or snapshot id."""
-    path: str
-    """The path inside the repository, without leading or trailing `/`.
-    Empty for the repository root."""
-
-
-def parse_url_ref(body: str) -> UrlRef:
-    """
-    Parse the body of an `icechunk:` URL pipeline segment.
-
-    `body` is the text after `icechunk:`. For example, for
-    `s3://bucket/repo|icechunk://tag.v1/path/to/group|zarr3:` it is
-    `//tag.v1/path/to/group`.
-
-    Parameters
-    ----------
-    body : str
-        The segment body. One of `""`, `"path"`, `"/path"`,
-        `"//branch.NAME[/path]"`, `"//tag.NAME[/path]"` or
-        `"//SNAPSHOT_ID[/path]"`. The default ref is `branch.main`.
-
-    Returns
-    -------
-    UrlRef
-        The selected ref and the residual path.
-
-    Raises
-    ------
-    ValueError
-        If the body is not a valid `icechunk:` segment, e.g. a branch name
-        containing `/` (even percent-encoded) or a malformed snapshot id.
-
-    Examples
-    --------
-    >>> parse_url_ref("//tag.v1/path/to/group/")
-    UrlRef(kind='tag', name='v1', path='path/to/group')
-    >>> parse_url_ref("a/b")
-    UrlRef(kind='branch', name='main', path='a/b')
-    """
-    kind, name, path = _parse_url_ref(body)
-    return UrlRef(cast(Literal["branch", "tag", "snapshot"], kind), name, path)
-
-
-def _redact_query(text: str) -> str:
-    """Replace each sub-URL's query with `?…`, as zarr does in its messages."""
-    return re.sub(r"\?[^|]*", "?\u2026", text)
-
-
-def _check_root_query(url: str) -> None:
-    """Reject a root query here, so the error does not echo it (it may hold a token)."""
-    if "?" in url:
-        raise ValueError(
-            f"invalid root URL `{_redact_query(url)}`: query strings and fragments "
-            "are not supported"
-        )
+__all__ = ["storage_from_url"]
 
 
 def _to_storage_credentials(
@@ -167,7 +102,6 @@ def storage_from_url(
     ValueError
         If the URL or the options are invalid.
     """
-    _check_root_query(url)
     return _storage_from_url(
         url,
         credentials=_to_storage_credentials(credentials),
