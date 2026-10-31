@@ -97,7 +97,7 @@ pub(crate) fn _storage_from_url(
     })
 }
 
-/// Open a session for `<root_url>|icechunk:<icechunk_body>`.
+/// Open a read-only session for `<root_url>|icechunk:<icechunk_body>`.
 ///
 /// Returns an awaitable of `(session, residual_path)`. URL and option
 /// errors raise `ValueError` immediately, before any I/O.
@@ -112,7 +112,6 @@ pub(crate) fn _storage_from_url(
     endpoint_url = None,
     config = None,
     authorize_virtual_chunk_access = None,
-    writable = false,
 ))]
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn _open_session_from_url_async<'py>(
@@ -125,7 +124,6 @@ pub(crate) fn _open_session_from_url_async<'py>(
     endpoint_url: Option<String>,
     config: Option<&PyRepositoryConfig>,
     authorize_virtual_chunk_access: Option<HashMap<String, Option<PyCredentials>>>,
-    writable: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let options = OpenFromUrlOptions {
         storage: storage_options(credentials, anonymous, region, endpoint_url),
@@ -137,7 +135,6 @@ pub(crate) fn _open_session_from_url_async<'py>(
             .into_iter()
             .map(|(prefix, cred)| (prefix, cred.map(Into::into)))
             .collect(),
-        writable,
     };
     let parsed = url_pipeline::parse_icechunk_url(root_url, icechunk_body, &options)
         .map_err(|e| url_error(&e))?;

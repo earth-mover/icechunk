@@ -22,7 +22,6 @@ pub use storage::{
     parse_root_url, storage_from_root, storage_from_url, validate_storage_url,
 };
 
-use icechunk_types::ICResultExt as _;
 use thiserror::Error;
 
 use crate::{
@@ -49,8 +48,6 @@ pub enum UrlPipelineErrorKind {
     UnsupportedRootScheme { scheme: String },
     #[error("invalid storage options: {0}")]
     InvalidStorageOptions(String),
-    #[error("cannot open {0} for writing")]
-    NotWritable(String),
 }
 
 pub type UrlPipelineError = ICError<UrlPipelineErrorKind>;
@@ -66,9 +63,6 @@ pub struct OpenFromUrlOptions {
     /// Credentials for virtual chunk containers, passed to
     /// [`RepositoryBuilder::authorize_virtual_chunk_access`](crate::repository::RepositoryBuilder::authorize_virtual_chunk_access).
     pub authorize_virtual_chunk_access: HashMap<String, Option<Credentials>>,
-    /// Open a writable session. Only branches can be written, and only on
-    /// storage that supports writes.
-    pub writable: bool,
 }
 
 /// A parsed `<root>|icechunk:<body>` pair, validated but not yet opened.
@@ -90,30 +84,6 @@ pub fn parse_icechunk_url(
 ) -> UrlPipelineResult<IcechunkUrl> {
     let root = validate_storage_url(root_url, &options.storage)?;
     let (version, path) = parse_icechunk_ref(icechunk_body)?;
-    if options.writable {
-        if root.is_read_only() {
-            return Err(UrlPipelineErrorKind::NotWritable(format!(
-                "`{root_url}`: `{}:` storage is read-only",
-                root.scheme()
-            )))
-            .capture();
-        }
-        match &version {
-            VersionInfo::BranchTipRef(_) => {}
-            VersionInfo::TagRef(name) => {
-                return Err(UrlPipelineErrorKind::NotWritable(format!(
-                    "tag `{name}`: tags are read-only"
-                )))
-                .capture();
-            }
-            _ => {
-                return Err(UrlPipelineErrorKind::NotWritable(
-                    "a snapshot: snapshots are read-only".to_string(),
-                ))
-                .capture();
-            }
-        }
-    }
     Ok(IcechunkUrl { root, version, path })
 }
 
@@ -121,12 +91,8 @@ pub fn parse_icechunk_url(
 ///
 /// `root_url` is the root sub-URL (for example `s3://bucket/prefix`) and
 /// `icechunk_body` is the text after `icechunk:` (for example
-/// `//tag.v1/path`). Returns the session and the residual path inside the
-/// repository.
-///
-/// With `options.writable` unset this opens a read-only session on the
-/// selected ref; otherwise it opens a writable session on the selected
-/// branch. Committing that session is the caller's responsibility.
+/// `//tag.v1/path`). Returns a read-only session on the selected ref and
+/// the residual path inside the repository.
 pub async fn open_from_url(
     root_url: &str,
     icechunk_body: &str,
@@ -149,19 +115,7 @@ pub async fn open_parsed(
         None => builder,
     };
     let repo = builder.execute().await?;
-    let session = match (&parsed.version, options.writable) {
-        (VersionInfo::BranchTipRef(branch), true) => {
-            repo.writable_session(branch).await?
-        }
-        (_, true) => {
-            // parse_icechunk_url rejects writes to non-branch refs
-            return Err(UrlPipelineError::capture(UrlPipelineErrorKind::NotWritable(
-                "a non-branch ref".to_string(),
-            ))
-            .into());
-        }
-        (version, false) => repo.readonly_session(version).await?,
-    };
+    let session = repo.readonly_session(&parsed.version).await?;
     Ok((session, parsed.path))
 }
 
@@ -210,20 +164,6 @@ mod tests {
         assert_eq!(session.snapshot_id(), &snap);
         assert_eq!(path, "a");
 
-        // writable sessions only on branches
-        let writable = OpenFromUrlOptions { writable: true, ..Default::default() };
-        let (session, _) =
-            open_from_url(&root, "//branch.dev", writable.clone()).await.unwrap();
-        assert!(!session.read_only());
-        assert_eq!(session.branch(), Some("dev"));
-        for body in ["//tag.v1", &format!("//{snap}")] {
-            let err = open_from_url(&root, body, writable.clone()).await.unwrap_err();
-            assert!(
-                matches!(&err, OpenFromUrlError::Url(e) if matches!(e.kind, UrlPipelineErrorKind::NotWritable(_))),
-                "{body}: {err}"
-            );
-        }
-
         // missing refs are repository errors, not URL errors
         let err = open_from_url(&root, "//tag.nope", OpenFromUrlOptions::default())
             .await
@@ -263,16 +203,5 @@ mod tests {
             let err = open_from_url(root, body, opts()).await.unwrap_err();
             assert!(matches!(err, OpenFromUrlError::Url(_)), "{root} {body}: {err}");
         }
-        let err = open_from_url(
-            "https://example.com/repo",
-            "",
-            OpenFromUrlOptions { writable: true, ..Default::default() },
-        )
-        .await
-        .unwrap_err();
-        assert!(
-            matches!(&err, OpenFromUrlError::Url(e) if matches!(e.kind, UrlPipelineErrorKind::NotWritable(_))),
-            "{err}"
-        );
     }
 }

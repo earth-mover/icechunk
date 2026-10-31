@@ -67,11 +67,6 @@ impl RootLocation {
             RootLocation::Http { .. } => "http",
         }
     }
-
-    /// Whether storage at this location can only be read.
-    pub fn is_read_only(&self) -> bool {
-        matches!(self, RootLocation::Http { .. })
-    }
 }
 
 /// The root URL schemes [`parse_root_url`] understands.
@@ -98,9 +93,17 @@ pub struct UrlStorageOptions {
     pub endpoint_url: Option<String>,
 }
 
+/// Hide a URL's query, which may carry a token, as zarr does in its errors.
+fn redact_query(url: &str) -> String {
+    match url.split_once('?') {
+        Some((before, _)) => format!("{before}?\u{2026}"),
+        None => url.to_string(),
+    }
+}
+
 fn invalid_root<T>(url: &str, reason: impl Into<String>) -> UrlPipelineResult<T> {
     Err(UrlPipelineErrorKind::InvalidRootUrl {
-        url: url.to_string(),
+        url: redact_query(url),
         reason: reason.into(),
     })
     .capture()
@@ -704,6 +707,14 @@ mod tests {
             matches!(err.kind, UrlPipelineErrorKind::InvalidRootUrl { .. }),
             "url: {url:?}, err: {err}"
         );
+    }
+
+    #[test]
+    fn test_invalid_root_redacts_query() {
+        let err = parse_root_url("https://example.com/repo?sig=SECRET").unwrap_err();
+        let message = err.kind.to_string();
+        assert!(!message.contains("SECRET"), "{message}");
+        assert!(message.contains("https://example.com/repo?\u{2026}"), "{message}");
     }
 
     #[rstest]

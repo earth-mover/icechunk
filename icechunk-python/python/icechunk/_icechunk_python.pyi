@@ -3856,10 +3856,9 @@ def _open_session_from_url_async(
     endpoint_url: str | None = None,
     config: RepositoryConfig | None = None,
     authorize_virtual_chunk_access: Mapping[str, _AnyCredential | None] | None = None,
-    writable: bool = False,
 ) -> Awaitable[tuple[PySession, str]]:
     """
-    Open a session for `<root_url>|icechunk:<icechunk_body>`.
+    Open a read-only session for `<root_url>|icechunk:<icechunk_body>`.
 
     URL and option errors raise `ValueError` when called, before any I/O;
     the returned awaitable resolves to `(session, residual_path)`.
