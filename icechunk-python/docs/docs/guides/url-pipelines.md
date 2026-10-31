@@ -5,8 +5,8 @@ title: URL Pipelines
 
 !!! warning "Experimental"
     URL pipeline support needs a zarr version with
-    [URL pipelines](https://github.com/zarr-developers/zarr-python/pull/4192),
-    which is not released yet.
+    [URL pipelines](https://github.com/zarr-developers/zarr-python/pull/4192).
+    They are on zarr's `main` branch but not in a release yet.
 
 Icechunk implements the `icechunk:` scheme of the
 [URL pipeline specification](https://github.com/jbms/url-pipeline) (ZEP 8).
@@ -103,15 +103,14 @@ xr.open_zarr(
 
 | Key | Meaning |
 |---|---|
-| `icechunk_credentials` | S3 or GCS credentials, or a dict with `access_key_id`, `secret_access_key` and optionally `session_token` |
+| `icechunk_credentials` | S3 or GCS credentials, e.g. `icechunk.s3_static_credentials(...)` |
 | `icechunk_anonymous` | use anonymous access |
 | `icechunk_region`, `icechunk_endpoint_url` | S3 region and endpoint |
 | `icechunk_config` | an `icechunk.RepositoryConfig` |
 | `icechunk_virtual_chunk_credentials` | credentials for virtual chunk containers, as for `authorize_virtual_chunk_access` |
 
-The fsspec-style keys `anon`, `key`, `secret`, `token` (an S3 session token),
-`endpoint_url` and `region` are accepted as aliases. Without credentials or
-`anonymous`, S3 and GCS credentials are read from the environment. Other keys
+Without credentials or `anonymous`, S3 and GCS credentials are read from the
+environment. Other keys, including fsspec-style keys such as `anon` or `key`,
 are rejected. Error messages name the offending keys but never include their
 values, and they show a URL's query string as `?…`.
 
@@ -119,9 +118,10 @@ values, and they show a URL's query string as `?…`.
 
 URLs always open read-only sessions, because zarr has no step at which to
 commit. When passing a `URLPipeline` to `zarr.open`, `zarr.open_group` or
-`zarr.open_array`, pass `mode="r"`. Every other mode raises an error,
-including `"a"`, the default of `zarr.open` and `zarr.open_group`. Xarray opens stores read-only, so
-`xr.open_zarr` needs no extra argument. To write, open the repository and
+`zarr.open_array`, pass `mode="r"`. Every other mode raises an error that
+points to `mode="r"`, including the defaults: `"a"` for `zarr.open` and
+`zarr.open_group`, and no mode for `zarr.open_array`. Xarray opens stores
+read-only, so `xr.open_zarr` needs no extra argument. To write, open the repository and
 use a writable session:
 
 ```python

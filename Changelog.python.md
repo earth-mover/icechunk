@@ -7,9 +7,9 @@
 - Experimental: zarr and Xarray can open Icechunk repositories by [URL pipeline](https://github.com/jbms/url-pipeline) (ZEP 8), e.g.
 `zarr.open_group(URLPipeline.from_url("s3://bucket/repo|icechunk://tag.v1/path/to/group"), mode="r")` or
 `xr.open_zarr(URLPipeline.from_url(...))`. Requires a zarr with URL pipeline support
-([zarr-python#4192](https://github.com/zarr-developers/zarr-python/pull/4192)). URLs open read-only sessions; credentials and
-configuration come from `icechunk_*` `storage_options`. Adds `icechunk.storage_from_url`, `icechunk.parse_url_ref`, and the
-`icechunk.url_repository_openers` entry-point group for other root schemes ([#576](https://github.com/earth-mover/icechunk/issues/576)).
+([zarr-python#4192](https://github.com/zarr-developers/zarr-python/pull/4192), not yet released). URLs open read-only sessions; credentials and
+configuration come from `icechunk_*` `storage_options`. Adds `icechunk.storage_from_url` and the
+`icechunk.url_repository_openers` entry-point group for other root schemes ([#576](https://github.com/earth-mover/icechunk/issues/576), [#1161](https://github.com/earth-mover/icechunk/pull/1161)).
 - Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
   - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.
   - A commit or flush checks the flags for its session content before it uploads data.

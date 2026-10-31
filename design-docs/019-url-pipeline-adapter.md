@@ -2,7 +2,7 @@
 
 Issue: [#576](https://github.com/earth-mover/icechunk/issues/576)
 
-Status: proposal, implemented on `feature/url-pipeline-adapter`.
+Status: draft, implemented in [#1161](https://github.com/earth-mover/icechunk/pull/1161). Needs a zarr release with URL pipelines.
 
 ## Summary
 
@@ -32,9 +32,10 @@ The Rust crate does the parsing, the root-URL → `Storage` mapping and the
 session opening (`icechunk::url_pipeline`). Python has a thin binding and the
 zarr adapter class (`icechunk.zarr_url_adapter.IcechunkURLAdapter`).
 
-This replaces the earlier attempt in #1161, which targeted a zarr API that no
-longer exists (`StoreAdapter`, `from_url_segment`, the `zarr.stores` group),
-used the older `@ref` syntax, and parsed snapshot ids as hex.
+This PR supersedes the earlier approach in #1161, a pure-Python adapter that
+targeted a zarr API that no longer exists (`StoreAdapter`, `from_url_segment`,
+the `zarr.stores` group), used the older `@ref` syntax, and parsed snapshot ids
+as hex.
 
 ## Syntax
 
@@ -136,27 +137,23 @@ zarr convention, and rejects every other key for built-in roots:
 
 | Key | Meaning |
 |---|---|
-| `icechunk_credentials` | S3 or GCS credentials object, or a dict of S3 static keys |
+| `icechunk_credentials` | S3 or GCS credentials object |
 | `icechunk_anonymous` | anonymous access |
 | `icechunk_region`, `icechunk_endpoint_url` | S3 region / endpoint |
 | `icechunk_config` | `RepositoryConfig` for `Repository.open` |
 | `icechunk_virtual_chunk_credentials` | mapping passed to `authorize_virtual_chunk_access` |
 
-For xarray ergonomics a few fsspec-style keys are aliases: `anon`, `key` +
-`secret` (+ `token` as the S3 session token), `endpoint_url`, `region`.
-Giving both an alias and its `icechunk_*` key is an error. The mapping is
-deliberately small: `token` means different things in s3fs and gcsfs, so it
-is only accepted next to `key`/`secret`.
+fsspec-style keys (`anon`, `key`, `secret`, ...) are not accepted as aliases;
+`token`, for one, means different things in s3fs and gcsfs.
 
-Following zarr's adapter guidance, the adapter consumes only these keys (and,
-for built-in roots, which it resolves itself, the aliases), passes repository
+Following zarr's adapter guidance, the adapter consumes only these keys, passes repository
 openers a copy with every `icechunk_*` key removed, and never logs the options
 or puts their values in error messages; errors name keys only.
 
 Root URLs for built-in schemes take no query. Errors that quote a URL show
 its query as `?…`, as zarr's do, since a query may carry a token (for example
-a signed `https:` URL). The query check happens in Python, before Rust, whose
-error would otherwise echo the whole root.
+a signed `https:` URL). Rust rejects root queries and redacts the URL in its
+error.
 
 This follows the review of #1161, which asked for credentials, including
 virtual chunk container credentials, to come through `storage_options`
@@ -167,16 +164,14 @@ rather than being hardcoded to "from environment".
 zarr has no commit step, so the adapter cannot commit a writable session.
 
 - `"r"`: a read-only session on the selected ref.
-- `"a"` (zarr's default for `open`/`open_group`), `"w"`, `"w-"`, `"r+"`:
-  `URLPipelineError`, pointing to `repo.writable_session(branch)` +
-  `session.commit(...)`. zarr itself rejects a read-only store in mode `"a"`,
-  so the adapter refuses it up front, before any I/O, and suggests
-  `mode="r"`.
-- Tags and snapshots are read-only regardless.
+- Every other mode, including `"a"` (zarr's default for `open`/`open_group`)
+  and `None` (`open_array`'s default): `URLPipelineError`, before any I/O,
+  suggesting `mode="r"` and pointing to `repo.writable_session(branch)` +
+  `session.commit(...)`. This follows zarr's guidance that adapters for
+  read-only resources raise for every mode except `"r"`.
 
-The Rust `open_from_url` already supports `writable: true` (branch refs
-only, never `http(s):`), so changing the Python policy later is small.
-Alternatives, both out of scope:
+The Rust `open_from_url` opens read-only sessions only. Write support,
+whichever form it takes, is out of scope:
 
 - (b) Return a writable session and hand it to the caller through an
   `icechunk_session_callback` storage option so they can commit. Workable,
@@ -230,14 +225,13 @@ are left to a follow-on zarr PR.
 - `icechunk/zarr_url_adapter.py` is the only module that imports it; it is
   not imported by `import icechunk`, and zarr only imports it when a pipeline
   names `icechunk:`. Older zarr never reads the entry-point group.
-- `icechunk.parse_url_ref` and `icechunk.storage_from_url` have no zarr
-  dependency.
+- `icechunk.storage_from_url` has no zarr dependency.
 - The dev environment pins `zarr<3.2`, so the adapter tests skip there and
-  the adapter module is excluded from the default mypy run. A separate CI
-  workflow (`python-url-pipeline.yaml`, `just python-url-pipeline`) installs
-  zarr from the URL pipeline branch and runs mypy and the tests. Once #4192
-  is released: set a dependency floor (or keep the import guard), move the
-  tests into the normal run, and delete the workflow.
+  the adapter module is excluded from the default mypy run. The
+  `url-pipeline-adapter` job in `python-check.yaml` installs zarr `main`
+  (pinned to `01fa6d98`) and runs mypy and the tests. Once a zarr release
+  has URL pipelines: set a dependency floor (or keep the import guard), move
+  the tests into the normal run, and drop the job.
 
 ## Out of scope
 
