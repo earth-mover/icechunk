@@ -1,0 +1,64 @@
+name: Python Check - URL pipeline adapter
+
+# Tests the `icechunk:` URL pipeline adapter (icechunk.zarr_url_adapter) against a
+# zarr with URL pipeline support. The default Python jobs pin a zarr release
+# without it, so these tests skip there.
+# TODO: once zarr-developers/zarr-python#4192 is released and the dev pin allows
+# it, fold this into python-check and delete this workflow.
+
+on:
+  pull_request:
+    paths:
+      - "icechunk/src/url_pipeline/**"
+      - "icechunk-python/src/url_pipeline.rs"
+      - "icechunk-python/python/icechunk/url_pipeline.py"
+      - "icechunk-python/python/icechunk/zarr_url_adapter.py"
+      - "icechunk-python/tests/test_zarr_url_adapter.py"
+      - ".github/workflows/python-url-pipeline.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIXI_VERSION: "v0.72.0"
+
+jobs:
+  url-pipeline:
+    name: url-pipeline-adapter
+    runs-on: ubuntu-latest
+    # zarr's URL pipeline support is unreleased; don't block on its branch moving
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@d3f436a425481402e6a95a1d1fc10331c708cd9e # v0.10.2
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Stand up RustFS
+        run: just rustfs-up
+
+      - name: Build wheels
+        run: just profile=ci-wheel build-wheels
+
+      - name: Wait for RustFS to be ready
+        run: just rustfs-wait
+
+      - name: setup
+        run: just python-url-pipeline-setup
+
+      - name: mypy
+        run: just python-url-pipeline-mypy
+
+      - name: pytest
+        run: just python-url-pipeline-pytest
