@@ -45,7 +45,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -58,7 +58,7 @@ jobs:
         run: just profile=ci-wheel build-wheels
 
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: upstream-wheels
           path: icechunk-python/dist
@@ -82,7 +82,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -96,7 +96,7 @@ jobs:
         run: just rustfs-wait
 
       - name: Download wheels
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: upstream-wheels
           path: icechunk-python/dist
@@ -147,7 +147,7 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: upstream-dev-logs
           path: |
@@ -173,7 +173,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: upstream-dev-logs
           path: icechunk-python
@@ -311,7 +311,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -319,7 +319,7 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
 
       - name: Download wheels
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: upstream-wheels
           path: icechunk-python/dist
@@ -343,7 +343,7 @@ jobs:
 
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: xarray-backends-logs
           path: icechunk-python/output-pytest-log.jsonl
@@ -362,7 +362,7 @@ jobs:
       && github.event_name == 'schedule'
       && github.repository_owner == 'earth-mover'
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: xarray-backends-logs
           path: xarray-backends-logs
