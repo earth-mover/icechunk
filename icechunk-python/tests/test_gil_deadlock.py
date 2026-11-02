@@ -69,6 +69,7 @@ call = {
     "str-store": lambda s: str(s.store),
     "str-session": lambda s: str(s),
     "chunk-type": lambda s: s.chunk_type("/a", [0]),
+    "shift-array": lambda s: s.shift_array("/a", [0]),
 }[call_name]
 
 config = icechunk.RepositoryConfig(inline_chunk_threshold_bytes=inline_threshold)
@@ -96,7 +97,11 @@ def committer():
 
 def caller():
     while not done.is_set():
-        call(current)
+        try:
+            call(current)
+        except icechunk.IcechunkError:
+            # Changing a session that has just been committed fails.
+            pass
 
 
 threads = [threading.Thread(target=committer), threading.Thread(target=caller)]
@@ -108,7 +113,9 @@ for t in threads:
 
 
 @pytest.mark.parametrize("storage_kind", ["inline-chunks", "refreshable-credentials"])
-@pytest.mark.parametrize("call", ["str-store", "str-session", "chunk-type"])
+@pytest.mark.parametrize(
+    "call", ["str-store", "str-session", "chunk-type", "shift-array"]
+)
 def test_call_during_commit(storage_kind: str, call: str) -> None:
     result = subprocess.run(
         [sys.executable, "-c", SCRIPT, storage_kind, call, *Permission.MODIFY.keys()],

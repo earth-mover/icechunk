@@ -353,7 +353,8 @@ impl PySession {
     }
 
     pub fn shift_array(
-        &mut self,
+        &self,
+        py: Python<'_>,
         array_path: String,
         chunk_offset: Vec<i64>,
     ) -> PyResult<()> {
@@ -361,14 +362,15 @@ impl PySession {
             .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
 
-        // TODO: detach
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let mut session = self.0.write().await;
-            session
-                .shift_array(&array_path, chunk_offset.as_slice())
-                .await
-                .map_err(PyIcechunkStoreError::SessionError)?;
-            Ok(())
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let mut session = self.0.write().await;
+                session
+                    .shift_array(&array_path, chunk_offset.as_slice())
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(())
+            })
         })
     }
 
