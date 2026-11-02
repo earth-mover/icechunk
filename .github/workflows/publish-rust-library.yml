@@ -37,6 +37,12 @@ jobs:
           activate-environment: true
           manifest-path: icechunk-python/pyproject.toml
 
+      - name: Stand up docker services
+        run: just contup
+
+      - name: Wait for containers to be ready
+        run: just contwait
+
       # TODO: not reusing cache to avoid a potentially poisoned one,
       #       but should be fine to reuse the one from main?
       #- name: Cache Dependencies
@@ -45,7 +51,10 @@ jobs:
       #    prefix-key: "rust-py312"
       #    shared-key: "rust"
 
-      # No checks here: Rust CI, Code Quality Checks and Dependency Check already ran on this commit of main
+      - name: Check
+        run: |
+          just pre-commit-ci
+
       - name: Setup git committer
         run: |
           git config --global user.email "joe@earthmover.io"
