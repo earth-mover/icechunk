@@ -70,6 +70,7 @@ call = {
     "str-session": lambda s: str(s),
     "chunk-type": lambda s: s.chunk_type("/a", [0]),
     "shift-array": lambda s: s.shift_array("/a", [0]),
+    "reindex-array": lambda s: s.reindex_array("/a", lambda idx: idx),
 }[call_name]
 
 config = icechunk.RepositoryConfig(inline_chunk_threshold_bytes=inline_threshold)
@@ -114,7 +115,7 @@ for t in threads:
 
 @pytest.mark.parametrize("storage_kind", ["inline-chunks", "refreshable-credentials"])
 @pytest.mark.parametrize(
-    "call", ["str-store", "str-session", "chunk-type", "shift-array"]
+    "call", ["str-store", "str-session", "chunk-type", "shift-array", "reindex-array"]
 )
 def test_call_during_commit(storage_kind: str, call: str) -> None:
     result = subprocess.run(
