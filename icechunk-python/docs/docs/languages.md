@@ -31,7 +31,7 @@ They bind to the Rust implementation but are not officially supported yet, and t
 ## Community
 
 Built and maintained by the community.
-Projects that implement the spec themselves, rather than using the `icechunk` crate, can lag behind new spec versions, so check which versions each one reads.
+Some community projects implement the spec directly themselves, rather than using the `icechunk` crate. This can have advantages, but also means that they may lag behind new spec versions, so check directly with the project to see which versions each one reads.
 
 ### Read and write
 
