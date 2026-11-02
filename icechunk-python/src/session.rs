@@ -105,16 +105,17 @@ impl PyRepr for PySession {
 /// Most functions in this class block, so they need to `detach` so other
 /// python threads can make progress
 impl PySession {
-    pub(crate) fn __repr__(&self) -> String {
-        <Self as PyRepr>::__repr__(self)
+    // The session lock holder may need the GIL, so wait for it detached.
+    pub(crate) fn __repr__(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::__repr__(self))
     }
 
-    pub(crate) fn __str__(&self) -> String {
-        <Self as PyRepr>::__str__(self)
+    pub(crate) fn __str__(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::__str__(self))
     }
 
-    pub(crate) fn _repr_html_(&self) -> String {
-        <Self as PyRepr>::_repr_html_(self)
+    pub(crate) fn _repr_html_(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::_repr_html_(self))
     }
 
     #[classmethod]
@@ -482,12 +483,15 @@ impl PySession {
 
     pub fn chunk_type(
         &self,
+        py: Python<'_>,
         array_path: String,
         coords: Vec<u32>,
     ) -> PyResult<ChunkType> {
         let session = Arc::clone(&self.0);
-        pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(Self::chunk_type_inner(session, array_path, coords))
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(Self::chunk_type_inner(session, array_path, coords))
+        })
     }
 
     pub fn chunk_type_async<'py>(
