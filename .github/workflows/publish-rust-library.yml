@@ -26,11 +26,11 @@ jobs:
        id-token: write  # needed to publish to crates.io
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+      - uses: prefix-dev/setup-pixi@v0.11.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
