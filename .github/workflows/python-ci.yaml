@@ -169,7 +169,7 @@ jobs:
               fi
               sleep 3
           done
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
@@ -181,7 +181,7 @@ jobs:
           echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@2e6429cdbcfb68a5450668dcab09d445af5704e8 # v1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
@@ -189,7 +189,7 @@ jobs:
           rust-toolchain: stable
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wheels-linux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
@@ -217,7 +217,7 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
@@ -229,7 +229,7 @@ jobs:
           echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@2e6429cdbcfb68a5450668dcab09d445af5704e8 # v1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
@@ -237,7 +237,7 @@ jobs:
           rust-toolchain: stable
           manylinux: musllinux_1_2
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wheels-musllinux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
@@ -270,7 +270,7 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
           architecture: ${{ matrix.platform.target }}
@@ -284,14 +284,14 @@ jobs:
           (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$env:VERSION`"" | Set-Content Cargo.toml
         shell: powershell
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@2e6429cdbcfb68a5450668dcab09d445af5704e8 # v1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i ${{ matrix.python }}
           rust-toolchain: stable
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wheels-windows-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
@@ -319,7 +319,7 @@ jobs:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
@@ -331,14 +331,14 @@ jobs:
           echo "Using version: $VERSION for branch $BRANCH"
           sed -i '' 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@2e6429cdbcfb68a5450668dcab09d445af5704e8 # v1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i ${{ matrix.python }}
           rust-toolchain: stable
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wheels-macos-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
@@ -368,14 +368,14 @@ jobs:
           echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build sdist
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@2e6429cdbcfb68a5450668dcab09d445af5704e8 # v1
         with:
           working-directory: icechunk-python
           command: sdist
           args: --out dist
           rust-toolchain: stable
       - name: Upload sdist
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: wheels-sdist-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}
           path: icechunk-python/dist
@@ -388,9 +388,9 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.pypi_release }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@2e6429cdbcfb68a5450668dcab09d445af5704e8 # v1
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
@@ -407,7 +407,7 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: dist
           merge-multiple: true
@@ -433,7 +433,7 @@ jobs:
           ls -R dist
 
       - name: Upload nightly wheels
-        uses: scientific-python/upload-nightly-action@16fa02eacee1655195143de09f03676e60ef2bf5
+        uses: scientific-python/upload-nightly-action@5a74a2a4ec19d7ab8b5317c1cdd356c150d92cd0
         with:
           artifacts_path: dist
           anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}
