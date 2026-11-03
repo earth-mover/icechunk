@@ -62,7 +62,7 @@ jobs:
       # Checkout main branch (skip if only building support/v1.x)
       - name: Checkout main
         if: ${{ github.event_name == 'schedule' || inputs.branch != 'support/v1.x' }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           ref: main
           fetch-depth: 0
@@ -96,7 +96,7 @@ jobs:
       # Checkout support/v1.x branch (skip if only building main)
       - name: Checkout support/v1.x
         if: ${{ github.event_name == 'schedule' || inputs.branch == 'support/v1.x' }}
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           ref: support/v1.x
           fetch-depth: 0
@@ -153,7 +153,7 @@ jobs:
         # 3.14t has no stable ABI and needs its own wheel; 3.15t builds abi3t
         python: ['3.12', '3.14t', '3.15t']
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -169,7 +169,7 @@ jobs:
               fi
               sleep 3
           done
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
@@ -181,7 +181,7 @@ jobs:
           echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@v1.50.1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
@@ -189,7 +189,7 @@ jobs:
           rust-toolchain: stable
           manylinux: ${{ matrix.platform.manylinux }} # https://github.com/PyO3/maturin-action/issues/245
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: wheels-linux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
@@ -212,12 +212,12 @@ jobs:
         # 3.14t has no stable ABI and needs its own wheel; 3.15t builds abi3t
         python: ['3.12', '3.14t', '3.15t']
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
@@ -229,7 +229,7 @@ jobs:
           echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@v1.50.1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
@@ -237,7 +237,7 @@ jobs:
           rust-toolchain: stable
           manylinux: musllinux_1_2
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: wheels-musllinux-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
@@ -265,12 +265,12 @@ jobs:
         # 3.14t has no stable ABI and needs its own wheel; 3.15t builds abi3t
         python: ['3.12', '3.14t', '3.15t']
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python }}
           architecture: ${{ matrix.platform.target }}
@@ -284,14 +284,14 @@ jobs:
           (Get-Content Cargo.toml) -replace '^version = ".*"', "version = `"$env:VERSION`"" | Set-Content Cargo.toml
         shell: powershell
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@v1.50.1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i ${{ matrix.python }}
           rust-toolchain: stable
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: wheels-windows-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
@@ -314,12 +314,12 @@ jobs:
         # 3.14t has no stable ABI and needs its own wheel; 3.15t builds abi3t
         python: ['3.12', '3.14t', '3.15t']
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: ${{ matrix.python }}
       - name: Update version in Cargo.toml
@@ -331,14 +331,14 @@ jobs:
           echo "Using version: $VERSION for branch $BRANCH"
           sed -i '' 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build wheels
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@v1.50.1
         with:
           working-directory: icechunk-python
           target: ${{ matrix.platform.target }}
           args: --release --out dist -i ${{ matrix.python }}
           rust-toolchain: stable
       - name: Upload wheels
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: wheels-macos-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}-${{ matrix.platform.target }}-py${{ matrix.python }}
           path: icechunk-python/dist
@@ -354,7 +354,7 @@ jobs:
       matrix:
         branch: ${{ github.event_name == 'schedule' && fromJSON('["main", "support/v1.x"]') || fromJSON(format('["{0}"]', inputs.branch)) }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           ref: ${{ matrix.branch }}
           fetch-depth: 0
@@ -368,14 +368,14 @@ jobs:
           echo "Using version: $VERSION for branch $BRANCH"
           sed -i 's/^version = ".*"/version = "'$VERSION'"/' Cargo.toml
       - name: Build sdist
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@v1.50.1
         with:
           working-directory: icechunk-python
           command: sdist
           args: --out dist
           rust-toolchain: stable
       - name: Upload sdist
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: wheels-sdist-${{ matrix.branch == 'main' && 'main' || 'support-v1.x' }}
           path: icechunk-python/dist
@@ -388,9 +388,9 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.pypi_release }}
     needs: [linux, musllinux, windows, macos, sdist]
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@v8.0.1
       - name: Publish to PyPI
-        uses: PyO3/maturin-action@db323e2cf5679b7feb8bcb561a36b27a0bc19e79 # v1
+        uses: PyO3/maturin-action@v1.50.1
         with:
           command: upload
           args: --non-interactive --skip-existing wheels-*/*
@@ -407,7 +407,7 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@v8.0.1
         with:
           path: dist
           merge-multiple: true
@@ -433,7 +433,7 @@ jobs:
           ls -R dist
 
       - name: Upload nightly wheels
-        uses: scientific-python/upload-nightly-action@16fa02eacee1655195143de09f03676e60ef2bf5
+        uses: scientific-python/upload-nightly-action@0.6.5
         with:
           artifacts_path: dist
           anaconda_nightly_upload_token: ${{ secrets.ANACONDA_ORG_UPLOAD_TOKEN }}
@@ -455,7 +455,7 @@ jobs:
       run:
         working-directory: .
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
