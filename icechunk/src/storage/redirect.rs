@@ -76,9 +76,22 @@ impl RedirectStorage {
             }
         };
 
-        let client = rw::Client::builder()
+        let mut builder = rw::Client::builder()
             .user_agent(crate::user_agent())
-            .redirect(rw::redirect::Policy::custom(redirect))
+            .redirect(rw::redirect::Policy::custom(redirect));
+        if let Some(pem) = crate::storage::tls::tls_ca_bundle()? {
+            let certs = rw::Certificate::from_pem_bundle(&pem)
+                .map_err(|e| {
+                    StorageErrorKind::BadRedirect(format!(
+                        "Cannot use the certificates in {}: {e}",
+                        crate::storage::tls::TLS_CA_FILE_ENV
+                    ))
+                })
+                .capture()?;
+            builder = builder.tls_certs_only(certs);
+        }
+
+        let client = builder
             .build()
             .map_err(|e| {
                 StorageErrorKind::BadRedirect(format!(
@@ -97,8 +110,16 @@ impl RedirectStorage {
             })
             .capture()?;
         let res = client.execute(req).await.map_err(|e| {
+            // reqwest Display omits the causes, such as a TLS certificate rejection
+            let mut msg = e.to_string();
+            let mut cause = std::error::Error::source(&e);
+            while let Some(c) = cause {
+                msg.push_str(": ");
+                msg.push_str(&c.to_string());
+                cause = c.source();
+            }
             StorageErrorKind::BadRedirect(format!(
-                "Request to redirect url ({}) failed, cannot find target Storage instance: {e}",
+                "Request to redirect url ({}) failed, cannot find target Storage instance: {msg}",
                 self.url
             ))
         }).capture()?;

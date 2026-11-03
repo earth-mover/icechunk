@@ -11,7 +11,7 @@
 
 use async_trait::async_trait;
 use object_store::{
-    ClientConfigKey, ClientOptions,
+    Certificate, ClientConfigKey, ClientOptions,
     client::{
         HttpClient, HttpConnector, HttpError, HttpRequest, HttpResponse, HttpService,
         ReqwestConnector,
@@ -39,11 +39,30 @@ pub struct AttributedHttpConnector {
 
 impl HttpConnector for AttributedHttpConnector {
     fn connect(&self, options: &ClientOptions) -> object_store::Result<HttpClient> {
-        let inner = self.inner.connect(options)?;
+        let bundle = icechunk_storage::tls::tls_ca_bundle().map_err(|e| {
+            object_store::Error::Generic { store: "icechunk", source: Box::new(e) }
+        })?;
+        let inner = match bundle {
+            Some(pem) => {
+                self.inner.connect(&client_options_with_roots(options, &pem)?)?
+            }
+            None => self.inner.connect(options)?,
+        };
         // icechunk sets no user agent of its own, so any value is the user's
         let user_prefix = options.get_config_value(&ClientConfigKey::UserAgent);
         Ok(HttpClient::new(AttributedHttpService { inner, user_prefix }))
     }
+}
+
+/// `options` with the certificates in `pem` as the only trust roots.
+fn client_options_with_roots(
+    options: &ClientOptions,
+    pem: &[u8],
+) -> object_store::Result<ClientOptions> {
+    Ok(Certificate::from_pem_bundle(pem)?
+        .into_iter()
+        .fold(options.clone(), |opts, cert| opts.with_root_certificate(cert))
+        .with_no_system_certificates(true))
 }
 
 #[derive(Debug)]
@@ -166,5 +185,18 @@ mod tests {
             ClientOptions::new().get_config_value(&ClientConfigKey::UserAgent),
             None
         );
+    }
+
+    const TEST_CA: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/ca.pem");
+
+    #[test]
+    fn roots_replace_system_certificates() {
+        let options =
+            ClientOptions::new().with_config(ClientConfigKey::UserAgent, "myapp/2");
+        let opts = client_options_with_roots(&options, TEST_CA).unwrap();
+        let value = |key| opts.get_config_value(&key);
+        assert_eq!(value(ClientConfigKey::NoSystemCertificates).as_deref(), Some("true"));
+        assert_eq!(value(ClientConfigKey::UserAgent).as_deref(), Some("myapp/2"));
+        assert!(AttributedHttpConnector::default().connect(&opts).is_ok());
     }
 }

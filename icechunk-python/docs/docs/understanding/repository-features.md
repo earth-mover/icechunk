@@ -136,7 +136,9 @@ Every repository mutation creates exactly one log entry. The `kind` field tells 
 ## Feature Flags
 
 Feature flags let you selectively disable operations on an Icechunk repository. This is useful for protecting production repositories from accidental modifications, like node moves on a dataset.
-They are stored in the repository itself, and enforced for all clients that open the repository. Changes to feature flags are recorded in the [ops log](../reference/index.md#icechunk.Repository.ops_log).
+They are stored in the repository itself. The Icechunk library checks them for every client that opens the repository. Changes to feature flags are recorded in the [ops log](../reference/index.md#icechunk.Repository.ops_log).
+
+Feature flags are not access control. A client with write access to the storage can bypass them. Any writer can change a flag with `set_feature_flag`.
 
 ### Listing Feature Flags
 
@@ -166,11 +168,41 @@ Each [`FeatureFlag`](../reference/config.md#icechunk.config.FeatureFlag) has the
 
 All flags are enabled by default on a new repository. The current set of flags is:
 
-| Flag name      | Controls                                                              |
-|----------------|-----------------------------------------------------------------------|
-| `move_node`    | Creating rearrange sessions and committing node moves.                |
-| `create_tag`   | Creating new tags.                                                    |
-| `delete_tag`   | Deleting existing tags.                                               |
+| Flag name                     | Controls                                                                  |
+|-------------------------------|---------------------------------------------------------------------------|
+| `commit`                      | Creating writable and rearrange sessions, and every commit, flush and fork. |
+| `amend`                       | Commits with `Session.amend`.                                             |
+| `move_node`                   | Creating rearrange sessions and committing node moves.                    |
+| `rebase`                      | `Session.rebase`, and commits that rebase on a conflict.                  |
+| `create_new_nodes`            | Commits that add groups or arrays.                                        |
+| `delete_nodes`                | Commits that delete groups or arrays.                                     |
+| `update_chunks`               | Commits that write or delete chunks of existing arrays, or resize an array so it has fewer chunks. |
+| `update_array_metadata`       | Commits that change the shape or metadata of existing arrays.             |
+| `update_group_metadata`       | Commits that change the metadata of existing groups.                      |
+| `set_default_commit_metadata` | Commits from a repository that has default commit metadata.               |
+| `rewrite_manifests`           | `Repository.rewrite_manifests`.                                           |
+| `create_branch`               | Creating new branches.                                                    |
+| `delete_branch`               | Deleting branches.                                                        |
+| `reset_branch`                | `Repository.reset_branch`.                                                |
+| `create_tag`                  | Creating new tags.                                                        |
+| `delete_tag`                  | Deleting existing tags.                                                   |
+| `garbage_collection`          | `Repository.garbage_collect`.                                             |
+| `expiration`                  | `Repository.expire_snapshots`.                                            |
+| `update_config`               | `Repository.save_config`.                                                 |
+| `update_repository_metadata`  | `Repository.set_metadata` and `Repository.update_metadata`.               |
+
+In this table, a commit also means a flush. A commit or flush checks the flags for its changes before it uploads data.
+
+### Flag Interactions
+
+Each flag guards one operation. A flag does not guard a result that a different operation can also produce:
+
+- `reset_branch` can move a branch to any snapshot. This can remove groups, arrays and chunks. To freeze the content of a branch, also disable `reset_branch`.
+- `delete_branch` followed by `create_branch` gives the same result as `reset_branch`. To block resets, disable all three flags.
+- `move_node` moves a node to a new path. It does not need `create_new_nodes` or `delete_nodes`.
+- `expire_snapshots` with `delete_expired_branches` or `delete_expired_tags` also needs `delete_branch` or `delete_tag`.
+- Chunk writes to an array that the same session creates need only `create_new_nodes`.
+- A chunk delete needs `update_chunks`, also when the chunk was never written.
 
 
 ### Setting Feature Flags

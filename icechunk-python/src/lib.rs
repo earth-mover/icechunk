@@ -7,6 +7,7 @@ mod conflicts;
 mod display;
 mod errors;
 mod pickle;
+mod python_logs;
 mod repository;
 mod session;
 mod stats;
@@ -37,7 +38,7 @@ use conflicts::{
 };
 use display::PyAncestryGraph;
 use errors::{_all_error_kinds, IcechunkError, PyConflictError, PyRebaseFailedError};
-use icechunk::{format::format_constants::SpecVersionBin, initialize_tracing};
+use icechunk::format::format_constants::SpecVersionBin;
 use pyo3::prelude::*;
 use pyo3::types::PyMapping;
 use pyo3::wrap_pyfunction;
@@ -103,7 +104,8 @@ fn initialize_logs(py: Python<'_>) -> PyResult<()> {
         // Bind it to Icechunk's long-lived global runtime so it lives for the life of the process
         // and can flush the last spans on shutdown
         let _rt_guard = pyo3_async_runtimes::tokio::get_runtime().enter();
-        initialize_tracing(log_filter_directive.as_deref());
+        let destination = env::var("ICECHUNK_LOG_DESTINATION").ok();
+        python_logs::initialize(py, log_filter_directive, destination.as_deref())?;
 
         // The final span batch must be flushed before process shutdown
         register_telemetry_shutdown(py)?;
@@ -160,7 +162,7 @@ fn set_logs_filter(py: Python<'_>, log_filter_directive: Option<String>) -> PyRe
         check_filter_for_misspellings(filter);
     }
 
-    initialize_tracing(log_filter_directive.as_deref());
+    python_logs::set_filter(log_filter_directive);
     Ok(())
 }
 
@@ -256,6 +258,8 @@ fn _icechunk_python(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<VirtualChunkSpec>()?;
     m.add_function(wrap_pyfunction!(initialize_logs, m)?)?;
     m.add_function(wrap_pyfunction!(set_logs_filter, m)?)?;
+    m.add_function(wrap_pyfunction!(python_logs::set_logs_destination, m)?)?;
+    m.add_function(wrap_pyfunction!(python_logs::flush_python_logs, m)?)?;
     m.add_function(wrap_pyfunction!(shutdown_telemetry, m)?)?;
     m.add_function(wrap_pyfunction!(spec_version, m)?)?;
     m.add_function(wrap_pyfunction!(user_agent, m)?)?;

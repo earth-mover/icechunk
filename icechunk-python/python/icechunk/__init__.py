@@ -46,6 +46,7 @@ from icechunk.config import (
     ObjectStoreConfig,
     RepositoryConfig,
     initialize_logs,
+    set_logs_destination,
     set_logs_filter,
     shutdown_telemetry,
 )
@@ -239,6 +240,7 @@ __all__ = [
     "s3_static_credentials",
     "s3_storage",
     "s3_store",
+    "set_logs_destination",
     "set_logs_filter",
     "shutdown_telemetry",
     "spec_version",

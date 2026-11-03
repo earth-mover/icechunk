@@ -42,7 +42,27 @@ icechunk.set_logs_filter("debug,icechunk=trace")
 
 To skip logging setup entirely, set `ICECHUNK_NO_LOGS` (to any value) before importing `icechunk`.
 
-To send logs to stdout instead of stderr, set `ICECHUNK_LOG_TO_STDOUT` (to any value) before importing `icechunk`. The destination is fixed when logging is first initialized at import, so this variable has no effect if set afterwards; `set_logs_filter` only changes the verbosity, not the destination.
+To send logs to stdout instead of stderr, set `ICECHUNK_LOG_TO_STDOUT` (to any value) before importing `icechunk`. The stream is fixed when logging is first initialized at import, so this variable has no effect if set afterwards; `set_logs_filter` only changes the verbosity, not the stream.
+
+### Sending logs to Python `logging`
+
+Icechunk can send its logs to the standard Python [`logging`](https://docs.python.org/3/library/logging.html) module instead of the console. Then your handlers, formatters and levels apply to Icechunk logs. Call `set_logs_destination`:
+
+```python
+import logging
+
+import icechunk
+
+logging.basicConfig(level=logging.DEBUG)
+icechunk.set_logs_filter("icechunk=debug")
+icechunk.set_logs_destination("python")
+```
+
+Logs go to one destination only: `"console"` (the default) or `"python"`. The filter from `ICECHUNK_LOG` or `set_logs_filter` applies to the active destination. Only matching events go to Python. Thus a narrow filter keeps the cost low. To go back to the console, call `set_logs_destination("console")`. To set the destination at import, set `ICECHUNK_LOG_DESTINATION` to `python` before you import `icechunk`. To get the logs on the console and in Python, add a [`logging.StreamHandler`](https://docs.python.org/3/library/logging.handlers.html#streamhandler) in Python.
+
+Each event becomes a `logging.LogRecord` on the logger for its Rust module. For example, events from `icechunk::repository::builder` go to the `icechunk.repository.builder` logger. The record has the Rust file and line. Event fields come after the message as `key=value`. The Rust `trace` level maps to level 5, with the name `TRACE`.
+
+A background thread delivers the records. Thus a record can arrive shortly after the Icechunk call that made it returns. Icechunk never waits for your handlers. If they are too slow, up to 10,000 records wait in a queue. To change this size, set `ICECHUNK_PYTHON_LOG_QUEUE_SIZE` to a positive integer before the first log event. Icechunk drops the records that do not fit. Later, it logs a warning with the count on the `icechunk` logger. At interpreter exit, Icechunk waits at most 2 seconds for the queued records. Then it reports on stderr how many records it did not deliver. A child process from `os.fork` does not send logs to Python.
 
 ## OpenTelemetry tracing
 
