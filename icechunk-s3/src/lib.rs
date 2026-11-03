@@ -48,8 +48,7 @@ pub use icechunk_storage::s3_config::{
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
     Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    Timeout, VersionInfo, VersionedUpdateResult, obj_not_found_res, obj_store_error,
-    obj_store_error_res, other_error,
+    Timeout, VersionInfo, VersionedUpdateResult, obj_not_found_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -62,7 +61,10 @@ use tokio::sync::OnceCell;
 use tokio_util::io::StreamReader;
 use tracing::{error, instrument, trace, warn};
 use typed_path::Utf8UnixPath;
+use unexpected_response::{s3_error, s3_error_res};
 use uuid::Uuid;
+
+mod unexpected_response;
 
 /// How object keys are laid out inside the bucket for a given repository.
 ///
@@ -708,7 +710,7 @@ impl S3Storage {
         req.into_paginator()
             .send()
             .into_stream_03x()
-            .map_err(obj_store_error)
+            .map_err(s3_error)
             .try_filter_map(|page| {
                 let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
                 ready(Ok(contents))
@@ -784,7 +786,7 @@ impl S3Storage {
                     || sdk_err
                         .raw_response()
                         .is_some_and(|r| matches!(r.status().as_u16(), 404 | 400));
-                if absent { Ok(None) } else { obj_store_error_res(sdk_err) }
+                if absent { Ok(None) } else { s3_error_res(sdk_err) }
             }
         }
     }
@@ -859,7 +861,7 @@ impl S3Storage {
                 if is_precondition_code(code) {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
+                    s3_error_res(SdkError::<PutObjectError>::ServiceError(err))
                 }
             }
             // S3 API documents this
@@ -869,10 +871,10 @@ impl S3Storage {
                 if status == 409 || status == 412 {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    s3_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
             }
-            Err(err) => obj_store_error_res(err),
+            Err(err) => s3_error_res(err),
         }
     }
 
@@ -1018,11 +1020,11 @@ impl S3Storage {
                         ctx,
                         key,
                         write_id.as_deref(),
-                        obj_store_error(SdkError::ServiceError(err)),
+                        s3_error(SdkError::ServiceError(err)),
                     )
                     .await
                 } else {
-                    obj_store_error_res(SdkError::ServiceError(err))
+                    s3_error_res(SdkError::ServiceError(err))
                 }
             }
             Err(SdkError::ResponseError(err)) => {
@@ -1035,14 +1037,14 @@ impl S3Storage {
                         ctx,
                         key,
                         write_id.as_deref(),
-                        obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
+                        s3_error(SdkError::<PutObjectError>::ResponseError(err)),
                     )
                     .await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    s3_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
             }
-            Err(err) => obj_store_error_res(err),
+            Err(err) => s3_error_res(err),
         }
     }
 
@@ -1112,7 +1114,7 @@ impl S3Storage {
             }
             Err(sdk_err) => {
                 warn!(key, error = %sdk_err, "readback HEAD failed; propagating the HEAD error");
-                return obj_store_error_res(sdk_err);
+                return s3_error_res(sdk_err);
             }
         };
         Ok(ReadbackOutcome::classify(write_id, stored_write_id.as_deref(), &version))
@@ -1227,7 +1229,7 @@ impl Storage for S3Storage {
                 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    obj_store_error_res(SdkError::<CopyObjectError>::ServiceError(err))
+                    s3_error_res(SdkError::<CopyObjectError>::ServiceError(err))
                 }
             }
             // S3 API documents this
@@ -1237,7 +1239,7 @@ impl Storage for S3Storage {
                 if status == 409 || status == 412 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    s3_error_res(SdkError::<PutObjectError>::ResponseError(err))
                 }
             }
             Err(sdk_err) => match sdk_err.as_service_error() {
@@ -1252,7 +1254,7 @@ impl Storage for S3Storage {
                     // the status code.
                     obj_not_found_res()
                 }
-                _ => obj_store_error_res(sdk_err),
+                _ => s3_error_res(sdk_err),
             },
         }
     }
@@ -1372,7 +1374,7 @@ impl Storage for S3Storage {
                     err.raw().status().as_u16()
                 )));
             }
-            Err(err) => return Err(obj_store_error(err)),
+            Err(err) => return Err(s3_error(err)),
         };
 
         if let Some(errors) = res.errors.as_deref().filter(|e| !e.is_empty()) {
@@ -1550,7 +1552,7 @@ impl S3Storage {
                         trace!("Received 304 (Not Modified). Treating requested object as up-to-date.");
                         Ok(None)
                     }
-                    _ => obj_store_error_res(sdk_err),
+                    _ => s3_error_res(sdk_err),
                 }
             }
         }

@@ -15,7 +15,7 @@ pub use icechunk_storage::{
     DeleteObjectsResult, ETag, Generation, GetModifiedResult, ICError, ListInfo,
     RepositoryCreation, RequestAttribution, RetriesSettings, Settings, Storage,
     StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult,
+    TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult, proxy,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes, tls,
 };

@@ -18,6 +18,7 @@
 ### Fixes
 
 - The S3 client (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) has a default per-attempt timeout of 10 minutes. A server that accepted a request and never answered used to make the request wait forever. Now the attempt fails and is retried. Set `operation_attempt_timeout_ms` to change the limit, or to 0 to disable it.
+- Better errors behind corporate proxies for the S3 client. An error response without an S3 error code, such as the block page of a proxy, used to show only `service error: unhandled error: Error`. Now the error shows the HTTP status, the content type, and the page title or the start of the body. A failed proxy tunnel (`HTTPS_PROXY` or `ALL_PROXY`) now has a hint that names the proxy and the variable. The hint removes the password from the proxy URL ([#2536](https://github.com/earth-mover/icechunk/pull/2536)).
 
 ## Python Icechunk Library 2.3.1
 
