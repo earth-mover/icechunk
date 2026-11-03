@@ -644,7 +644,9 @@ fn chain_message(error: &(dyn std::error::Error + 'static)) -> String {
         current = err.source();
     }
     let mut out = parts.join(": ");
-    if let Some(hint) = icechunk::storage::tls::tls_hint(error) {
+    let hint = icechunk::storage::tls::tls_hint(error)
+        .or_else(|| icechunk::storage::proxy::proxy_hint(error));
+    if let Some(hint) = hint {
         out.push_str("\n\nhint: ");
         out.push_str(&hint);
     }
