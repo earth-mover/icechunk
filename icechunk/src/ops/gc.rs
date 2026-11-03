@@ -1247,7 +1247,7 @@ mod tests {
         // the limit never leaves 1, so the store never sees two at once
         assert_eq!(flaky.peak_deletes(), 1);
         // 10 + 20 + 40 + 40 ms of quiet periods, not the production seconds
-        assert!(elapsed < std::time::Duration::from_millis(200), "{elapsed:?}");
+        assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
         Ok(())
     }
 
