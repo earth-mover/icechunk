@@ -43,7 +43,7 @@ jobs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           persist-credentials: false
@@ -103,13 +103,13 @@ jobs:
       SHA: ${{ needs.resolve.outputs.sha }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
 
       - name: Install just
-        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2
+        uses: taiki-e/install-action@v2.87.26
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
@@ -147,7 +147,7 @@ jobs:
           "$bin" --help > /dev/null
 
       - name: Upload binary
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: fs-stress-${{ matrix.arch }}
           path: target/${{ matrix.target }}/fs-stress-dist/fs-stress
@@ -171,7 +171,7 @@ jobs:
       SHA: ${{ needs.resolve.outputs.sha }}
     steps:
       - name: Download binaries
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@v8.0.1
         with:
           pattern: fs-stress-*
           path: downloaded
@@ -189,7 +189,7 @@ jobs:
           cat SHA256SUMS
 
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        uses: actions/attest-build-provenance@v4.2.2
         with:
           subject-path: dist/fs-stress-*
 

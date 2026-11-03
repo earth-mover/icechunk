@@ -31,7 +31,7 @@ repos:
       - id: codespell
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.24.1
+    rev: v1.32.0
     hooks:
     - id: zizmor
       files: \.github\/workflows\/(code-quality|dependency-check|detect-unused-dependencies|fs-stress-release|js-ci|python-check|python-ci|python-upstream|publish-rust-library|rust-ci|rust-upstream|windows-check)\.ya?ml

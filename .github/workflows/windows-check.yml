@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
@@ -44,7 +44,7 @@ jobs:
         shell: pwsh
         run: Add-Content $env:GITHUB_ENV "CARGO_HOME=$env:RUNNER_TEMP\cargo-home"
 
-      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+      - uses: prefix-dev/setup-pixi@v0.11.0
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: true
