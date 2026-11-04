@@ -583,6 +583,49 @@ jobs:
             exit 1
           fi
 
+  # The default jobs pin a zarr release without URL pipelines, so the adapter
+  # tests skip there and mypy excludes the adapter. This job uses zarr main.
+  # TODO: drop this job once a zarr release has URL pipelines; set that release
+  # as the floor and remove the mypy excludes in pyproject.toml.
+  url-pipeline-adapter:
+    name: url-pipeline-adapter
+    runs-on: ubuntu-latest
+    needs: [build-wheels]
+    env:
+      ZARR_URL_PIPELINE: "zarr @ git+https://github.com/zarr-developers/zarr-python@01fa6d98b3fe16101bee1c5c1663c0a728a6722d"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: prefix-dev/setup-pixi@9dabb60412d3d2d967a8d682f7ce01317af40514 # v0.11.0
+        with:
+          pixi-version: ${{ env.PIXI_VERSION }}
+          cache: false
+          activate-environment: true
+          manifest-path: icechunk-python/pyproject.toml
+
+      - name: Stand up RustFS
+        run: just services-start rustfs_init
+
+      - name: Download wheels
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: test-wheels
+          path: icechunk-python/dist
+
+      - name: Install dependencies
+        run: just install-test-wheel test "$ZARR_URL_PIPELINE" mypy==2.3.1
+
+      - name: mypy
+        run: just venv-run mypy python/icechunk/zarr_url_adapter.py tests/test_zarr_url_adapter.py
+
+      - name: Wait for RustFS to be ready
+        run: just rustfs-join
+
+      - name: pytest
+        run: just pytest-venv tests/test_zarr_url_adapter.py
+
   stubtest:
     name: stubtest
     runs-on: ubuntu-latest

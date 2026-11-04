@@ -252,6 +252,7 @@ nav:
     - Dask: guides/dask.md
     - Xarray: guides/xarray.md
     - Zarr: guides/zarr.md
+    - URL Pipelines: guides/url-pipelines.md
     - Tuning Performance: guides/performance.md
     - Flaky Networks: guides/flaky-networks.md
     - Error Handling: guides/error-handling.md

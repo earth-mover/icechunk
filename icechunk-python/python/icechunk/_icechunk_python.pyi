@@ -1,6 +1,7 @@
 import datetime
 from collections.abc import (
     AsyncIterator,
+    Awaitable,
     Callable,
     Iterable,
     Mapping,
@@ -3822,6 +3823,45 @@ def _upgrade_icechunk_repository(
 
     The operation is usually fast, but it can take several minutes if there is a very
     large version history (thousands of snapshots).
+    """
+
+def _parse_url_ref(body: str) -> tuple[str, str, str]:
+    """
+    Parse the body of an `icechunk:` URL pipeline segment.
+
+    Returns `(kind, name, path)`, where `kind` is `"branch"`, `"tag"` or
+    `"snapshot"`. Raises `ValueError` for invalid input.
+    """
+
+def _url_root_schemes() -> list[str]:
+    """The root URL schemes the `icechunk:` URL adapter maps to storage natively."""
+
+def _storage_from_url(
+    url: str,
+    *,
+    credentials: Credentials.S3 | Credentials.Gcs | None = None,
+    anonymous: bool = False,
+    region: str | None = None,
+    endpoint_url: str | None = None,
+) -> Storage:
+    """Build a Storage from a URL pipeline root URL. Raises `ValueError` for invalid input."""
+
+def _open_session_from_url_async(
+    root_url: str,
+    icechunk_body: str,
+    *,
+    credentials: Credentials.S3 | Credentials.Gcs | None = None,
+    anonymous: bool = False,
+    region: str | None = None,
+    endpoint_url: str | None = None,
+    config: RepositoryConfig | None = None,
+    authorize_virtual_chunk_access: Mapping[str, _AnyCredential | None] | None = None,
+) -> Awaitable[tuple[PySession, str]]:
+    """
+    Open a read-only session for `<root_url>|icechunk:<icechunk_body>`.
+
+    URL and option errors raise `ValueError` when called, before any I/O;
+    the returned awaitable resolves to `(session, residual_path)`.
     """
 
 class ChunkStorageStats:

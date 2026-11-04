@@ -125,6 +125,7 @@ from icechunk.storage import (
 )
 from icechunk.store import IcechunkStore
 from icechunk.types import CommitMethod
+from icechunk.url_pipeline import storage_from_url
 from icechunk.virtual import (
     VirtualChunkContainer,
     VirtualChunkSpec,
@@ -244,6 +245,7 @@ __all__ = [
     "set_logs_filter",
     "shutdown_telemetry",
     "spec_version",
+    "storage_from_url",
     "tigris_storage",
     "user_agent",
 ]
