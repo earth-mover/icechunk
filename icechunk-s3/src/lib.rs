@@ -59,8 +59,8 @@ use icechunk_storage::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sanitize_snippet, sealed, split_in_multiple_equal_requests, strip_quotes,
-    throttled_error, unreachable_error,
+    sanitize_content_type, sanitize_snippet, sealed, split_in_multiple_equal_requests,
+    strip_quotes, throttled_error, unreachable_error,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -350,7 +350,7 @@ fn classify_s3_response(raw: &HttpResponse) -> Option<NetworkFailure> {
         let prefix = &body[..body.len().min(1024)];
         Some(NetworkFailure::UnexpectedResponse {
             status,
-            content_type: content_type.map(str::to_string),
+            content_type: content_type.and_then(sanitize_content_type),
             snippet: sanitize_snippet(prefix),
         })
     } else {
@@ -2169,6 +2169,19 @@ mod tests {
             assert_eq!(status, 403);
             assert_eq!(content_type.as_deref(), Some("text/html"));
             assert!(snippet.unwrap().starts_with("<html>Blocked by policy"));
+        }
+
+        #[test]
+        fn content_type_is_sanitized_and_capped() {
+            let ct = format!("text/html;\tcharset=utf-8; x={}", "a".repeat(500));
+            let Some(NetworkFailure::UnexpectedResponse { content_type, .. }) =
+                classify_s3_error(&service_error(403, Some(&ct), "<html>no</html>"))
+            else {
+                panic!("expected UnexpectedResponse");
+            };
+            let content_type = content_type.unwrap();
+            assert_eq!(content_type.chars().count(), 100);
+            assert!(content_type.starts_with("text/html; charset=utf-8; x=aaa"));
         }
 
         #[test]

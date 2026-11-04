@@ -99,16 +99,28 @@ pub fn unreachable_error(
 }
 
 const MAX_SNIPPET_CHARS: usize = 200;
+const MAX_CONTENT_TYPE_CHARS: usize = 100;
 
-/// Printable, whitespace-collapsed prefix of a response body, at most 200 characters.
-pub fn sanitize_snippet(body: &[u8]) -> Option<String> {
-    let text = String::from_utf8_lossy(body);
+/// Printable, whitespace-collapsed prefix of `text`, at most `max_chars`
+/// characters, or `None` if nothing printable is left.
+fn sanitize_text(text: &str, max_chars: usize) -> Option<String> {
     let cleaned: String =
         text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     let collapsed = cleaned.split_whitespace().join(" ");
-    let out: String = collapsed.chars().take(MAX_SNIPPET_CHARS).collect();
+    let out: String = collapsed.chars().take(max_chars).collect();
     let out = out.trim().to_string();
     (!out.is_empty()).then_some(out)
+}
+
+/// Printable, whitespace-collapsed prefix of a response body, at most 200 characters.
+pub fn sanitize_snippet(body: &[u8]) -> Option<String> {
+    sanitize_text(&String::from_utf8_lossy(body), MAX_SNIPPET_CHARS)
+}
+
+/// A `Content-Type` header value made safe to show: printable,
+/// whitespace-collapsed and at most 100 characters.
+pub fn sanitize_content_type(content_type: &str) -> Option<String> {
+    sanitize_text(content_type, MAX_CONTENT_TYPE_CHARS)
 }
 
 /// True if the error chain contains a rustls error, directly or wrapped in an `io::Error`.
@@ -1078,6 +1090,17 @@ mod network_failure_tests {
     #[test]
     fn empty_snippet_is_none() {
         assert_eq!(sanitize_snippet(b" \n\t"), None);
+    }
+
+    #[test]
+    fn content_type_is_capped_and_printable() {
+        let mut ct = "text/html;\r\n\tcharset=utf-8\x00 ".to_string();
+        ct.push_str(&"a".repeat(1000));
+        let s = sanitize_content_type(&ct).unwrap();
+        assert_eq!(s.chars().count(), 100);
+        assert!(s.starts_with("text/html; charset=utf-8 aaa"));
+        assert!(s.chars().all(|c| !c.is_control()));
+        assert_eq!(sanitize_content_type("\r\n"), None);
     }
 
     #[test]
