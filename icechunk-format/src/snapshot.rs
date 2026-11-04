@@ -89,11 +89,12 @@ impl ArrayShape {
     ///
     /// Returns false if the chunk coordinates are invalid.
     pub fn valid_chunk_coord(&self, coord: &ChunkIndices) -> bool {
-        coord
-            .0
-            .iter()
-            .zip(self.num_chunks())
-            .all(|(index, index_permitted)| *index <= (index_permitted.max(1) - 1))
+        coord.0.len() == self.len()
+            && coord
+                .0
+                .iter()
+                .zip(self.num_chunks())
+                .all(|(index, index_permitted)| *index <= (index_permitted.max(1) - 1))
     }
 }
 
@@ -1285,6 +1286,13 @@ mod tests {
         assert!(shape1.valid_chunk_coord(&coord1));
         assert!(!shape1.valid_chunk_coord(&coord2));
         assert!(shape2.valid_chunk_coord(&coord3));
+        assert!(!shape1.valid_chunk_coord(&ChunkIndices(vec![])));
+        assert!(!shape1.valid_chunk_coord(&ChunkIndices(vec![0, 0])));
+        assert!(!shape1.valid_chunk_coord(&ChunkIndices(vec![0, 0, 0, 0])));
+
+        let scalar = ArrayShape::new([]).unwrap();
+        assert!(scalar.valid_chunk_coord(&ChunkIndices(vec![])));
+        assert!(!scalar.valid_chunk_coord(&ChunkIndices(vec![0])));
     }
 
     #[icechunk_macros::test]

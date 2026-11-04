@@ -17,6 +17,7 @@ from icechunk._exceptions import (
     StorageError,
 )
 from icechunk._icechunk_python import (
+    ChunkReference,
     ChunkType,
     ConflictError,
     IcechunkError,
@@ -147,6 +148,7 @@ __all__ = [
     "BasicConflictSolver",
     "CachingConfig",
     "ChecksumAlgorithm",
+    "ChunkReference",
     "ChunkType",
     "CommitMethod",
     "CompressionAlgorithm",
