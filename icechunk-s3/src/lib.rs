@@ -21,12 +21,13 @@ use aws_sdk_s3::{
     config::{
         Builder, ConfigBag, IdentityCache, Intercept, ProvideCredentials, Region,
         RuntimeComponents, StalledStreamProtectionConfig,
+        http::HttpResponse,
         interceptors::{
             BeforeDeserializationInterceptorContextMut,
             BeforeTransmitInterceptorContextMut,
         },
     },
-    error::{BoxError, SdkError},
+    error::{BoxError, ProvideErrorMetadata, SdkError},
     operation::{copy_object::CopyObjectError, put_object::PutObjectError},
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
@@ -46,15 +47,17 @@ pub use icechunk_storage::s3_config::{
     S3StaticCredentials,
 };
 use icechunk_storage::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    Timeout, VersionInfo, VersionedUpdateResult, obj_not_found_res, obj_store_error,
-    obj_store_error_res, other_error,
+    DeleteObjectsResult, ExpectedBody, GetModifiedResult, ListInfo, NetworkFailure,
+    RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageErrorKind, StorageInfo, StorageResult, Timeout, VersionInfo,
+    VersionedUpdateResult, error_chain_has_tls_failure, is_non_storage_content_type,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sealed, split_in_multiple_equal_requests, strip_quotes, throttled_error,
+    sanitize_snippet, sealed, split_in_multiple_equal_requests, strip_quotes,
+    throttled_error, unreachable_error,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -303,6 +306,84 @@ fn https_client_with_roots(pem: Option<Vec<u8>>) -> aws_sdk_s3::config::SharedHt
         conn.set_proxy_config(Some(ProxyConfig::from_env()));
         conn.build()
     })
+}
+
+/// Classifies an SDK error as a network-level failure (nothing reachable, or
+/// something other than S3 answered), using only typed errors and responses.
+pub fn classify_s3_error<E: ProvideErrorMetadata + std::error::Error + 'static>(
+    err: &SdkError<E, HttpResponse>,
+) -> Option<NetworkFailure> {
+    match err {
+        SdkError::DispatchFailure(failure) => {
+            if error_chain_has_tls_failure(err) {
+                Some(NetworkFailure::Tls)
+            } else if let Some(connector) = failure.as_connector_error() {
+                if connector.is_timeout() {
+                    Some(NetworkFailure::Timeout)
+                } else if connector.is_io() {
+                    Some(NetworkFailure::Connect)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        SdkError::TimeoutError(_) => Some(NetworkFailure::Timeout),
+        SdkError::ServiceError(e) => classify_s3_response(e.raw()),
+        SdkError::ResponseError(e) => classify_s3_response(e.raw()),
+        _ => None,
+    }
+}
+
+fn classify_s3_response(raw: &HttpResponse) -> Option<NetworkFailure> {
+    let status = raw.status().as_u16();
+    let content_type = raw.headers().get("content-type");
+    let body = raw.body().bytes().unwrap_or_default();
+    if status == 407
+        || (!body.is_empty()
+            && is_non_storage_content_type(content_type, ExpectedBody::Xml))
+    {
+        let prefix = &body[..body.len().min(1024)];
+        Some(NetworkFailure::UnexpectedResponse {
+            status,
+            content_type: content_type.map(str::to_string),
+            snippet: sanitize_snippet(prefix),
+        })
+    } else {
+        None
+    }
+}
+
+/// The host (with explicit port, if any) that requests for `bucket` go to.
+pub fn s3_endpoint_host(opts: &S3Options, bucket: &str) -> String {
+    if let Some(endpoint) = &opts.endpoint_url
+        && let Ok(url) = url::Url::parse(endpoint)
+        && let Some(host) = url.host_str()
+    {
+        return match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        };
+    }
+    match (&opts.region, opts.force_path_style) {
+        (Some(region), true) => format!("s3.{region}.amazonaws.com"),
+        (None, true) => "s3.amazonaws.com".to_string(),
+        (Some(region), false) => format!("{bucket}.s3.{region}.amazonaws.com"),
+        (None, false) => format!("{bucket}.s3.amazonaws.com"),
+    }
+}
+
+/// Converts an SDK error into a [`StorageError`], with the actionable
+/// "storage unreachable" shape when it classifies as a network failure.
+pub fn s3_error<E>(err: SdkError<E, HttpResponse>, host: &str) -> StorageError
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match classify_s3_error(&err) {
+        Some(failure) => unreachable_error(host, failure, err),
+        None => obj_store_error(err),
+    }
 }
 
 #[instrument(skip(credentials))]
@@ -2008,6 +2089,159 @@ mod tests {
     use icechunk_storage::TimeoutSettings;
 
     use super::*;
+
+    mod classify {
+        use aws_sdk_s3::{
+            config::http::HttpResponse, error::ConnectorError,
+            operation::get_object::GetObjectError, primitives::SdkBody,
+        };
+        use icechunk_storage::NetworkFailure;
+
+        use super::super::*;
+
+        fn raw(status: u16, content_type: Option<&str>, body: &str) -> HttpResponse {
+            let mut r = HttpResponse::new(
+                status.try_into().unwrap(),
+                SdkBody::from(body.to_string()),
+            );
+            if let Some(ct) = content_type {
+                r.headers_mut().insert("content-type", ct.to_string());
+            }
+            r
+        }
+
+        fn service_error(
+            status: u16,
+            content_type: Option<&str>,
+            body: &str,
+        ) -> SdkError<GetObjectError, HttpResponse> {
+            let meta = GetObjectError::generic(Default::default());
+            SdkError::service_error(meta, raw(status, content_type, body))
+        }
+
+        fn io_err() -> ConnectorError {
+            ConnectorError::io(Box::new(std::io::Error::other("refused")))
+        }
+
+        #[test]
+        fn html_403_get_is_unexpected_response() {
+            let err =
+                service_error(403, Some("text/html"), "<html>Blocked by policy</html>");
+            let Some(NetworkFailure::UnexpectedResponse {
+                status,
+                content_type,
+                snippet,
+            }) = classify_s3_error(&err)
+            else {
+                panic!("expected UnexpectedResponse");
+            };
+            assert_eq!(status, 403);
+            assert_eq!(content_type.as_deref(), Some("text/html"));
+            assert!(snippet.unwrap().starts_with("<html>Blocked by policy"));
+        }
+
+        #[test]
+        fn empty_403_is_not_classified() {
+            assert!(classify_s3_error(&service_error(403, None, "")).is_none());
+        }
+
+        #[test]
+        fn proxy_auth_407_is_unexpected_even_without_body() {
+            assert!(matches!(
+                classify_s3_error(&service_error(407, None, "")),
+                Some(NetworkFailure::UnexpectedResponse { status: 407, .. })
+            ));
+        }
+
+        #[test]
+        fn xml_service_error_with_code_is_not_classified() {
+            let body = "<Error><Code>AccessDenied</Code><Message>nope</Message></Error>";
+            assert!(
+                classify_s3_error(&service_error(403, Some("application/xml"), body))
+                    .is_none()
+            );
+        }
+
+        #[test]
+        fn xml_content_type_with_params_is_xml() {
+            assert!(
+                classify_s3_error(&service_error(
+                    503,
+                    Some("application/xml; charset=utf-8"),
+                    "<Error><Code>SlowDown</Code></Error>"
+                ))
+                .is_none()
+            );
+        }
+
+        #[test]
+        fn html_502_is_unexpected_response() {
+            assert!(matches!(
+                classify_s3_error(&service_error(
+                    502,
+                    Some("text/html"),
+                    "<h1>Bad Gateway</h1>"
+                )),
+                Some(NetworkFailure::UnexpectedResponse { status: 502, .. })
+            ));
+        }
+
+        #[test]
+        fn io_dispatch_failure_is_connect() {
+            let err =
+                SdkError::<GetObjectError, HttpResponse>::dispatch_failure(io_err());
+            assert!(matches!(classify_s3_error(&err), Some(NetworkFailure::Connect)));
+        }
+
+        #[test]
+        fn connector_timeout_is_timeout() {
+            let err = SdkError::<GetObjectError, HttpResponse>::dispatch_failure(
+                ConnectorError::timeout(Box::new(std::io::Error::other("slow"))),
+            );
+            assert!(matches!(classify_s3_error(&err), Some(NetworkFailure::Timeout)));
+        }
+
+        #[test]
+        fn sdk_timeout_is_timeout() {
+            let err = SdkError::<GetObjectError, HttpResponse>::timeout_error(
+                std::io::Error::other("slow"),
+            );
+            assert!(matches!(classify_s3_error(&err), Some(NetworkFailure::Timeout)));
+        }
+
+        #[test]
+        fn tls_dispatch_failure_is_tls() {
+            let tls = std::io::Error::other(rustls::Error::General("bad cert".into()));
+            let err = SdkError::<GetObjectError, HttpResponse>::dispatch_failure(
+                ConnectorError::io(Box::new(tls)),
+            );
+            assert!(matches!(classify_s3_error(&err), Some(NetworkFailure::Tls)));
+        }
+
+        #[test]
+        fn s3_error_wraps_classified_failures_and_keeps_source() {
+            let err = service_error(502, Some("text/html"), "<h1>Bad Gateway</h1>");
+            let out = s3_error(err, "abc123.r2.cloudflarestorage.com");
+            assert!(out.kind.is_unreachable());
+            assert!(out.to_string().contains("abc123.r2.cloudflarestorage.com"));
+        }
+
+        #[test]
+        fn s3_endpoint_host_cases() {
+            let opts = S3Options::default()
+                .with_endpoint_url("https://abc123.r2.cloudflarestorage.com");
+            assert_eq!(s3_endpoint_host(&opts, "b"), "abc123.r2.cloudflarestorage.com");
+            let opts = S3Options::default().with_endpoint_url("http://127.0.0.1:9000");
+            assert_eq!(s3_endpoint_host(&opts, "b"), "127.0.0.1:9000");
+            let opts = S3Options::default().with_region("us-west-2");
+            assert_eq!(s3_endpoint_host(&opts, "b"), "b.s3.us-west-2.amazonaws.com");
+            let opts = S3Options::default();
+            assert_eq!(s3_endpoint_host(&opts, "b"), "b.s3.amazonaws.com");
+            let opts =
+                S3Options::default().with_region("us-west-2").with_force_path_style(true);
+            assert_eq!(s3_endpoint_host(&opts, "b"), "s3.us-west-2.amazonaws.com");
+        }
+    }
 
     // Readback classification is unit-tested in `icechunk_storage::readback`.
 
