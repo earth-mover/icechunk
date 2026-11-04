@@ -17,22 +17,22 @@ use futures::{
 use http::header::{HeaderName, HeaderValue};
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
 use icechunk_storage::Timeout;
-#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
-use icechunk_storage::error_chain_has_tls_failure;
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, NetworkFailure, RepositoryCreation, RetriesSettings, Settings, Storage,
-    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    VersionInfo, VersionedUpdateResult, filter_ids_by_id_prefix, obj_not_found_res,
-    obj_store_error, other_error,
+    ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageContext,
+    StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
+    VersionedUpdateResult, filter_ids_by_id_prefix, obj_not_found_res, obj_store_error,
+    other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sealed, unreachable_error,
+    sealed,
 };
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+use icechunk_storage::{NetworkFailure, error_chain_has_tls_failure, unreachable_error};
 use icechunk_types::ICResultExt as _;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
 use object_store::ClientConfigKey;
