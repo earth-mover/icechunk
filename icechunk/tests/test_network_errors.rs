@@ -1,15 +1,17 @@
 //! Wire-level tests that S3 requests failing because the network blocks,
 //! intercepts or never answers them produce an actionable "unreachable" error.
 
-use std::{net::TcpListener as StdTcpListener, num::NonZeroU16, sync::Arc};
+use std::{
+    collections::HashMap, net::TcpListener as StdTcpListener, num::NonZeroU16, sync::Arc,
+};
 
 use icechunk::{
     Storage,
-    config::{S3Credentials, S3Options, S3StaticCredentials},
+    config::{GcsCredentials, S3Credentials, S3Options, S3StaticCredentials},
     new_s3_storage,
     storage::{
         NetworkFailure, RetriesSettings, Settings, StorageContext, StorageError,
-        StorageErrorKind, TimeoutSettings,
+        StorageErrorKind, TimeoutSettings, new_gcs_storage,
     },
 };
 use icechunk_macros::tokio_test;
@@ -211,4 +213,42 @@ async fn hung_server_is_timeout() {
     let err = read_error(&storage).await;
     let (_, failure) = expect_unreachable(&err);
     assert!(matches!(failure, NetworkFailure::Timeout), "got {failure:?}");
+}
+
+fn gcs_at(base_url: &str) -> Arc<dyn Storage + Send + Sync> {
+    new_gcs_storage(
+        "bucket".to_string(),
+        Some("p".to_string()),
+        Some(GcsCredentials::Anonymous),
+        Some(HashMap::from([("google_base_url".to_string(), base_url.to_string())])),
+        Vec::new(),
+        Vec::new(),
+    )
+    .unwrap()
+}
+
+#[tokio_test]
+async fn gcs_closed_port_is_connect() {
+    let port = {
+        let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let storage = gcs_at(&format!("http://127.0.0.1:{port}"));
+    let err = read_error(&storage).await;
+    let (host, failure) = expect_unreachable(&err);
+    assert_eq!(host, format!("127.0.0.1:{port}"));
+    assert!(matches!(failure, NetworkFailure::Connect), "got {failure:?}");
+    let text = err.to_string();
+    assert!(text.contains("firewall or proxy"), "{text}");
+}
+
+/// `object_store` keeps the status and body of a failed response private, so an
+/// intercepted GCS response cannot be recognised and stays a plain error.
+#[tokio_test]
+async fn gcs_html_403_is_not_unreachable() {
+    let server =
+        html_server(403, "GET", Some("text/html"), "<html>Access blocked</html>").await;
+    let storage = gcs_at(&server.uri());
+    let err = read_error(&storage).await;
+    assert!(!err.kind.is_unreachable(), "{err}");
 }

@@ -17,19 +17,21 @@ use futures::{
 use http::header::{HeaderName, HeaderValue};
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
 use icechunk_storage::Timeout;
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+use icechunk_storage::error_chain_has_tls_failure;
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
     ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, RepositoryCreation, RetriesSettings, Settings, Storage, StorageContext,
-    StorageError, StorageErrorKind, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult, filter_ids_by_id_prefix, obj_not_found_res, obj_store_error,
-    obj_store_error_res, other_error,
+    ListInfo, NetworkFailure, RepositoryCreation, RetriesSettings, Settings, Storage,
+    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
+    VersionInfo, VersionedUpdateResult, filter_ids_by_id_prefix, obj_not_found_res,
+    obj_store_error, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sealed,
+    sealed, unreachable_error,
 };
 use icechunk_types::ICResultExt as _;
 #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
@@ -525,6 +527,13 @@ impl ObjectStorage {
             .capture_box()
     }
 
+    /// Converts a terminal `object_store` failure into a [`StorageError`], with
+    /// the actionable "storage unreachable" shape when this backend knows its
+    /// endpoint host and the failure classifies as a network problem.
+    fn os_error(&self, err: object_store::Error) -> StorageError {
+        object_store_error(self.backend.endpoint_host().as_deref(), err)
+    }
+
     fn prefixed_path(&self, path: &str) -> ObjectPath {
         let path = format!("{}/{path}", self.backend.prefix());
         ObjectPath::from(path)
@@ -691,9 +700,9 @@ impl Storage for ObjectStorage {
                 let outcome = self
                     .read_back_after_conditional_failure(ctx, &path, write_id.as_deref())
                     .await;
-                resolve_lost_response(outcome, path.as_ref(), obj_store_error(err))
+                resolve_lost_response(outcome, path.as_ref(), self.os_error(err))
             }
-            Err(err) => Err(obj_store_error(err)),
+            Err(err) => Err(self.os_error(err)),
         }
     }
 
@@ -723,11 +732,7 @@ impl Storage for ObjectStorage {
                 .await;
             match result {
                 Ok(result) => {
-                    let bytes = result
-                        .bytes()
-                        .await
-                        .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
-                        .capture()?;
+                    let bytes = result.bytes().await.map_err(|e| self.os_error(e))?;
                     let mut attributes = Attributes::new();
                     self.add_storage_class(ctx.settings, &mut attributes);
                     let options = PutOptions {
@@ -739,15 +744,14 @@ impl Storage for ObjectStorage {
                         .await?
                         .put_opts(&to, bytes.into(), options)
                         .await
-                        .map_err(|e| StorageErrorKind::ObjectStore(Box::new(e)))
-                        .capture()?;
+                        .map_err(|e| self.os_error(e))?;
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
                 }
                 Err(object_store::Error::Precondition { .. }) => {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 }
                 Err(object_store::Error::NotFound { .. }) => obj_not_found_res(),
-                Err(err) => Err(obj_store_error(err)),
+                Err(err) => Err(self.os_error(err)),
             }
         } else {
             // FIXME: `settings.storage_class()` is dropped, the copy lands in the
@@ -764,7 +768,7 @@ impl Storage for ObjectStorage {
                     Ok(VersionedUpdateResult::Updated { new_version: version.clone() })
                 }
                 Err(object_store::Error::NotFound { .. }) => obj_not_found_res(),
-                Err(err) => Err(obj_store_error(err)),
+                Err(err) => Err(self.os_error(err)),
             }
         }
     }
@@ -776,12 +780,13 @@ impl Storage for ObjectStorage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let prefix = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
+        let host = self.backend.endpoint_host();
         let stream =
             self.get_client(ctx.settings, Role::Read).await?.list(Some(&prefix)).map(
                 move |object| {
                     let prefix = prefix.clone();
                     object
-                        .map_err(obj_store_error)
+                        .map_err(|e| object_store_error(host.as_deref(), e))
                         .and_then(|object| object_to_list_info(&prefix, &object))
                 },
             );
@@ -801,15 +806,17 @@ impl Storage for ObjectStorage {
         }
         let root = ObjectPath::from(format!("{}/{}", self.backend.prefix(), prefix));
         let client = self.get_client(ctx.settings, Role::Read).await?;
+        let host = self.backend.endpoint_host();
         let listings: Vec<_> = id_prefixes
             .iter()
             .map(|id_prefix| {
                 let offset = ObjectPath::from(format!("{root}/{id_prefix}"));
                 let root = root.clone();
                 let id_prefix = id_prefix.clone();
+                let host = host.clone();
                 client
                     .list_with_offset(Some(&root), &offset)
-                    .map_err(obj_store_error)
+                    .map_err(move |e| object_store_error(host.as_deref(), e))
                     .and_then(move |object| ready(object_to_list_info(&root, &object)))
                     // Keys arrive in order, so ids with this prefix are contiguous
                     // after the offset: the first miss ends this listing.
@@ -887,8 +894,7 @@ impl Storage for ObjectStorage {
             .await?
             .get_opts(&path, opts)
             .await
-            .map_err(Box::new)
-            .capture_box()?;
+            .map_err(|e| self.os_error(e))?;
         Ok(res.meta.last_modified)
     }
 
@@ -969,7 +975,7 @@ impl ObjectStorage {
                     error = %err,
                     "readback HEAD failed; propagating the HEAD error"
                 );
-                return Err(obj_store_error(err));
+                return Err(self.os_error(err));
             }
         };
         Ok(ReadbackOutcome::classify(write_id, stored_write_id.as_deref(), &version))
@@ -1012,14 +1018,106 @@ impl ObjectStorage {
                     etag: result.meta.e_tag.as_ref().cloned().map(ETag),
                     generation: result.meta.version.as_ref().cloned().map(Generation),
                 };
-                let stream = Box::pin(result.into_stream().map_err(obj_store_error));
+                let host = self.backend.endpoint_host();
+                let stream = Box::pin(
+                    result
+                        .into_stream()
+                        .map_err(move |e| object_store_error(host.as_deref(), e)),
+                );
                 Ok(Some((stream, version)))
             }
             Err(object_store::Error::NotFound { .. }) => obj_not_found_res(),
             Err(object_store::Error::NotModified { .. }) => Ok(None),
-            Err(err) => obj_store_error_res(err),
+            Err(err) => Err(self.os_error(err)),
         }
     }
+}
+
+/// Host (with explicit port, if any) of `endpoint`, if it parses as a URL.
+#[cfg(any(feature = "s3", feature = "gcs"))]
+fn url_host_port(endpoint: &str) -> Option<String> {
+    let url = Url::parse(endpoint).ok()?;
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    })
+}
+
+/// The host (with explicit port, if any) S3 requests go to: the configured
+/// endpoint, else the AWS default for `bucket`.
+///
+/// Twin of `icechunk_s3::s3_endpoint_host`, which this crate cannot depend on;
+/// keep the two in step.
+#[cfg(feature = "s3")]
+pub fn s3_endpoint_host(opts: Option<&S3Options>, bucket: &str) -> String {
+    let Some(opts) = opts else {
+        return format!("{bucket}.s3.amazonaws.com");
+    };
+    if let Some(host) = opts.endpoint_url.as_deref().and_then(url_host_port) {
+        return host;
+    }
+    match (&opts.region, opts.force_path_style) {
+        (Some(region), true) => format!("s3.{region}.amazonaws.com"),
+        (None, true) => "s3.amazonaws.com".to_string(),
+        (Some(region), false) => format!("{bucket}.s3.{region}.amazonaws.com"),
+        (None, false) => format!("{bucket}.s3.amazonaws.com"),
+    }
+}
+
+/// The host (with explicit port, if any) GCS requests go to: the configured
+/// base URL, else `storage.googleapis.com`.
+#[cfg(feature = "gcs")]
+pub fn gcs_endpoint_host(config: Option<&HashMap<GoogleConfigKey, String>>) -> String {
+    config
+        .and_then(|c| c.get(&GoogleConfigKey::BaseUrl))
+        .and_then(|url| url_host_port(url))
+        .unwrap_or_else(|| "storage.googleapis.com".to_string())
+}
+
+/// Classifies an `object_store` error as a network failure, when one of the
+/// errors in its source chain is the HTTP client's.
+///
+/// Only connect, timeout and TLS failures are recognised: the response status
+/// and body live in a type `object_store` does not expose, so an intercepted
+/// response cannot be told apart from a genuine storage error here.
+#[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+pub fn classify_object_store_error(err: &object_store::Error) -> Option<NetworkFailure> {
+    use object_store::client::{HttpError, HttpErrorKind};
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = current {
+        if let Some(http_err) = e.downcast_ref::<HttpError>() {
+            if error_chain_has_tls_failure(http_err) {
+                return Some(NetworkFailure::Tls);
+            }
+            return match http_err.kind() {
+                HttpErrorKind::Connect => Some(NetworkFailure::Connect),
+                HttpErrorKind::Timeout => Some(NetworkFailure::Timeout),
+                _ => None,
+            };
+        }
+        current = e.source();
+    }
+    None
+}
+
+/// Boxes `err` into [`StorageErrorKind::ObjectStore`], or into the actionable
+/// "unreachable" shape when `host` is known and `err` is a network failure.
+fn object_store_error(host: Option<&str>, err: object_store::Error) -> StorageError {
+    #[cfg(any(feature = "s3", feature = "gcs", feature = "azure", feature = "http"))]
+    if let Some(host) = host
+        && let Some(failure) = classify_object_store_error(&err)
+    {
+        return unreachable_error(host, failure, err);
+    }
+    #[cfg(not(any(
+        feature = "s3",
+        feature = "gcs",
+        feature = "azure",
+        feature = "http"
+    )))]
+    let _ = host;
+    obj_store_error(err)
 }
 
 #[typetag::serde(tag = "object_store_provider_type")]
@@ -1054,6 +1152,13 @@ pub trait ObjectStoreBackend: Debug + Display + Sync + Send {
 
     /// Return structured metadata about this backend for display/repr.
     fn storage_info(&self) -> StorageInfo;
+
+    /// The host (with explicit port, if any) that requests go to, used to word
+    /// "storage unreachable" errors. `None` opts the backend out of that
+    /// classification.
+    fn endpoint_host(&self) -> Option<String> {
+        None
+    }
 
     /// We need this because `object_store`'s local file implementation doesn't sort refs. Since this
     /// implementation is used only for tests, it's OK to sort in memory.
@@ -1362,6 +1467,10 @@ impl Display for S3ObjectStoreBackend {
 #[cfg(feature = "s3")]
 #[typetag::serde(name = "s3_object_store_provider")]
 impl ObjectStoreBackend for S3ObjectStoreBackend {
+    fn endpoint_host(&self) -> Option<String> {
+        Some(s3_endpoint_host(self.config.as_ref(), &self.bucket))
+    }
+
     fn storage_info(&self) -> StorageInfo {
         let mut fields = vec![("bucket", self.bucket.clone())];
         if let Some(prefix) = &self.prefix {
@@ -1630,6 +1739,10 @@ impl Display for GcsObjectStoreBackend {
 #[cfg(feature = "gcs")]
 #[typetag::serde(name = "gcs_object_store_provider")]
 impl ObjectStoreBackend for GcsObjectStoreBackend {
+    fn endpoint_host(&self) -> Option<String> {
+        Some(gcs_endpoint_host(self.config.as_ref()))
+    }
+
     fn storage_info(&self) -> StorageInfo {
         let mut fields = vec![("bucket", self.bucket.clone())];
         if let Some(prefix) = &self.prefix {
@@ -2562,5 +2675,41 @@ mod timeout_tests {
             Some("http://proxy:3128")
         );
         assert_eq!(opts.get_config_value(&ClientConfigKey::Timeout), None);
+    }
+}
+
+#[cfg(all(test, feature = "gcs"))]
+mod network_error_tests {
+    use super::*;
+
+    #[test]
+    fn classify_ignores_non_http_errors() {
+        let err = object_store::Error::NotFound {
+            path: "k".to_string(),
+            source: "missing".into(),
+        };
+        assert!(classify_object_store_error(&err).is_none());
+    }
+
+    #[test]
+    fn gcs_default_host_is_googleapis() {
+        let backend = GcsObjectStoreBackend {
+            bucket: "b".to_string(),
+            prefix: None,
+            credentials: None,
+            config: None,
+            extra_read_headers: vec![],
+            extra_write_headers: vec![],
+        };
+        assert_eq!(backend.endpoint_host().as_deref(), Some("storage.googleapis.com"));
+    }
+
+    #[test]
+    fn gcs_host_follows_base_url() {
+        let config = HashMap::from([(
+            GoogleConfigKey::BaseUrl,
+            "http://127.0.0.1:4443/x".to_string(),
+        )]);
+        assert_eq!(gcs_endpoint_host(Some(&config)), "127.0.0.1:4443");
     }
 }
