@@ -359,22 +359,57 @@ fn classify_s3_response(raw: &HttpResponse) -> Option<NetworkFailure> {
 }
 
 /// The host (with explicit port, if any) that requests for `bucket` go to.
+///
+/// This approximates the AWS SDK's endpoint resolution, for wording errors
+/// only. Requests are virtual-hosted (`{bucket}.{host}`) unless
+/// `force_path_style` is set, the endpoint host is an IP literal, or the
+/// bucket is not a valid DNS name (dotted names are allowed only over plain
+/// http); otherwise they go to the bare host. With no region configured the
+/// SDK may still resolve one from the environment or an AWS profile; we report
+/// the host as far as the options tell us.
 pub fn s3_endpoint_host(opts: &S3Options, bucket: &str) -> String {
     if let Some(endpoint) = &opts.endpoint_url
         && let Ok(url) = url::Url::parse(endpoint)
         && let Some(host) = url.host_str()
     {
-        return match url.port() {
+        let host = match url.port() {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
         };
+        let is_ip = !matches!(url.host(), Some(url::Host::Domain(_)));
+        let allow_dots = url.scheme() == "http";
+        return if !opts.force_path_style
+            && !is_ip
+            && is_virtual_hostable_bucket(bucket, allow_dots)
+        {
+            format!("{bucket}.{host}")
+        } else {
+            host
+        };
     }
-    match (&opts.region, opts.force_path_style) {
-        (Some(region), true) => format!("s3.{region}.amazonaws.com"),
-        (None, true) => "s3.amazonaws.com".to_string(),
-        (Some(region), false) => format!("{bucket}.s3.{region}.amazonaws.com"),
-        (None, false) => format!("{bucket}.s3.amazonaws.com"),
+    let virtual_hosted =
+        !opts.force_path_style && is_virtual_hostable_bucket(bucket, false);
+    match (&opts.region, virtual_hosted) {
+        (Some(region), false) => format!("s3.{region}.amazonaws.com"),
+        (None, false) => "s3.amazonaws.com".to_string(),
+        (Some(region), true) => format!("{bucket}.s3.{region}.amazonaws.com"),
+        (None, true) => format!("{bucket}.s3.amazonaws.com"),
     }
+}
+
+/// Whether the SDK puts `bucket` in the host name: each dot-separated label
+/// (a single label unless `allow_dots`) is 3 to 63 lowercase letters, digits
+/// or `-`, and starts and ends with a letter or digit.
+fn is_virtual_hostable_bucket(bucket: &str, allow_dots: bool) -> bool {
+    let label_ok = |label: &str| {
+        let alnum = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+        let b = label.as_bytes();
+        (3..=63).contains(&b.len())
+            && b.first().is_some_and(alnum)
+            && b.last().is_some_and(alnum)
+            && b.iter().all(|c| alnum(c) || *c == b'-')
+    };
+    if allow_dots { bucket.split('.').all(label_ok) } else { label_ok(bucket) }
 }
 
 /// Converts an SDK error into a [`StorageError`], with the actionable
@@ -2271,19 +2306,72 @@ mod tests {
         }
 
         #[test]
-        fn s3_endpoint_host_cases() {
-            let opts = S3Options::default()
-                .with_endpoint_url("https://abc123.r2.cloudflarestorage.com");
-            assert_eq!(s3_endpoint_host(&opts, "b"), "abc123.r2.cloudflarestorage.com");
-            let opts = S3Options::default().with_endpoint_url("http://127.0.0.1:9000");
-            assert_eq!(s3_endpoint_host(&opts, "b"), "127.0.0.1:9000");
+        fn s3_endpoint_host_aws_defaults() {
             let opts = S3Options::default().with_region("us-west-2");
-            assert_eq!(s3_endpoint_host(&opts, "b"), "b.s3.us-west-2.amazonaws.com");
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "my-bucket.s3.us-west-2.amazonaws.com"
+            );
             let opts = S3Options::default();
-            assert_eq!(s3_endpoint_host(&opts, "b"), "b.s3.amazonaws.com");
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "my-bucket.s3.amazonaws.com"
+            );
             let opts =
                 S3Options::default().with_region("us-west-2").with_force_path_style(true);
-            assert_eq!(s3_endpoint_host(&opts, "b"), "s3.us-west-2.amazonaws.com");
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "s3.us-west-2.amazonaws.com"
+            );
+            // dotted buckets are not virtual-hosted over https
+            let opts = S3Options::default().with_region("us-west-2");
+            assert_eq!(
+                s3_endpoint_host(&opts, "my.bucket"),
+                "s3.us-west-2.amazonaws.com"
+            );
+        }
+
+        #[test]
+        fn s3_endpoint_host_custom_endpoints() {
+            let https = "https://abc123.r2.cloudflarestorage.com";
+            // virtual-hosted: the bucket becomes a subdomain of the endpoint
+            let opts = S3Options::default().with_endpoint_url(https);
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "my-bucket.abc123.r2.cloudflarestorage.com"
+            );
+            // force_path_style keeps the bare endpoint host
+            let opts =
+                S3Options::default().with_endpoint_url(https).with_force_path_style(true);
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "abc123.r2.cloudflarestorage.com"
+            );
+            // a dotted bucket can't be a single https host label
+            let opts = S3Options::default().with_endpoint_url(https);
+            assert_eq!(
+                s3_endpoint_host(&opts, "my.bucket"),
+                "abc123.r2.cloudflarestorage.com"
+            );
+            // ... but can be over plain http, when every label is long enough
+            let opts =
+                S3Options::default().with_endpoint_url("http://minio.invalid:9000");
+            assert_eq!(
+                s3_endpoint_host(&opts, "abc.bucket"),
+                "abc.bucket.minio.invalid:9000"
+            );
+            assert_eq!(s3_endpoint_host(&opts, "my.bucket"), "minio.invalid:9000");
+            // not DNS-compatible
+            let opts = S3Options::default().with_endpoint_url(https);
+            assert_eq!(
+                s3_endpoint_host(&opts, "My_Bucket"),
+                "abc123.r2.cloudflarestorage.com"
+            );
+            // IP endpoints are never virtual-hosted
+            let opts = S3Options::default().with_endpoint_url("http://127.0.0.1:9000");
+            assert_eq!(s3_endpoint_host(&opts, "my-bucket"), "127.0.0.1:9000");
+            let opts = S3Options::default().with_endpoint_url("http://[::1]:9000");
+            assert_eq!(s3_endpoint_host(&opts, "my-bucket"), "[::1]:9000");
         }
     }
 
