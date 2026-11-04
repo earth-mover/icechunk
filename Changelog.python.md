@@ -17,6 +17,7 @@
 
 ### Fixes
 
+- Storage errors caused by unreachable hosts, or by responses that did not come from the storage service (for example a proxy block page), now name the host and suggest checking firewall and proxy settings. In Python they have `kind == ErrorKind.STORAGE_UNREACHABLE`.
 - The S3 client (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) has a default per-attempt timeout of 10 minutes. A server that accepted a request and never answered used to make the request wait forever. Now the attempt fails and is retried. Set `operation_attempt_timeout_ms` to change the limit, or to 0 to disable it.
 
 ## Python Icechunk Library 2.3.1
