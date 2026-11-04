@@ -22,6 +22,9 @@ IcechunkError
 ├── InvalidInputError             (also a ValueError)
 ├── SessionStateError
 ├── StorageError
+├── RepositoryForkedError
+│   └── UpdateDurableButRepositoryForkedError
+│       └── CommitDurableButRepositoryForkedError
 ├── FormatError
 └── InternalError
 ```
@@ -40,6 +43,9 @@ IcechunkError
 | [`InvalidInputError`](../reference/index.md#icechunk.InvalidInputError) | An argument, key, index, or metadata value is invalid |
 | [`SessionStateError`](../reference/index.md#icechunk.SessionStateError) | The operation is not allowed in the current session or repository state |
 | [`StorageError`](../reference/index.md#icechunk.StorageError) | The object store or local storage failed, or is misconfigured; often transient |
+| [`RepositoryForkedError`](../reference/index.md#icechunk.RepositoryForkedError) | A repository in the filesystem layout is forked; nothing was published or deleted, recovery is manual |
+| [`UpdateDurableButRepositoryForkedError`](../reference/index.md#icechunk.UpdateDurableButRepositoryForkedError) | A change (branch, tag, configuration, status...) landed and is durable, but the repository is forked: don't retry it |
+| [`CommitDurableButRepositoryForkedError`](../reference/index.md#icechunk.CommitDurableButRepositoryForkedError) | A commit or flush landed and is durable, but the repository is forked: don't retry it; carries `snapshot_id` |
 | [`FormatError`](../reference/index.md#icechunk.FormatError) | On-disk data could not be read or written: corruption, unsupported spec version |
 | [`InternalError`](../reference/index.md#icechunk.InternalError) | An unexpected internal error; likely a bug worth [reporting](https://github.com/earth-mover/icechunk/issues) |
 

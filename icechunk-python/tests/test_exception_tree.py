@@ -6,13 +6,18 @@ ErrorKind sync contract, and pickling (tblib compatibility).
 
 import asyncio
 import pickle
+import struct
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
+import zstandard
 
 import icechunk as ic
 import zarr
 from icechunk._icechunk_python import _all_error_kinds
+from tests.conftest import fs_storage
 
 
 def test_tree_shape() -> None:
@@ -30,6 +35,9 @@ def test_tree_shape() -> None:
         ic.InvalidInputError,
         ic.SessionStateError,
         ic.StorageError,
+        ic.RepositoryForkedError,
+        ic.UpdateDurableButRepositoryForkedError,
+        ic.CommitDurableButRepositoryForkedError,
         ic.FormatError,
         ic.InternalError,
     ):
@@ -37,6 +45,11 @@ def test_tree_shape() -> None:
 
     # a rebase failure is a kind of conflict
     assert issubclass(ic.RebaseFailedError, ic.ConflictError)
+    assert issubclass(ic.UpdateDurableButRepositoryForkedError, ic.RepositoryForkedError)
+    assert issubclass(
+        ic.CommitDurableButRepositoryForkedError,
+        ic.UpdateDurableButRepositoryForkedError,
+    )
 
     # builtin compatibility contracts
     assert issubclass(ic.NotFoundError, KeyError)
@@ -175,9 +188,9 @@ def test_readonly_session_ref_not_found(spec_version: ic.SpecVersion | int) -> N
     assert err.kind in (ic.ErrorKind.REF_NOT_FOUND, ic.ErrorKind.TAG_NOT_FOUND)
 
 
-def test_repository_not_found(tmpdir: Any) -> None:
+def test_repository_not_found(tmpdir: Any, fs_backend: str) -> None:
     with pytest.raises(ic.RepositoryNotFoundError) as excinfo:
-        ic.Repository.open(storage=ic.local_filesystem_storage(str(tmpdir / "nope")))
+        ic.Repository.open(storage=fs_storage(fs_backend, str(tmpdir / "nope")))
     err = excinfo.value
     assert err.kind == ic.ErrorKind.REPOSITORY_NOT_FOUND
     assert isinstance(err, KeyError)
@@ -211,6 +224,74 @@ def test_invalid_snapshot_id(repo: ic.Repository) -> None:
     assert err.kind == ic.ErrorKind.INVALID_SNAPSHOT_ID
 
 
+# The binary file header: magic, implementation name, spec version, file
+# type, compression.
+HEADER_SIZE = 39
+
+
+def edit_repo_info(path: Path, edit: Callable[[bytearray], None]) -> None:
+    """Applies `edit` to the flatbuffer of the repo info file at `path`."""
+    data = path.read_bytes()
+    payload = bytearray(
+        zstandard.ZstdDecompressor().decompress(
+            data[HEADER_SIZE:], max_output_size=64 * 1024 * 1024
+        )
+    )
+    edit(payload)
+    path.write_bytes(data[:HEADER_SIZE] + zstandard.ZstdCompressor().compress(payload))
+
+
+def uoffset(buf: bytearray, pos: int) -> int:
+    """The position the flatbuffer offset at `pos` points to."""
+    (offset,) = struct.unpack_from("<I", buf, pos)
+    return int(pos + offset)
+
+
+def field_position(buf: bytearray, table: int, field_index: int) -> int:
+    """The position of field `field_index` of the flatbuffer table at `table`."""
+    (vtable_back,) = struct.unpack_from("<i", buf, table)
+    (field_offset,) = struct.unpack_from(
+        "<H", buf, table - vtable_back + 4 + 2 * field_index
+    )
+    assert field_offset, "the field is absent"
+    return int(table + field_offset)
+
+
+# Field indexes in repo.fbs.
+REPO_SPEC_VERSION = 0
+REPO_SNAPSHOTS = 4
+SNAPSHOT_INFO_PARENT_OFFSET = 1
+
+
+def set_spec_version(buf: bytearray, version: int) -> None:
+    buf[field_position(buf, uoffset(buf, 0), REPO_SPEC_VERSION)] = version
+
+
+def set_first_parent_offset(buf: bytearray, parent_offset: int) -> None:
+    snapshots = uoffset(buf, field_position(buf, uoffset(buf, 0), REPO_SNAPSHOTS))
+    first = uoffset(buf, snapshots + 4)
+    pos = field_position(buf, first, SNAPSHOT_INFO_PARENT_OFFSET)
+    struct.pack_into("<i", buf, pos, parent_offset)
+
+
+def test_repo_info_with_an_old_spec_version_is_a_format_error(tmp_path: Path) -> None:
+    ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
+    edit_repo_info(tmp_path / "repo", lambda buf: set_spec_version(buf, 1))
+    with pytest.raises(ic.FormatError) as excinfo:
+        ic.Repository.open(ic.local_filesystem_storage(str(tmp_path)))
+    assert excinfo.value.kind == ic.ErrorKind.UNSUPPORTED_SPEC_VERSION
+
+
+def test_malformed_repo_info_is_a_format_error(tmp_path: Path) -> None:
+    ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
+    # the only snapshot's parent is out of range
+    edit_repo_info(tmp_path / "repo", lambda buf: set_first_parent_offset(buf, 7))
+    repo = ic.Repository.open(ic.local_filesystem_storage(str(tmp_path)))
+    with pytest.raises(ic.FormatError, match="malformed repo info") as excinfo:
+        list(repo.ancestry(branch="main"))
+    assert excinfo.value.kind == ic.ErrorKind.INVALID_FILE_FORMAT
+
+
 @pytest.mark.parametrize(
     "err",
     [
@@ -229,6 +310,9 @@ def test_invalid_snapshot_id(repo: ic.Repository) -> None:
         ic.InvalidInputError("bad input", "invalid-key"),
         ic.SessionStateError("bad state", "no-changes-to-commit"),
         ic.StorageError("storage failed", "object-store"),
+        ic.RepositoryForkedError("forked"),
+        ic.UpdateDurableButRepositoryForkedError("durable, forked"),
+        ic.CommitDurableButRepositoryForkedError("durable, forked", "SNAP1"),
         ic.FormatError("bad bytes", "deserialization"),
         ic.InternalError("bug", "unknown"),
     ],
@@ -247,6 +331,9 @@ def test_pickle_roundtrip(err: ic.IcechunkError) -> None:
         assert isinstance(unpickled, ic.RebaseFailedError)
         assert unpickled.snapshot == err.snapshot
         assert len(unpickled.conflicts) == len(err.conflicts)
+    if isinstance(err, ic.CommitDurableButRepositoryForkedError):
+        assert isinstance(unpickled, ic.CommitDurableButRepositoryForkedError)
+        assert unpickled.snapshot_id == err.snapshot_id
 
 
 def test_pickle_roundtrip_of_raised_error(conflicted_session: ic.Session) -> None:

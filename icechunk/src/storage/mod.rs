@@ -12,10 +12,12 @@ use crate::storage::redirect::RedirectStorage;
 // Re-export everything from icechunk-storage
 pub use icechunk_storage::{
     Attribution, AttributionError, AttributionLabels, ConcurrencySettings,
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ICError, ListInfo,
-    RepositoryCreation, RequestAttribution, RetriesSettings, Settings, Storage,
-    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult,
+    DeleteObjectsResult, ETag, FORK_EXPLANATION, GcPhase, Generation, GetModifiedResult,
+    ICError, ListInfo, PutCondition, RepositoryCreation, RequestAttribution,
+    RetriesSettings, Settings, Storage, StorageContext, StorageError, StorageErrorKind,
+    StorageInfo, StorageResult, StorageWriterFeatures, TimeoutSettings,
+    UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult, WriteHint,
+    list_objects_filtered_by_id_prefix, root_is_clean_by_listing,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes, tls,
 };
@@ -25,6 +27,13 @@ pub use icechunk_storage::{
 pub use icechunk_s3::{
     S3Storage, mk_client, new_hf_storage, new_r2_storage, new_s3_storage,
     new_tigris_storage, r2_storage, range_to_header, s3_storage, tigris_storage,
+};
+
+#[cfg(all(feature = "fs", unix))]
+pub use icechunk_fs::{ConversionOutcome, FilesystemStorage, PublishOutcome};
+#[cfg(feature = "fs")]
+pub use icechunk_fs::{
+    FilesystemSettings, new_filesystem_storage, new_filesystem_storage_with,
 };
 
 // Re-export from icechunk-arrow-object-store
@@ -60,6 +69,8 @@ pub use icechunk_arrow_object_store::HttpObjectStoreBackend;
 
 pub use icechunk_arrow_object_store::{ObjectStoreBackend, Role};
 
+#[cfg(test)]
+pub(crate) mod intercepting;
 /// Parallel listing of object ids by prefix.
 pub mod listing;
 #[cfg(test)]
@@ -99,6 +110,12 @@ mod tests {
     use super::*;
     use itertools::Itertools as _;
     use proptest::prelude::*;
+
+    #[icechunk_macros::tokio_test]
+    async fn writer_features_default_to_none() {
+        let storage = new_in_memory_storage().await.unwrap();
+        assert!(storage.writer_features().await.unwrap().is_empty());
+    }
 
     #[cfg(feature = "object-store-fs")]
     #[icechunk_macros::tokio_test]

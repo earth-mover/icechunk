@@ -2,17 +2,27 @@
 
 ## Update version metadata files
 
-All internal crates are versioned in lockstep with the JS package: bump every workspace crate and `icechunk-js/package.json` to the new version even if a given component had no changes since the last release, and update the matching `version = "..."` pins under `[workspace.dependencies]` in the top-level `Cargo.toml`. The current crates are `icechunk`, `icechunk-python`, `icechunk-types`, `icechunk-format`, `icechunk-storage`, `icechunk-s3`, `icechunk-arrow-object-store`, and `icechunk-macros`.
+All internal crates are versioned in lockstep with the JS package: bump every workspace crate and `icechunk-js/package.json` to the new version even if a given component had no changes since the last release, and update the matching `version = "..."` pins under `[workspace.dependencies]` in the top-level `Cargo.toml`. The current crates are `icechunk`, `icechunk-python`, `icechunk-types`, `icechunk-format`, `icechunk-storage`, `icechunk-s3`, `icechunk-fs`, `icechunk-arrow-object-store`, and `icechunk-macros`.
 
 1. (Optional: Iff changes to core icechunk rust crate) Update `icechunk/Cargo.toml` by incrementing the version.
 1. Update `icechunk-python/Cargo.toml` by incrementing the version.
-1. Update the remaining workspace crates (`icechunk-types`, `icechunk-format`, `icechunk-storage`, `icechunk-s3`, `icechunk-arrow-object-store`, `icechunk-macros`) to the same version.
+1. Update the remaining workspace crates (`icechunk-types`, `icechunk-format`, `icechunk-storage`, `icechunk-s3`, `icechunk-fs`, `icechunk-arrow-object-store`, `icechunk-macros`) to the same version.
 1. Update `icechunk-js/package.json` to the same version.
 1. Update the version of the dependency on the core Rust Icechunk library in `icechunk-python/Cargo.toml`, ensuring that it is consistent with the latest version of the core icechunk rust crate. Update the other internal crate pins under `[workspace.dependencies]` in the top-level `Cargo.toml` to match.
 1. Update the `Cargo.lock` file, by running `cargo check` from the top-level icechunk directory.
 1. Document changes in `Changelog.md`.
 1. Commit all changes and make a PR.
 1. Once CI passes on the PR merge it.
+
+## When a release introduces a new spec version
+
+The current spec page (`icechunk-python/docs/docs/reference/spec-vX-Y.md`) embeds the flatbuffers schemas from `icechunk-format/flatbuffers/` and links to them on `main`. Before the new spec changes those schemas, freeze the previous spec page:
+
+1. Copy the `.fbs` files into `icechunk-python/docs/docs/reference/flatbuffers-vX-Y/`, with an `index.md` like the one in `flatbuffers-v2-1/`.
+1. Point the page's `--8<--` includes at the copies.
+1. Pin the page's GitHub links to the last release tag that used it as the current spec (for example `blob/v2.3.0/...`).
+1. In `icechunk-python/docs/docs/reference/version-policy.md`, add a row for the new spec to the Spec versions table and move "(current)".
+1. In `icechunk-python/docs/mkdocs.yml`, add the new page to the Spec nav and point the `reference/spec.md` and `spec.md` redirects at it.
 
 ## (Optional) Issuing a icechunk rust library release
 

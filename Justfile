@@ -123,11 +123,58 @@ test-integration rooted="true" *args:
   set +e
   rc=0
   # exclude icechunk-python: no Rust tests, but its PyO3 lib-test binary aborts loading libpython
-  cargo test --profile {{profile}} --workspace --exclude icechunk-python --tests "$@" -- --ignored --skip rooted_roundtrip || rc=1
+  # exclude icechunk-fs-stress: its ignored tests spawn stress processes, see fs-stress-process-tests
+  # skip the protocol and layout model checks: they need a release build, see fs-model-check
+  cargo test --profile {{profile}} --workspace --exclude icechunk-python --exclude icechunk-fs-stress --tests "$@" -- --ignored --skip rooted_roundtrip --skip two_writers_everything --skip three_writers_everything --skip slow_layout_ || rc=1
   if [ "{{rooted}}" = "true" ]; then
     cargo test --profile {{profile}} -p icechunk --test main rooted_roundtrip -- --ignored || rc=1
   fi
   exit $rc
+
+[group('test')]
+[doc("Run the large model checks of the filesystem storage protocol and layout, or those matching the filters (about 10.5 min on 32 cores, over an hour on a 4-core CI runner; 5.6 GiB of RAM)")]
+fs-model-check *filters:
+  cargo test --release -p icechunk-fs --test protocol_model --test layout_model -- --ignored --nocapture --test-threads=1 {{filters}}
+
+[group('test')]
+[script]
+[doc("Run a single-host filesystem storage stress test (mode: storage|repository) in a new run root under parent, deleted if the run passes")]
+fs-stress mode="storage" parent=env("TMPDIR", "/tmp") *args:
+  shift 2
+  root="{{parent}}/fs-stress-$(date +%Y%m%d-%H%M%S)-$$"
+  echo "run root: $root" >&2
+  if cargo run --profile {{profile}} -p icechunk-fs-stress -- run --root "$root" --mode {{mode}} "$@"; then
+    rm -rf "$root"
+  else
+    rc=$?
+    echo "run root kept: $root" >&2
+    exit $rc
+  fi
+
+[group('test')]
+[script]
+[doc("Check that the filesystem storage stress test detects sabotaged protocols and the unsafe legacy backend")]
+fs-stress-selftest parent=env("TMPDIR", "/tmp") *args:
+  shift
+  cargo run --profile {{profile}} -p icechunk-fs-stress -- selftest --root-parent "{{parent}}" "$@"
+
+[group('test')]
+[script]
+[doc("Build a fully static (musl) fs-stress binary for target to copy to other Linux hosts; prints its path and sha256")]
+fs-stress-static $target="x86_64-unknown-linux-musl":
+  cargo build --profile fs-stress-dist --target "$target" -p icechunk-fs-stress
+  bin="${CARGO_TARGET_DIR:-target}/$target/fs-stress-dist/fs-stress"
+  if ! file "$bin" | grep -q 'static.*linked'; then
+    echo "not a static binary: $(file "$bin")" >&2
+    exit 1
+  fi
+  echo "$bin"
+  sha256sum "$bin"
+
+[group('test')]
+[doc("Run the ignored icechunk-fs-stress tests, which spawn stress processes; scheduled CI only")]
+fs-stress-process-tests:
+  cargo nextest run --cargo-profile {{profile}} -p icechunk-fs-stress --run-ignored ignored-only
 
 [group('test')]
 [script]
@@ -230,7 +277,7 @@ import-hook-remove:
 
 # Use --all-features for the workspace but skip icechunk's `shuttle` feature,
 # which swaps tokio for shuttle-tokio and is incompatible with other crates.
-icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,otel,cli,napi-send-contract"
+icechunk_features := "s3,fs,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,otel,cli,napi-send-contract"
 
 [group('lint')]
 [doc("Run clippy lints on all features and targets")]
@@ -396,6 +443,13 @@ gen-expired-fixtures *args:
   cd icechunk-python
   uv run --with third-wheel third-wheel sync --rename "icechunk==1.1.21=icechunk_v1" --rename "icechunk==2.0.5=icechunk_v2"
   uv run python tests/data_generation/generate_expired_repos.py "$@"
+
+[group('python')]
+[script]
+[doc("Write can_read_old fixtures with the working copy, e.g. `just gen-can-read-old-fixtures v2-fs`; refuses to overwrite")]
+gen-can-read-old-fixtures +sets:
+  cd icechunk-python
+  uv run python tests/test_can_read_old.py {{sets}}
 
 [group('docs')]
 [script]

@@ -33,6 +33,12 @@ export declare class Repository {
   featureFlags(): Promise<Array<FeatureFlag>>
   enabledFeatureFlags(): Promise<Array<FeatureFlag>>
   disabledFeatureFlags(): Promise<Array<FeatureFlag>>
+  /**
+   * Icechunk before 2.4.0 ignores every flag except `move_node`, `create_tag`
+   * and `delete_tag`, so disabling another flag doesn't stop writers using an
+   * older Icechunk. To stop every writer, set the status to read-only (with
+   * Python or Rust) instead.
+   */
   setFeatureFlag(name: string, setting?: boolean | undefined | null): Promise<void>
   rearrangeSession(branch: string): Promise<JsSession>
   ancestry(options: VersionOptions): Promise<Array<SnapshotInfo>>

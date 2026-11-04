@@ -7,7 +7,7 @@ use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::format::manifest::{ChunkInfo, ChunkPayload, Manifest};
 use icechunk::format::snapshot::{ArrayShape, NodeData, NodeSnapshot, Snapshot};
 use icechunk::format::{ChunkIndices, IcechunkFormatError, ManifestId, NodeId, Path};
-use icechunk::storage::{self, new_local_filesystem_storage};
+use icechunk::storage::{self, WriteHint, new_local_filesystem_storage};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
@@ -82,7 +82,10 @@ fn benchmark_write_new_snapshot(c: &mut Criterion) {
                     || make_snapshot(num_nodes),
                     |snapshot| {
                         rt.block_on(async {
-                            asset_manager.write_snapshot(snapshot).await.unwrap();
+                            asset_manager
+                                .write_snapshot(snapshot, WriteHint::NewObject)
+                                .await
+                                .unwrap();
                         });
                     },
                     BatchSize::SmallInput,

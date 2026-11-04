@@ -376,6 +376,7 @@ mod tests {
             100,
             None::<&()>,
             None,
+            &[],
         );
         assert!(feature_flag_enabled(&ri, MOVE_NODE_FLAG).unwrap());
         assert!(feature_flag_enabled(&ri, CREATE_TAG_FLAG).unwrap());

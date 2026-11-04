@@ -65,7 +65,6 @@ impl From<FileHeader> for FileHeaderInspect {
             }
             .to_string(),
             compression: match value.compression {
-                CompressionAlgorithmBin::None => "none",
                 CompressionAlgorithmBin::Zstd => ICECHUNK_COMPRESSION_ZSTD,
             }
             .to_string(),
@@ -350,6 +349,11 @@ struct RepoInfoInspect {
     latest_updates: Vec<UpdateInspect>,
     #[serde(skip_serializing_if = "Option::is_none")]
     repo_before_updates: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    writer_features: Vec<String>,
+    /// As stored: the gate, with the repository's own status in `underlying`,
+    /// when there are writer features.
+    status: serde_json::Value,
 }
 
 async fn inspect_repo_info(
@@ -407,6 +411,15 @@ async fn inspect_repo_info(
         metadata: info.metadata().inject()?,
         latest_updates,
         repo_before_updates: info.repo_before_updates().inject()?.map(|x| x.to_string()),
+        writer_features: info
+            .raw_writer_features()
+            .inject()?
+            .into_iter()
+            .map(|name| name.as_str().to_string())
+            .collect(),
+        status: serde_json::to_value(info.raw_status().inject()?)
+            .map_err(|e| RepositoryErrorKind::Other(e.to_string()))
+            .capture()?,
     })
 }
 
@@ -751,6 +764,109 @@ mod tests {
         let compact = repo_info_json(repo.asset_manager(), false).await?;
         assert!(!compact.contains('\n'));
 
+        Ok(())
+    }
+
+    #[icechunk_macros::tokio_test]
+    async fn test_inspect_repo_info_shows_writer_features_and_both_statuses()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::format::{
+            repo_info::{RepoAvailability, RepoInfo, RepoStatus},
+            snapshot::{Snapshot, SnapshotInfo},
+            writer_features::WriterFeature,
+        };
+
+        let storage = crate::new_in_memory_storage().await?;
+        let manager = AssetManager::new_no_cache(
+            storage,
+            Default::default(),
+            SpecVersionBin::current(),
+            1,
+            100,
+        );
+        let initial = Snapshot::initial(SpecVersionBin::current())?;
+        let repo_info = RepoInfo::initial(
+            SpecVersionBin::current(),
+            SnapshotInfo::from_snapshot_file(&initial)?,
+            100,
+            None::<&()>,
+            None,
+            &[WriterFeature::FilesystemLayoutV1],
+        )
+        .set_status(
+            SpecVersionBin::current(),
+            &RepoStatus {
+                availability: RepoAvailability::ReadOnly,
+                set_at: Utc::now(),
+                limited_availability_reason: Some("maintenance".to_string()),
+            },
+            Some(("backup", 100)),
+        )?;
+        manager.create_repo_info(Arc::new(repo_info)).await?;
+
+        let json: serde_json::Value =
+            serde_json::from_str(&repo_info_json(&manager, true).await?)?;
+        assert_eq!(json["writer_features"], serde_json::json!(["filesystem-layout-v1"]));
+        let gate = &json["status"];
+        assert_eq!(gate["availability"], "ReadOnly");
+        assert!(
+            gate["limited_availability_reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("filesystem-layout-v1"))
+        );
+        assert_eq!(gate["underlying"]["availability"], "ReadOnly");
+        assert_eq!(gate["underlying"]["limited_availability_reason"], "maintenance");
+        assert_eq!(gate["underlying"]["set_at"], gate["set_at"]);
+        let entry = &json["latest_updates"][0]["update_type"];
+        assert_eq!(entry["type"], "RepoStatusChangedUpdate");
+        assert_eq!(&entry["status"], gate);
+        Ok(())
+    }
+
+    #[icechunk_macros::tokio_test]
+    async fn test_inspect_repo_info_shows_the_raw_availability()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::format::{
+            flatbuffers::generated,
+            repo_info::{RepoAvailability, RepoInfo, StoredRepoStatus},
+            snapshot::{Snapshot, SnapshotInfo},
+        };
+
+        for (raw, shown) in [(2, serde_json::json!("Offline")), (9, serde_json::json!(9))]
+        {
+            let storage = crate::new_in_memory_storage().await?;
+            let manager = AssetManager::new_no_cache(
+                storage,
+                Default::default(),
+                SpecVersionBin::current(),
+                1,
+                100,
+            );
+            let initial = Snapshot::initial(SpecVersionBin::current())?;
+            let repo_info = RepoInfo::initial(
+                SpecVersionBin::current(),
+                SnapshotInfo::from_snapshot_file(&initial)?,
+                100,
+                None::<&()>,
+                None,
+                &[],
+            )
+            .with_raw_header_for_tests(
+                vec![],
+                StoredRepoStatus::for_tests(
+                    generated::RepoAvailability(raw),
+                    Utc::now(),
+                    None,
+                    None,
+                ),
+            )?;
+            assert_eq!(repo_info.status()?.availability, RepoAvailability::ReadOnly);
+            manager.create_repo_info(Arc::new(repo_info)).await?;
+
+            let json: serde_json::Value =
+                serde_json::from_str(&repo_info_json(&manager, true).await?)?;
+            assert_eq!(json["status"]["availability"], shown);
+        }
         Ok(())
     }
 }

@@ -112,6 +112,23 @@ async fn test_distributed_writes_in_minio(
     .await
 }
 
+#[cfg(all(feature = "fs", unix))]
+#[tokio_test]
+async fn test_distributed_writes_in_filesystem() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().to_path_buf();
+    do_test_distributed_writes(SpecVersionBin::V2, |prefix| {
+        let path = root.join(prefix);
+        async move {
+            let storage: Arc<dyn Storage + Send + Sync> =
+                icechunk::storage::new_filesystem_storage(&path).await?;
+            Ok(storage)
+        }
+    })
+    .await
+}
+
 #[tokio_test]
 #[apply(spec_version_cases)]
 #[ignore = "needs credentials from env"]

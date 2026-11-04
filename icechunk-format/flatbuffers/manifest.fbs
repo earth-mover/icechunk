@@ -25,7 +25,9 @@ table ChunkRef {
   // Native refs: the id of the chunk file in the repository's storage.
   chunk_id: ObjectId12;
 
-  // Virtual refs: absolute URL to the object containing the chunk.
+  // Virtual refs: the location of the object containing the chunk,
+  // either an absolute URL or a relative `vcc://` location
+  // (see the specification's Virtual chunk locations section).
   location: string;
 
   // Virtual refs: optional checksums for the target object.
@@ -34,9 +36,12 @@ table ChunkRef {
   // Seconds since the Unix epoch.
   checksum_last_modified: uint32 = 0;
 
-  // Virtual refs: zstd dictionary-compressed location bytes, as an
-  // alternative to the location field. When present, the manifest's
-  // location_dictionary field SHOULD be used for decompression.
+  // Virtual refs: the UTF-8 bytes of the location, compressed with zstd
+  // using the manifest's location_dictionary, as an alternative to the
+  // location field. MUST only be present when the manifest's
+  // compression_algorithm is 1 and its location_dictionary is present.
+  // The decompressed location MUST NOT exceed 1024 bytes; longer
+  // locations MUST be stored in the location field.
   // Introduced in spec version 2.
   compressed_location: [uint8];
 
@@ -79,6 +84,7 @@ table Manifest {
   // Compression algorithm for compressed_location fields.
   // 0 = none: locations are stored uncompressed in ChunkRef.location.
   // 1 = zstd dictionary compression (use location_dictionary).
+  // Writers MUST NOT write other values.
   // Introduced in spec version 2.
   compression_algorithm: uint8 = 1;
 

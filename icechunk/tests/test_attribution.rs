@@ -16,7 +16,9 @@ use icechunk::{
     new_s3_object_store_storage, new_s3_storage,
     repository::VersionInfo,
     session::get_chunk,
-    storage::{Attribution, AttributionLabels, RequestAttribution, StorageContext},
+    storage::{
+        Attribution, AttributionLabels, RequestAttribution, StorageContext, WriteHint,
+    },
     user_agent_product,
     virtual_chunks::VirtualChunkContainer,
 };
@@ -124,7 +126,14 @@ async fn exercise_storage(
     let plain = StorageContext::without_node(&settings, &labels);
 
     storage
-        .put_object(&chunk_ctx, "chunks/abc", CHUNK.into(), None, Vec::new(), None)
+        .put_object(
+            &chunk_ctx,
+            "chunks/abc",
+            CHUNK.into(),
+            None,
+            Vec::new(),
+            WriteHint::Atomic,
+        )
         .await
         .unwrap();
     storage
@@ -134,16 +143,23 @@ async fn exercise_storage(
             b"m".as_ref().into(),
             None,
             Vec::new(),
-            None,
+            WriteHint::Atomic,
         )
         .await
         .unwrap();
     storage
-        .put_object(&plain, "snapshots/s1", b"s".as_ref().into(), None, Vec::new(), None)
+        .put_object(
+            &plain,
+            "snapshots/s1",
+            b"s".as_ref().into(),
+            None,
+            Vec::new(),
+            WriteHint::Atomic,
+        )
         .await
         .unwrap();
 
-    let (mut reader, _) =
+    let mut reader =
         storage.get_object(&chunk_ctx, "chunks/abc", Some(&(0..4))).await.unwrap();
     let mut buf = Vec::new();
     tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buf).await.unwrap();
@@ -352,7 +368,7 @@ async fn read_virtual_chunk(
             CHUNK.into(),
             None,
             Vec::new(),
-            None,
+            WriteHint::Atomic,
         )
         .await
         .unwrap();

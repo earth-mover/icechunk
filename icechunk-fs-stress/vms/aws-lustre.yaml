@@ -1,0 +1,183 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  fs-stress on Amazon FSx for Lustre: a Persistent 2 file system and EC2 clients that mount
+  it at /mnt/fsx, in a VPC of their own. Created and deleted by aws-lustre.sh.
+
+Parameters:
+  AvailabilityZone:
+    Type: AWS::EC2::AvailabilityZone::Name
+  SshCidr:
+    Type: String
+    Description: who may ssh to the clients
+    AllowedPattern: "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+/[0-9]+$"
+  PublicKey:
+    Type: String
+    Description: the clients' ssh public key (OpenSSH format)
+  ClientCount:
+    Type: Number
+    Default: 5
+    MinValue: 1
+  InstanceType:
+    Type: String
+    Default: c7i.large
+  StorageGiB:
+    Type: Number
+    Default: 1200
+    Description: 1200 or a multiple of 2400
+  ThroughputPerTiB:
+    Type: Number
+    Default: 125
+    AllowedValues: [125, 250, 500, 1000]
+  ImageId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.89.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-vpc" }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  Subnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.89.1.0/24
+      AvailabilityZone: !Ref AvailabilityZone
+      MapPublicIpOnLaunch: true
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet
+      RouteTableId: !Ref RouteTable
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "fs-stress ${AWS::StackName}: ssh from SshCidr, Lustre within the group"
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 22, ToPort: 22, CidrIp: !Ref SshCidr }
+
+  # Lustre between the clients and the file servers, which share the group.
+  LustreIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SecurityGroup
+      SourceSecurityGroupId: !Ref SecurityGroup
+      IpProtocol: tcp
+      FromPort: 988
+      ToPort: 988
+
+  LustreIngressHighPorts:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SecurityGroup
+      SourceSecurityGroupId: !Ref SecurityGroup
+      IpProtocol: tcp
+      FromPort: 1018
+      ToPort: 1023
+
+  FileSystem:
+    Type: AWS::FSx::FileSystem
+    Properties:
+      FileSystemType: LUSTRE
+      FileSystemTypeVersion: "2.15"
+      StorageType: SSD
+      StorageCapacity: !Ref StorageGiB
+      SubnetIds: [!Ref Subnet]
+      SecurityGroupIds: [!Ref SecurityGroup]
+      LustreConfiguration:
+        DeploymentType: PERSISTENT_2
+        PerUnitStorageThroughput: !Ref ThroughputPerTiB
+        AutomaticBackupRetentionDays: 0
+        DataCompressionType: NONE
+      Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-fs" }]
+
+  KeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Ref AWS::StackName
+      PublicKeyMaterial: !Ref PublicKey
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref ImageId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyPair
+        SecurityGroupIds: [!Ref SecurityGroup]
+        MetadataOptions: { HttpTokens: required }
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs: { VolumeSize: 16, VolumeType: gp3, DeleteOnTermination: true }
+        TagSpecifications:
+          - ResourceType: instance
+            Tags: [{ Key: Name, Value: !Sub "${AWS::StackName}-client" }]
+        # Signals the Clients group once /mnt/fsx is mounted and writable by ec2-user; any
+        # failure signals failure, which rolls the stack back.
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euo pipefail
+            dnf install -y -q aws-cfn-bootstrap
+            signal() { /opt/aws/bin/cfn-signal -e "$1" --stack ${AWS::StackName} --resource Clients --region ${AWS::Region}; }
+            trap 'signal 1' ERR
+            dnf install -y -q lustre-client
+            mkdir -p /mnt/fsx
+            echo '${FileSystem.DNSName}@tcp:/${FileSystem.LustreMountName} /mnt/fsx lustre defaults,relatime,flock,_netdev 0 0' >>/etc/fstab
+            mount /mnt/fsx
+            install -d -o ec2-user -g ec2-user /mnt/fsx/fs-stress
+            signal 0
+
+  Clients:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    # The clients need the internet (dnf, cfn-signal) from their first boot.
+    DependsOn: [DefaultRoute, SubnetRoutes]
+    CreationPolicy:
+      ResourceSignal:
+        Count: !Ref ClientCount
+        Timeout: PT20M
+    Properties:
+      MinSize: !Ref ClientCount
+      MaxSize: !Ref ClientCount
+      DesiredCapacity: !Ref ClientCount
+      VPCZoneIdentifier: [!Ref Subnet]
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+
+Outputs:
+  FileSystemId:
+    Value: !Ref FileSystem
+  MountSource:
+    Value: !Sub "${FileSystem.DNSName}@tcp:/${FileSystem.LustreMountName}"
+  ClientGroup:
+    Value: !Ref Clients

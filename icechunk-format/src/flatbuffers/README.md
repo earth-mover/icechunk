@@ -48,7 +48,7 @@ Bytes 12-35: Implementation name, padded to 24 bytes (e.g., "ic-0.1.0")
 Byte 36:     Spec version (1=V1, 2=V2.x)
 Byte 37:     File type (1=Snapshot, 2=Manifest, 3=Attributes,
                         4=TransactionLog, 5=Chunk, 6=RepoInfo)
-Byte 38:     Compression (0=None, 1=Zstd)
+Byte 38:     Compression (1=Zstd)
 ```
 
 ## Object ID Types

@@ -251,7 +251,7 @@ impl JsRepository {
             .transpose()
             .map_napi_err()?;
         let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let builder = Repository::create(Arc::clone(&storage.0))
+        let builder = Repository::create(Arc::clone(&storage.storage))
             .authorize_virtual_chunk_access(creds)
             .check_clean_root(check_clean_root.unwrap_or(true));
         let builder = match config {
@@ -274,7 +274,7 @@ impl JsRepository {
     ) -> napi::Result<JsRepository> {
         let config = convert_config(config)?;
         let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let builder = Repository::open(Arc::clone(&storage.0))
+        let builder = Repository::open(Arc::clone(&storage.storage))
             .authorize_virtual_chunk_access(creds);
         let builder = match config {
             Some(c) => builder.config(c),
@@ -298,7 +298,7 @@ impl JsRepository {
             .transpose()
             .map_napi_err()?;
         let creds = convert_credentials(authorize_virtual_chunk_access)?;
-        let builder = Repository::open_or_create(Arc::clone(&storage.0))
+        let builder = Repository::open_or_create(Arc::clone(&storage.storage))
             .authorize_virtual_chunk_access(creds)
             .check_clean_root(check_clean_root.unwrap_or(true));
         let builder = match config {
@@ -319,7 +319,7 @@ impl JsRepository {
         storage_settings: Option<JsStorageSettings>,
     ) -> napi::Result<bool> {
         let settings = storage_settings.map(|s| s.into());
-        Repository::exists(Arc::clone(&storage.0), settings).await.map_napi_err()
+        Repository::exists(Arc::clone(&storage.storage), settings).await.map_napi_err()
     }
 
     #[napi]
@@ -472,9 +472,10 @@ impl JsRepository {
         storage_settings: Option<JsStorageSettings>,
     ) -> napi::Result<Option<u32>> {
         let settings = storage_settings.map(|s| s.into());
-        let detected = Repository::fetch_spec_version(Arc::clone(&storage.0), settings)
-            .await
-            .map_napi_err()?;
+        let detected =
+            Repository::fetch_spec_version(Arc::clone(&storage.storage), settings)
+                .await
+                .map_napi_err()?;
         Ok(detected.map(|d| d.spec_version() as u32))
     }
 
@@ -484,8 +485,9 @@ impl JsRepository {
     pub async fn fetch_config(
         storage: &JsStorage,
     ) -> napi::Result<Option<JsRepositoryConfig>> {
-        let res =
-            Repository::fetch_config(Arc::clone(&storage.0)).await.map_napi_err()?;
+        let res = Repository::fetch_config(Arc::clone(&storage.storage))
+            .await
+            .map_napi_err()?;
         match res {
             Some((config, _version_info)) => Ok(Some(config.into())),
             None => Ok(None),
@@ -567,6 +569,10 @@ impl JsRepository {
         Ok(flags.map(JsFeatureFlag::from).collect())
     }
 
+    /// Icechunk before 2.4.0 ignores every flag except `move_node`, `create_tag`
+    /// and `delete_tag`, so disabling another flag doesn't stop writers using an
+    /// older Icechunk. To stop every writer, set the status to read-only (with
+    /// Python or Rust) instead.
     #[napi]
     pub async fn set_feature_flag(
         &self,

@@ -33,6 +33,12 @@ export declare class Repository {
   featureFlags(): Promise<Array<FeatureFlag>>
   enabledFeatureFlags(): Promise<Array<FeatureFlag>>
   disabledFeatureFlags(): Promise<Array<FeatureFlag>>
+  /**
+   * Icechunk before 2.4.0 ignores every flag except `move_node`, `create_tag`
+   * and `delete_tag`, so disabling another flag doesn't stop writers using an
+   * older Icechunk. To stop every writer, set the status to read-only (with
+   * Python or Rust) instead.
+   */
   setFeatureFlag(name: string, setting?: boolean | undefined | null): Promise<void>
   rearrangeSession(branch: string): Promise<JsSession>
   ancestry(options: VersionOptions): Promise<Array<SnapshotInfo>>
@@ -72,7 +78,80 @@ export declare class Storage {
    * especially useful for WASM builds where native Rust networking is unavailable.
    */
   static newCustom(backend: { canWrite: () => Promise<boolean>; getObjectRange: (args: StorageGetObjectRangeArgs) => Promise<StorageGetObjectResponse>; putObject: (args: StoragePutObjectArgs) => Promise<StorageVersionedUpdateResult>; copyObject: (args: StorageCopyObjectArgs) => Promise<StorageVersionedUpdateResult>; listObjects: (prefix: string) => Promise<Array<StorageListInfo>>; deleteBatch: (args: StorageDeleteBatchArgs) => Promise<StorageDeleteObjectsResult>; getObjectLastModified: (path: string) => Promise<Date>; getObjectConditional: (args: StorageGetObjectConditionalArgs) => Promise<StorageGetModifiedResult> }): Storage
+  /**
+   * Storage on the local filesystem. Not safe for concurrent commits: a commit
+   * can be lost. Use `newFilesystem` when several writers may commit.
+   */
   static newLocalFilesystem(path: string): Promise<Storage>
+  /**
+   * Storage on a filesystem, safe for concurrent writers on filesystems that
+   * meet the requirements in the Icechunk storage guide (hard links, atomic
+   * rename by name, exclusive directory rename).
+   * It stores the repository info in the filesystem layout: `repo.d/` holds
+   * its versions and `repo` is the mirror, a copy of a version that was
+   * current, published by every change. Other backends and Icechunk before
+   * 2.4.0 read its repositories through the mirror and can't modify them.
+   * Never let anything else write `repo`: Icechunk before 2.4.0 changing the
+   * status, or other tools, fork the repository.
+   * Repositories in the object store layout, as `newLocalFilesystem` and Icechunk
+   * before 2.4.0 write them, are refused until converted, once, with
+   * `convertToFilesystemLayout`. Experimental. Unix only.
+   */
+  static newFilesystem(path: string): Promise<Storage>
+  /**
+   * Converts a repository in the object store layout, as `newLocalFilesystem` and
+   * Icechunk before 2.4.0 write it, to the filesystem layout of
+   * `newFilesystem`, which refuses to open it until then. It changes only the
+   * writer features and the update log, and keeps the repository's status.
+   * Administrative: run it with nothing else using the repository, no writer
+   * in any process, no process still publishing the mirror and no other
+   * administrative operation; anything else is undefined behavior. If it is
+   * interrupted, run it again under the same condition: the rerun completes
+   * the conversion. Resolves to true if this call converted the repository,
+   * including when it completed an interrupted conversion; false if it was
+   * in the filesystem layout already, including when this call only
+   * published a missing mirror. Rejects if there is no repository.
+   */
+  convertToFilesystemLayout(): Promise<boolean>
+  /**
+   * Converts a repository in the filesystem layout of `newFilesystem` back to
+   * the object store layout that `newLocalFilesystem`, other backends and
+   * Icechunk before 2.4.0 write. It changes only the writer features and the
+   * update log, and keeps the repository's status.
+   * Administrative: run it with nothing else using the repository, no writer
+   * in any process, no process still publishing the mirror and no other
+   * administrative operation; anything else is undefined behavior. If it is
+   * interrupted, run it again under the same condition: the rerun completes
+   * the conversion. Until then, every write and garbage collection through
+   * `newFilesystem` fails, saying that a conversion to the object store layout is
+   * in progress and to rerun it.
+   * A copy of a filesystem-layout repository on other storage is read-only.
+   * To get a copy that can be written elsewhere: set the status of the source
+   * to read-only (with Python or Rust), convert it to the object store layout,
+   * copy it, convert the source back with `convertToFilesystemLayout` if it
+   * should stay in this layout, and set the statuses to online (with Python
+   * or Rust).
+   * Resolves to true if this call converted the repository, false if it was
+   * in the object store layout already; rejects if there is no repository.
+   */
+  convertToObjectStoreLayout(): Promise<boolean>
+  /**
+   * Publishes the current version of the repository as the mirror `repo`,
+   * repairing a mirror left behind by a process that died between its change
+   * and its publication, or by a publication that gave up under contention.
+   * It never changes the repository and is safe while writers run.
+   * Best effort: it publishes the version it lists, which a change landing
+   * meanwhile or a lagging listing can make older than the current one. A
+   * change, such as setting the status to read-only (with Python or Rust),
+   * makes the mirror current once every process that changed the repository
+   * earlier has finished; do that before serving a finished repository
+   * read-only or copying it.
+   * Resolves to whether `repo` holds the version current in the last
+   * listing and, if the publication gave up, the version it left `repo`
+   * holding. Rejects on a fork, an unreadable `repo` or an interrupted
+   * conversion to the object store layout.
+   */
+  publishMirror(): Promise<PublishOutcome>
   static newS3(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newR2(bucket?: string | undefined | null, prefix?: string | undefined | null, accountId?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newTigris(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null, useWeakConsistency?: boolean | undefined | null): Storage
@@ -270,6 +349,22 @@ export type ObjectStoreConfig =
   | { type: 'Gcs', field0: Record<string, string> }
   | { type: 'Azure', field0: Record<string, string> }
   | { type: 'Tigris', field0: S3Options }
+
+/** What `publishMirror` did. */
+export interface PublishOutcome {
+  /**
+   * True if `repo` holds the version current in the last listing of
+   * `repo.d/`, or a newer one; false if the marker kept moving and the
+   * publication gave up.
+   */
+  current: boolean
+  /**
+   * When the publication gave up, the version it left `repo` holding, as
+   * its file name in `repo.d/` (`<N>.<hash>`); absent if it installed none,
+   * and when `current` is true.
+   */
+  left?: string
+}
 
 /**
  * Range query matching zarrita's RangeQuery type:

@@ -4793,6 +4793,7 @@ pub mod generated {
         pub const VT_AVAILABILITY: ::flatbuffers::VOffsetT = 4;
         pub const VT_SET_AT: ::flatbuffers::VOffsetT = 6;
         pub const VT_LIMITED_AVAILABILITY_REASON: ::flatbuffers::VOffsetT = 8;
+        pub const VT_UNDERLYING: ::flatbuffers::VOffsetT = 10;
 
         #[inline]
         pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -4810,6 +4811,9 @@ pub mod generated {
         ) -> ::flatbuffers::WIPOffset<RepoStatus<'bldr>> {
             let mut builder = RepoStatusBuilder::new(_fbb);
             builder.add_set_at(args.set_at);
+            if let Some(x) = args.underlying {
+                builder.add_underlying(x);
+            }
             if let Some(x) = args.limited_availability_reason {
                 builder.add_limited_availability_reason(x);
             }
@@ -4850,6 +4854,18 @@ pub mod generated {
                 )
             }
         }
+        #[inline]
+        pub fn underlying(&self) -> Option<RepoStatus<'a>> {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<::flatbuffers::ForwardsUOffset<RepoStatus>>(
+                    RepoStatus::VT_UNDERLYING,
+                    None,
+                )
+            }
+        }
     }
 
     impl ::flatbuffers::Verifiable for RepoStatus<'_> {
@@ -4870,6 +4886,11 @@ pub mod generated {
                     Self::VT_LIMITED_AVAILABILITY_REASON,
                     false,
                 )?
+                .visit_field::<::flatbuffers::ForwardsUOffset<RepoStatus>>(
+                    "underlying",
+                    Self::VT_UNDERLYING,
+                    false,
+                )?
                 .finish();
             Ok(())
         }
@@ -4878,6 +4899,7 @@ pub mod generated {
         pub availability: RepoAvailability,
         pub set_at: u64,
         pub limited_availability_reason: Option<::flatbuffers::WIPOffset<&'a str>>,
+        pub underlying: Option<::flatbuffers::WIPOffset<RepoStatus<'a>>>,
     }
     impl<'a> Default for RepoStatusArgs<'a> {
         #[inline]
@@ -4886,6 +4908,7 @@ pub mod generated {
                 availability: RepoAvailability::Online,
                 set_at: 0,
                 limited_availability_reason: None,
+                underlying: None,
             }
         }
     }
@@ -4918,6 +4941,16 @@ pub mod generated {
             );
         }
         #[inline]
+        pub fn add_underlying(
+            &mut self,
+            underlying: ::flatbuffers::WIPOffset<RepoStatus<'b>>,
+        ) {
+            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<RepoStatus>>(
+                RepoStatus::VT_UNDERLYING,
+                underlying,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> RepoStatusBuilder<'a, 'b, A> {
@@ -4937,6 +4970,7 @@ pub mod generated {
             ds.field("availability", &self.availability());
             ds.field("set_at", &self.set_at());
             ds.field("limited_availability_reason", &self.limited_availability_reason());
+            ds.field("underlying", &self.underlying());
             ds.finish()
         }
     }
@@ -7464,6 +7498,7 @@ pub mod generated {
         pub const VT_ENABLED_FEATURE_FLAGS: ::flatbuffers::VOffsetT = 24;
         pub const VT_DISABLED_FEATURE_FLAGS: ::flatbuffers::VOffsetT = 26;
         pub const VT_EXTRA: ::flatbuffers::VOffsetT = 28;
+        pub const VT_WRITER_FEATURES: ::flatbuffers::VOffsetT = 30;
 
         #[inline]
         pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -7480,6 +7515,9 @@ pub mod generated {
             args: &'args RepoArgs<'args>,
         ) -> ::flatbuffers::WIPOffset<Repo<'bldr>> {
             let mut builder = RepoBuilder::new(_fbb);
+            if let Some(x) = args.writer_features {
+                builder.add_writer_features(x);
+            }
             if let Some(x) = args.extra {
                 builder.add_extra(x);
             }
@@ -7698,6 +7736,20 @@ pub mod generated {
                     )
             }
         }
+        #[inline]
+        pub fn writer_features(
+            &self,
+        ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>>
+        {
+            // Safety:
+            // Created from valid Table for this object
+            // which contains a valid value in this slot
+            unsafe {
+                self._tab.get::<::flatbuffers::ForwardsUOffset<
+                    ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>,
+                >>(Repo::VT_WRITER_FEATURES, None)
+            }
+        }
     }
 
     impl ::flatbuffers::Verifiable for Repo<'_> {
@@ -7720,6 +7772,7 @@ pub mod generated {
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u16>>>("enabled_feature_flags", Self::VT_ENABLED_FEATURE_FLAGS, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u16>>>("disabled_feature_flags", Self::VT_DISABLED_FEATURE_FLAGS, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, u8>>>("extra", Self::VT_EXTRA, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<&'_ str>>>>("writer_features", Self::VT_WRITER_FEATURES, false)?
      .finish();
             Ok(())
         }
@@ -7770,6 +7823,11 @@ pub mod generated {
         pub disabled_feature_flags:
             Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u16>>>,
         pub extra: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, u8>>>,
+        pub writer_features: Option<
+            ::flatbuffers::WIPOffset<
+                ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>,
+            >,
+        >,
     }
     impl<'a> Default for RepoArgs<'a> {
         #[inline]
@@ -7788,6 +7846,7 @@ pub mod generated {
                 enabled_feature_flags: None,
                 disabled_feature_flags: None,
                 extra: None,
+                writer_features: None,
             }
         }
     }
@@ -7935,6 +7994,18 @@ pub mod generated {
                 .push_slot_always::<::flatbuffers::WIPOffset<_>>(Repo::VT_EXTRA, extra);
         }
         #[inline]
+        pub fn add_writer_features(
+            &mut self,
+            writer_features: ::flatbuffers::WIPOffset<
+                ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<&'b str>>,
+            >,
+        ) {
+            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+                Repo::VT_WRITER_FEATURES,
+                writer_features,
+            );
+        }
+        #[inline]
         pub fn new(
             _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> RepoBuilder<'a, 'b, A> {
@@ -7970,6 +8041,7 @@ pub mod generated {
             ds.field("enabled_feature_flags", &self.enabled_feature_flags());
             ds.field("disabled_feature_flags", &self.disabled_feature_flags());
             ds.field("extra", &self.extra());
+            ds.field("writer_features", &self.writer_features());
             ds.finish()
         }
     }

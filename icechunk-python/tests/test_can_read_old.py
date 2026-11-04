@@ -7,11 +7,18 @@ If something changes in the on disk format, we probably won't be able to read th
 test will fail and we can avoid breaking user data.
 
 When new features that impact the stored info are added, or when the on-disk format is
-intentionally changed, the repository files must be regenerated. For that, run the current
-file as a python script: `python ./tests/test_can_read_old.py`.
+intentionally changed, the repository files must be regenerated. For that, delete the
+fixture directories and run `just gen-can-read-old-fixtures <set>...`, see FIXTURE_SETS.
 """
 
+import hashlib
+import os
 import shutil
+import sys
+import tempfile
+import time
+import uuid
+from collections.abc import Callable, Coroutine
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -25,9 +32,14 @@ import zarr
 # This file can be run as a script to regenerate test data (see module docstring).
 # When run as a script, `tests` is not a package, so we fall back to a direct import.
 try:
-    from tests.conftest import Permission
+    from tests.conftest import Permission, fs_storage, readable_path
 except ImportError:
-    from conftest import Permission  # type: ignore[import-not-found,no-redef]
+    from conftest import (  # type: ignore[import-not-found,no-redef]
+        Permission,
+        fs_storage,
+        readable_path,
+    )
+
 
 UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
     {
@@ -41,7 +53,11 @@ UPDATED_SPLITTING_CONFIG = ic.ManifestSplittingConfig.from_dict(
 
 
 def mk_repo(
-    *, create: bool, store_path: str, config: ic.RepositoryConfig | None = None
+    *,
+    create: bool,
+    store_path: str,
+    backend: str,
+    config: ic.RepositoryConfig | None = None,
 ) -> ic.Repository:
     """Create a store that can access virtual chunks in localhost MinIO"""
     if create and config is None:
@@ -69,7 +85,7 @@ def mk_repo(
 
     operation = ic.Repository.create if create else ic.Repository.open
     repo = operation(
-        storage=ic.local_filesystem_storage(store_path),
+        storage=fs_storage(backend, store_path),
         config=config,
         authorize_virtual_chunk_access=credentials,
     )
@@ -77,7 +93,7 @@ def mk_repo(
     return repo
 
 
-async def write_a_split_repo(path: str) -> None:
+async def write_a_split_repo(path: str, *, backend: str) -> None:
     """Write the test repository with manifest splitting."""
 
     store_path = path
@@ -96,7 +112,7 @@ async def write_a_split_repo(path: str) -> None:
     )
 
     print(f"Writing repository to {store_path}")
-    repo = mk_repo(create=True, store_path=store_path, config=config)
+    repo = mk_repo(create=True, store_path=store_path, config=config, backend=backend)
     session = repo.writable_session("main")
     store = session.store
 
@@ -145,7 +161,7 @@ async def write_a_split_repo(path: str) -> None:
     config = ic.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 12
     config.manifest = ic.ManifestConfig(splitting=UPDATED_SPLITTING_CONFIG)
-    repo = mk_repo(create=False, store_path=store_path, config=config)
+    repo = mk_repo(create=False, store_path=store_path, config=config, backend=backend)
     repo.save_config()
     session = repo.writable_session("main")
     big_chunks = zarr.open_array(session.store, path="group1/split", mode="a")
@@ -155,8 +171,10 @@ async def write_a_split_repo(path: str) -> None:
     session.commit("write data again with more splits")
 
 
-async def do_icechunk_can_read_old_repo_with_manifest_splitting(path: str) -> None:
-    repo = mk_repo(create=False, store_path=path)
+async def do_icechunk_can_read_old_repo_with_manifest_splitting(
+    path: str, *, backend: str
+) -> None:
+    repo = mk_repo(create=False, store_path=path, backend=backend)
     ancestry = list(repo.ancestry(branch="main"))[::-1]
 
     init_snapshot = ancestry[1]
@@ -179,7 +197,7 @@ async def do_icechunk_can_read_old_repo_with_manifest_splitting(path: str) -> No
     assert repo.config.manifest.splitting == UPDATED_SPLITTING_CONFIG
 
 
-async def write_a_test_repo(path: str) -> None:
+async def write_a_test_repo(path: str, *, backend: str) -> None:
     """Write the test repository.
 
     This function tries to explore as many icechunk features as possible, to generate
@@ -190,7 +208,7 @@ async def write_a_test_repo(path: str) -> None:
     """
 
     print(f"Writing repository to {path}")
-    repo = mk_repo(create=True, store_path=path)
+    repo = mk_repo(create=True, store_path=path, backend=backend)
     session = repo.writable_session("main")
     store = session.store
 
@@ -292,13 +310,110 @@ async def write_a_test_repo(path: str) -> None:
     store.close()
 
 
-async def do_icechunk_can_read_old_repo(path: str) -> None:
+# What a GC sweeps from leftovers-repo-v2-fs: the stage, the version below the
+# marker and the creation directory. `repo.stub.*` is an unknown name: GC never
+# deletes it.
+LEFTOVERS_SWEPT = 3
+# A real GC first makes a change to `repo`, whose tidy-up deletes the version
+# below the marker before the sweep runs; a dry run makes no change.
+LEFTOVERS_SWEPT_AFTER_TIDY_UP = LEFTOVERS_SWEPT - 1
+
+
+def repo_d_versions(path: str | Path) -> tuple[int, set[int]]:
+    """The current version of `repo`, and the versions of every file in repo.d."""
+    names = [p.name for p in (Path(path) / "repo.d").iterdir()]
+    (marker,) = [n for n in names if n.startswith("latest.")]
+    current = int(marker.split(".")[2])
+    versions = {int(n.split(".")[0]) for n in names if n.split(".")[0].isdigit()}
+    return current, versions
+
+
+def leftover_counts(path: str | Path) -> dict[str, int]:
+    """How many of each leftover planted by write_a_leftovers_repo are in ``path``."""
+    patterns = {
+        "stage": "repo.d/stage.*",
+        "tmp": "repo.d.tmp.*",
+        "stub": "repo.stub.*",
+        "staging": "overwritten/*.staging.*",
+    }
+    return {kind: len(list(Path(path).glob(p))) for kind, p in patterns.items()}
+
+
+def age_tree(path: str | Path) -> None:
+    """Make everything under ``path`` older than GC's minimum age for leftovers."""
+    two_days_ago = time.time() - 2 * 24 * 3600
+    for dirpath, _, files in os.walk(path):
+        for name in [*files, "."]:
+            os.utime(Path(dirpath, name), (two_days_ago, two_days_ago))
+
+
+def sweep_count(path: str | Path, *, dry_run: bool) -> int:
+    repo = ic.Repository.open(ic.filesystem_storage(str(path)))
+    return repo.garbage_collect(
+        datetime.now(UTC), dry_run=dry_run
+    ).storage_leftovers_deleted
+
+
+async def write_a_leftovers_repo(path: str) -> None:
+    """Write the test repository in the filesystem format, then add one of each
+    leftover that a crash of `filesystem_storage` can leave behind.
+
+    The leftovers are planted by name, so the generator checks that the current
+    code's GC recognizes the ones it must sweep.
+    """
+    await write_a_test_repo(path, backend="filesystem")
+    root = Path(path)
+    repo_d = root / "repo.d"
+    current, _ = repo_d_versions(path)
+    # Earlier versions of `repo`, as the content of the leftover versions.
+    infos = [p.read_bytes() for p in sorted((root / "overwritten").iterdir())]
+
+    def plant_version(directory: Path, n: int, data: bytes) -> str:
+        h = hashlib.sha256(data).hexdigest()
+        (directory / f"{n}.{h}").write_bytes(data)
+        return h
+
+    # A commit that crashed before linking its stage.
+    (repo_d / f"stage.{uuid.uuid4()}").write_bytes(infos[0])
+    # A commit that crashed between its link and its marker rename.
+    plant_version(repo_d, current + 1, infos[1])
+    # A commit that crashed between its marker rename and its tidy-up.
+    plant_version(repo_d, current - 1, infos[2])
+    # A creation that crashed before renaming its directory to repo.d.
+    tmp = root / f"repo.d.tmp.{uuid.uuid4()}"
+    tmp.mkdir()
+    h = plant_version(tmp, 0, infos[3])
+    (tmp / f"latest.{999_999_999_999_999:015d}.0.{h}").touch()
+    # An unknown name, which GC keeps: the stub staging file of earlier
+    # development versions.
+    (root / f"repo.stub.{uuid.uuid4()}").write_bytes((root / "repo").read_bytes())
+    # A write of a backup of `repo` that crashed before its rename.
+    backup = next((root / "overwritten").iterdir())
+    backup.with_name(f"{backup.name}.staging.{uuid.uuid4()}").write_bytes(
+        backup.read_bytes()
+    )
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        copy = Path(tmp_dir) / "repo"
+        shutil.copytree(path, copy)
+        age_tree(copy)
+        assert sweep_count(copy, dry_run=True) == LEFTOVERS_SWEPT
+
+
+async def do_icechunk_can_read_old_repo(
+    path: str, *, backend: str, writable: bool = True
+) -> None:
+    """Check the content of a repository written by write_a_test_repo.
+
+    ``writable=False`` lists the hierarchy through a read-only session, for a
+    repository this library can't modify.
+    """
     try:
         from tests.conftest import write_chunks_to_minio
     except ImportError:
         from conftest import write_chunks_to_minio  # type: ignore[no-redef]
 
-    repo = mk_repo(create=False, store_path=path)
+    repo = mk_repo(create=False, store_path=path, backend=backend)
     main_snapshot = repo.lookup_branch("main")
 
     expected_main_history = [
@@ -331,7 +446,11 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
     with pytest.raises(ic.IcechunkError, match="ref not found"):
         repo.readonly_session(tag="deleted")
 
-    session = repo.writable_session("my-branch")
+    session = (
+        repo.writable_session("my-branch")
+        if writable
+        else repo.readonly_session(branch="my-branch")
+    )
     store = session.store
     assert sorted([p async for p in store.list_dir("")]) == [
         "group1",
@@ -360,7 +479,7 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
         [p async for p in store.list_dir("group2/group3/group4/group5/inner")]
     ) == ["c", "zarr.json"]
 
-    root = zarr.group(store=store)
+    root = zarr.open_group(store=store, mode="r")
     # inner is not initialized, so it's all fill values
     inner = cast("zarr.Array[Any]", root["group2/group3/group4/group5/inner"])
     assert_array_equal(inner[:], float("nan"))
@@ -408,41 +527,196 @@ async def do_icechunk_can_read_old_repo(path: str) -> None:
 
 def migrate_repo_v1_to_v2(from_dir: str, to_dir: str) -> None:
     shutil.copytree(from_dir, to_dir, dirs_exist_ok=True)
-    repo = mk_repo(create=False, store_path=to_dir)
+    repo = mk_repo(create=False, store_path=to_dir, backend="local_filesystem")
     ic.upgrade_icechunk_repository(repo, dry_run=False)
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_icechunk_can_read_old_repo_v1() -> None:
-    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v1")
+    await do_icechunk_can_read_old_repo(
+        "./tests/data/test-repo-v1", backend="local_filesystem"
+    )
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_repo_v2() -> None:
-    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v2")
+async def test_icechunk_can_read_old_repo_v2(fs_backend: str, tmp_path: Path) -> None:
+    path = readable_path("./tests/data/test-repo-v2", fs_backend, tmp_path)
+    await do_icechunk_can_read_old_repo(path, backend=fs_backend)
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_icechunk_can_read_old_repo_v2_migrated() -> None:
-    await do_icechunk_can_read_old_repo("./tests/data/test-repo-v2-migrated")
+async def test_icechunk_can_read_old_repo_v2_migrated(
+    fs_backend: str, tmp_path: Path
+) -> None:
+    path = readable_path("./tests/data/test-repo-v2-migrated", fs_backend, tmp_path)
+    await do_icechunk_can_read_old_repo(path, backend=fs_backend)
 
 
 async def test_icechunk_can_read_old_repo_with_manifest_splitting_v1() -> None:
     await do_icechunk_can_read_old_repo_with_manifest_splitting(
-        "./tests/data/split-repo-v1"
+        "./tests/data/split-repo-v1", backend="local_filesystem"
     )
 
 
-async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2() -> None:
+async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2(
+    fs_backend: str, tmp_path: Path
+) -> None:
+    path = readable_path("./tests/data/split-repo-v2", fs_backend, tmp_path)
+    await do_icechunk_can_read_old_repo_with_manifest_splitting(path, backend=fs_backend)
+
+
+async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2_migrated(
+    fs_backend: str, tmp_path: Path
+) -> None:
+    path = readable_path("./tests/data/split-repo-v2-migrated", fs_backend, tmp_path)
+    await do_icechunk_can_read_old_repo_with_manifest_splitting(path, backend=fs_backend)
+
+
+# Fixtures written natively by `filesystem_storage`, pinning its repo.d format.
+unix_only = pytest.mark.skipif(
+    sys.platform == "win32", reason="FilesystemStorage is Unix-only"
+)
+
+
+@unix_only
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+async def test_icechunk_can_read_old_repo_v2_fs() -> None:
+    await do_icechunk_can_read_old_repo(
+        "./tests/data/test-repo-v2-fs", backend="filesystem"
+    )
+
+
+@unix_only
+async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2_fs() -> None:
     await do_icechunk_can_read_old_repo_with_manifest_splitting(
-        "./tests/data/split-repo-v2"
+        "./tests/data/split-repo-v2-fs", backend="filesystem"
     )
 
 
-async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2_migrated() -> None:
-    await do_icechunk_can_read_old_repo_with_manifest_splitting(
-        "./tests/data/split-repo-v2-migrated"
+@unix_only
+@pytest.mark.parametrize(
+    "path", ["./tests/data/test-repo-v2-fs", "./tests/data/split-repo-v2-fs"]
+)
+def test_local_filesystem_refuses_v2_fs_repo(path: str, tmp_path: Path) -> None:
+    """`local_filesystem_storage` reads the repository through the mirror
+    `repo`, and refuses to write it: it doesn't implement the writer feature
+    `filesystem-layout-v1`."""
+    copy = tmp_path / "repo"
+    shutil.copytree(path, copy)
+    mirror = ic.Repository.open(storage=ic.local_filesystem_storage(str(copy)))
+    layout = ic.Repository.open(storage=ic.filesystem_storage(path))
+    assert mirror.list_branches() == layout.list_branches()
+    assert [s.id for s in mirror.ancestry(branch="main")] == [
+        s.id for s in layout.ancestry(branch="main")
+    ]
+    refused = r"filesystem-layout-v1.*first implemented in Icechunk 2\.4\.0"
+    with pytest.raises(ic.IcechunkError, match=refused):
+        mirror.writable_session("main")
+    with pytest.raises(ic.IcechunkError, match="filesystem-layout-v1"):
+        mirror.create_branch("refused", mirror.lookup_branch("main"))
+    assert mirror.list_branches() == layout.list_branches()
+
+
+def commit_to_copy(path: str, tmp_path: Path) -> None:
+    """Commit to a copy of the fixture at ``path``, which stays untouched."""
+    copy = tmp_path / "repo"
+    shutil.copytree(path, copy)
+    session = mk_repo(
+        create=False, store_path=str(copy), backend="filesystem"
+    ).writable_session("main")
+    small_chunks = zarr.open_array(session.store, path="group1/small_chunks", mode="a")
+    small_chunks[:] = 7
+    session.commit("commit to a copy")
+
+
+@unix_only
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+async def test_icechunk_can_read_old_leftovers_repo_v2_fs(tmp_path: Path) -> None:
+    path = "./tests/data/leftovers-repo-v2-fs"
+    current, versions = repo_d_versions(path)
+    assert versions == {current - 1, current, current + 1}
+    assert leftover_counts(path) == {"stage": 1, "tmp": 1, "stub": 1, "staging": 1}
+    await do_icechunk_can_read_old_repo(path, backend="filesystem")
+
+    # A checkout sets every mtime to now, younger than GC sweeps.
+    copy = tmp_path / "repo"
+    shutil.copytree(path, copy)
+    age_tree(copy)
+    # Not the version above the marker, which may be a commit in flight.
+    assert sweep_count(copy, dry_run=True) == LEFTOVERS_SWEPT
+    assert sweep_count(copy, dry_run=False) == LEFTOVERS_SWEPT_AFTER_TIDY_UP
+    # GC commits too, so the version above the marker ends up dead or current.
+    new_current, versions = repo_d_versions(copy)
+    assert versions == {new_current}
+    # Nested staging files and unknown names are never swept.
+    assert leftover_counts(copy) == {"stage": 0, "tmp": 0, "stub": 1, "staging": 1}
+    await do_icechunk_can_read_old_repo(str(copy), backend="filesystem")
+    commit_to_copy(str(copy), tmp_path / "commit")
+
+
+# test-repo-v2 with the writer feature `test-feature-v1`, which no Icechunk
+# implements. Written by the ignored Rust test `generate_unknown_feature_fixture`
+# (icechunk/tests/test_can_read_old_fixtures.rs), not by FIXTURE_SETS.
+UNKNOWN_FEATURE_REPO = "./tests/data/test-repo-v2-unknown-feature"
+
+
+def file_digests(root: Path) -> dict[str, str]:
+    return {
+        str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in root.rglob("*")
+        if p.is_file()
+    }
+
+
+@pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
+async def test_icechunk_can_read_old_repo_with_unknown_writer_feature(
+    tmp_path: Path,
+) -> None:
+    """Reads work, and every modification is refused naming the feature,
+    before anything is written."""
+    copy = tmp_path / "repo"
+    shutil.copytree(UNKNOWN_FEATURE_REPO, copy)
+    await do_icechunk_can_read_old_repo(
+        str(copy), backend="local_filesystem", writable=False
     )
+    repo = mk_repo(create=False, store_path=str(copy), backend="local_filesystem")
+    info = repo.inspect_repo_info()
+    assert info["writer_features"] == ["test-feature-v1"]
+    assert info["status"]["availability"] == "ReadOnly"
+    assert "test-feature-v1" in info["status"]["limited_availability_reason"]
+    assert info["latest_updates"][0]["update_type"]["type"] == "RepoStatusChangedUpdate"
+    assert repo.get_status().availability == ic.RepoAvailability.online
+
+    main = repo.lookup_branch("main")
+    parent = list(repo.ancestry(branch="main"))[1].id
+    modifications: dict[str, Callable[[], object]] = {
+        "writable_session": lambda: repo.writable_session("main"),
+        "create_branch": lambda: repo.create_branch("refused", main),
+        "delete_branch": lambda: repo.delete_branch("my-branch"),
+        "reset_branch": lambda: repo.reset_branch("main", parent),
+        "create_tag": lambda: repo.create_tag("refused", main),
+        "delete_tag": lambda: repo.delete_tag("it works!"),
+        "set_metadata": lambda: repo.set_metadata({"refused": True}),
+        "save_config": lambda: repo.save_config(),
+        "set_feature_flag": lambda: repo.set_feature_flag("move_node", False),
+        "set_status": lambda: repo.set_status(
+            ic.RepoStatus(ic.RepoAvailability.read_only)
+        ),
+        "garbage_collect": lambda: repo.garbage_collect(datetime.now(UTC)),
+        "expire_snapshots": lambda: repo.expire_snapshots(datetime.now(UTC)),
+        "convert_to_filesystem_layout": lambda: ic.filesystem_storage(
+            str(copy)
+        ).convert_to_filesystem_layout(),
+    }
+    before = file_digests(copy)
+    for name, modify in modifications.items():
+        with pytest.raises(
+            ic.ReadOnlyError,
+            match=r"\(test-feature-v1\), first implemented in a newer Icechunk",
+        ) as exc_info:
+            modify()
+        assert exc_info.value.kind == ic.ErrorKind.MISSING_WRITER_FEATURES, name
+    assert file_digests(copy) == before
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +737,7 @@ EXPIRED_FEATURE_HISTORY = ["feature post-t2", "Repository initialized"]
 EXPIRED_PROTECT_B_HISTORY = ["write b", "Repository initialized"]
 
 
-async def do_read_expired_repo(path: str, *, tracks_tx_logs: bool) -> None:
+async def do_read_expired_repo(path: str, *, tracks_tx_logs: bool, backend: str) -> None:
     """Read a repo that went through two rounds of expiration + GC.
 
     ``tracks_tx_logs`` selects the expectation: the v2 fixture written by a
@@ -472,7 +746,7 @@ async def do_read_expired_repo(path: str, *, tracks_tx_logs: bool) -> None:
     synthetic composite and a root-to-tip diff is complete); every other fixture
     lost those logs to GC (degraded but non-crashing).
     """
-    repo = ic.Repository.open(storage=ic.local_filesystem_storage(path))
+    repo = ic.Repository.open(storage=fs_storage(backend, path))
 
     # ----- common: surviving structure is identical across all fixtures -----
     branches = repo.list_branches()
@@ -542,22 +816,25 @@ async def do_read_expired_repo(path: str, *, tracks_tx_logs: bool) -> None:
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_read_expired_repo_v1_by_1_1_21() -> None:
     await do_read_expired_repo(
-        "./tests/data/expire-repo-v1-by-1.1.21", tracks_tx_logs=False
+        "./tests/data/expire-repo-v1-by-1.1.21",
+        tracks_tx_logs=False,
+        backend="local_filesystem",
     )
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
 async def test_read_expired_repo_v1_by_2_0_5() -> None:
     await do_read_expired_repo(
-        "./tests/data/expire-repo-v1-by-2.0.5", tracks_tx_logs=False
+        "./tests/data/expire-repo-v1-by-2.0.5",
+        tracks_tx_logs=False,
+        backend="local_filesystem",
     )
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_read_expired_repo_v2_by_2_0_5() -> None:
-    await do_read_expired_repo(
-        "./tests/data/expire-repo-v2-by-2.0.5", tracks_tx_logs=False
-    )
+async def test_read_expired_repo_v2_by_2_0_5(fs_backend: str, tmp_path: Path) -> None:
+    path = readable_path("./tests/data/expire-repo-v2-by-2.0.5", fs_backend, tmp_path)
+    await do_read_expired_repo(path, tracks_tx_logs=False, backend=fs_backend)
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
@@ -565,28 +842,60 @@ async def test_read_expired_repo_v1_by_working_copy() -> None:
     await do_read_expired_repo(
         "./tests/data/expire-repo-v1-by-working-copy",
         tracks_tx_logs=False,
+        backend="local_filesystem",
     )
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
-async def test_read_expired_repo_v2_by_working_copy() -> None:
-    await do_read_expired_repo(
-        "./tests/data/expire-repo-v2-by-working-copy",
-        tracks_tx_logs=True,
+async def test_read_expired_repo_v2_by_working_copy(
+    fs_backend: str, tmp_path: Path
+) -> None:
+    path = readable_path(
+        "./tests/data/expire-repo-v2-by-working-copy", fs_backend, tmp_path
     )
+    await do_read_expired_repo(path, tracks_tx_logs=True, backend=fs_backend)
+
+
+async def migrate_v1_fixture(from_dir: str, to_dir: str) -> None:
+    migrate_repo_v1_to_v2(from_dir, to_dir)
+
+
+Writer = Callable[[str], Coroutine[Any, Any, None]]
+
+# Each set maps the directories under tests/data it holds to their writers.
+FIXTURE_SETS: dict[str, dict[str, Writer]] = {
+    "v2": {
+        "test-repo-v2": lambda path: write_a_test_repo(path, backend="local_filesystem"),
+        "split-repo-v2": lambda path: write_a_split_repo(
+            path, backend="local_filesystem"
+        ),
+    },
+    "v2-migrated": {
+        "test-repo-v2-migrated": lambda path: migrate_v1_fixture(
+            "./tests/data/test-repo-v1", path
+        ),
+        "split-repo-v2-migrated": lambda path: migrate_v1_fixture(
+            "./tests/data/split-repo-v1", path
+        ),
+    },
+    "v2-fs": {
+        "test-repo-v2-fs": lambda path: write_a_test_repo(path, backend="filesystem"),
+        "split-repo-v2-fs": lambda path: write_a_split_repo(path, backend="filesystem"),
+        "leftovers-repo-v2-fs": write_a_leftovers_repo,
+    },
+}
 
 
 if __name__ == "__main__":
     import asyncio
 
-    # we import here so it works when the script is ran by pytest
-
-    asyncio.run(write_a_test_repo("./tests/data/test-repo-v2"))
-    asyncio.run(write_a_split_repo("./tests/data/split-repo-v2"))
-
-    migrate_repo_v1_to_v2(
-        "./tests/data/test-repo-v1", "./tests/data/test-repo-v2-migrated"
-    )
-    migrate_repo_v1_to_v2(
-        "./tests/data/split-repo-v1", "./tests/data/split-repo-v2-migrated"
-    )
+    sets = sys.argv[1:]
+    if not sets or not set(sets) <= FIXTURE_SETS.keys():
+        sys.exit(f"usage: {sys.argv[0]} {{{','.join(FIXTURE_SETS)}}}...")
+    for name in sets:
+        for directory, writer in FIXTURE_SETS[name].items():
+            path = f"./tests/data/{directory}"
+            if Path(path).exists():
+                print(f"Skipping {path}: it exists, delete it to regenerate")
+            else:
+                asyncio.run(writer(path))

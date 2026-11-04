@@ -478,6 +478,8 @@ prop_compose! {
         storage in option::of(storage_settings()),
         previous_file in option::of(any::<PathBuf>().prop_map(|path| path.to_string_lossy().to_string())),
         repo_update_retries in option::of(repo_update_retry_config()),
+        max_concurrent_decodes in option::of(any::<u16>()),
+        num_updates_per_repo_info_file in option::of(any::<u16>()),
         )
     -> RepositoryConfig {
         RepositoryConfig{
@@ -485,14 +487,14 @@ prop_compose! {
             get_partial_values_concurrency,
             compression,
             max_concurrent_requests,
-            max_concurrent_decodes: None,
+            max_concurrent_decodes,
             caching,
             manifest,
             virtual_chunk_containers,
             storage,
             previous_file,
             repo_update_retries,
-            num_updates_per_repo_info_file: None,
+            num_updates_per_repo_info_file,
         }
     }
 }

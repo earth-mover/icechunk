@@ -6,12 +6,15 @@ import pytest
 
 import icechunk
 import zarr
+from tests.conftest import fs_storage
 
 
 @pytest.fixture
-def repo(tmpdir: Path, any_spec_version: int | None) -> icechunk.Repository:
+def repo(
+    tmpdir: Path, any_spec_version: int | None, fs_backend: str
+) -> icechunk.Repository:
     repo = icechunk.Repository.create(
-        storage=icechunk.local_filesystem_storage(str(tmpdir)),
+        storage=fs_storage(fs_backend, str(tmpdir), any_spec_version),
         spec_version=any_spec_version,
     )
 

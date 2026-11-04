@@ -22,20 +22,21 @@ from icechunk import (
     VirtualChunkContainer,
     VirtualChunkSpec,
     in_memory_storage,
-    local_filesystem_storage,
     local_filesystem_store,
     s3_storage,
     upgrade_icechunk_repository,
 )
 from icechunk.distributed import merge_sessions
-from tests.conftest import Permission
+from tests.conftest import Permission, fs_storage
 
 
 @pytest.mark.parametrize("use_async", [True, False])
-async def test_session_fork(use_async: bool, any_spec_version: int | None) -> None:
+async def test_session_fork(
+    use_async: bool, any_spec_version: int | None, fs_backend: str
+) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(
-            local_filesystem_storage(tmpdir),
+            fs_storage(fs_backend, tmpdir, any_spec_version),
             spec_version=any_spec_version,
         )
         session = repo.writable_session("main")
@@ -120,12 +121,12 @@ async def test_session_fork(use_async: bool, any_spec_version: int | None) -> No
         assert groups == {"foo", "foo1", "foo2", "foo3", "foo4"}
 
 
-async def test_fork_chain(any_spec_version: int | None) -> None:
+async def test_fork_chain(any_spec_version: int | None, fs_backend: str) -> None:
     # a starter process dirties a session and forks it to a coordinator, which
     # writes and forks again, once per worker
     with tempfile.TemporaryDirectory() as tmpdir:
         repo = Repository.create(
-            local_filesystem_storage(tmpdir),
+            fs_storage(fs_backend, tmpdir, any_spec_version),
             spec_version=any_spec_version,
         )
         session = repo.writable_session("main")
@@ -543,16 +544,16 @@ async def test_repo_status_readonly_blocks_rearrange_session_async() -> None:
     await repo.garbage_collect_async(datetime.now(UTC))
 
 
-def test_open_doesnt_create_dir() -> None:
+def test_open_doesnt_create_dir(fs_backend: str) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         missing = Path(tmpdir) / "should_not_exist"
         present = Path(tmpdir) / "present"
 
         with pytest.raises(IcechunkError, match=r"the repository doesn.t exist"):
-            Repository.open(local_filesystem_storage(str(missing)))
+            Repository.open(fs_storage(fs_backend, str(missing)))
         assert not missing.exists()
 
-        Repository.create(local_filesystem_storage(str(present)))
+        Repository.create(fs_storage(fs_backend, str(present)))
         assert present.exists()
 
 

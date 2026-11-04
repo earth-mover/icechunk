@@ -2975,6 +2975,165 @@ impl PyLatencyStorage {
     }
 }
 
+/// The `Storage` returned by `filesystem_storage`, with the operations
+/// specific to its repository format.
+#[pyclass(name = "FilesystemStorage", extends = PyStorage)]
+#[derive(Debug)]
+pub(crate) struct PyFilesystemStorage {
+    #[cfg(unix)]
+    filesystem: Arc<storage::FilesystemStorage>,
+}
+
+impl PyFilesystemStorage {
+    #[cfg(unix)]
+    fn new(path: PathBuf, fsync: bool) -> PyResult<PyClassInitializer<Self>> {
+        let filesystem = Arc::new(
+            storage::FilesystemStorage::new(&path)
+                .map_err(PyIcechunkStoreError::StorageError)?
+                .with_fsync(fsync),
+        );
+        let base = PyStorage(Arc::clone(&filesystem) as Arc<dyn Storage + Send + Sync>);
+        Ok(PyClassInitializer::from(base).add_subclass(Self { filesystem }))
+    }
+
+    /// Fails with the platform error of `new_filesystem_storage_with`.
+    #[cfg(not(unix))]
+    fn new(path: PathBuf, fsync: bool) -> PyResult<PyClassInitializer<Self>> {
+        let storage = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(storage::new_filesystem_storage_with(
+                &path,
+                storage::FilesystemSettings::default().with_fsync(fsync),
+            ))
+            .map_err(PyIcechunkStoreError::StorageError)?;
+        Ok(PyClassInitializer::from(PyStorage(storage)).add_subclass(Self {}))
+    }
+}
+
+#[cfg(unix)]
+#[pymethods]
+impl PyFilesystemStorage {
+    fn convert_to_filesystem_layout(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                converted(filesystem.convert_to_filesystem_layout().await)
+            })
+        })
+    }
+
+    fn convert_to_filesystem_layout_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            converted(filesystem.convert_to_filesystem_layout().await)
+        })
+    }
+
+    fn convert_to_object_store_layout(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                converted(filesystem.convert_to_object_store_layout().await)
+            })
+        })
+    }
+
+    fn convert_to_object_store_layout_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            converted(filesystem.convert_to_object_store_layout().await)
+        })
+    }
+
+    fn publish_mirror(&self, py: Python<'_>) -> PyResult<PyPublishOutcome> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(async move { published(filesystem.publish_mirror().await) })
+        })
+    }
+
+    fn publish_mirror_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            published(filesystem.publish_mirror().await)
+        })
+    }
+}
+
+/// Whether the call converted the repository.
+#[cfg(unix)]
+fn converted(
+    outcome: storage::StorageResult<storage::ConversionOutcome>,
+) -> PyResult<bool> {
+    let outcome = outcome.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(matches!(outcome, storage::ConversionOutcome::Converted))
+}
+
+#[cfg(unix)]
+fn published(
+    outcome: storage::StorageResult<storage::PublishOutcome>,
+) -> PyResult<PyPublishOutcome> {
+    let outcome = outcome.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(match outcome {
+        storage::PublishOutcome::Current => {
+            PyPublishOutcome { current: true, left: None }
+        }
+        storage::PublishOutcome::GaveUp { left } => PyPublishOutcome {
+            current: false,
+            left: left.as_ref().and_then(version_name),
+        },
+    })
+}
+
+/// A version of `repo.d` by its file name, `<N>.<h>`.
+#[cfg(unix)]
+fn version_name(version: &storage::VersionInfo) -> Option<String> {
+    let storage::Generation(n) = version.generation.as_ref()?;
+    Some(format!("{n}.{}", version.etag()?))
+}
+
+/// What `FilesystemStorage.publish_mirror` did.
+#[pyclass(name = "PublishOutcome", frozen, eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PyPublishOutcome {
+    #[pyo3(get)]
+    current: bool,
+    #[pyo3(get)]
+    left: Option<String>,
+}
+
+impl PyRepr for PyPublishOutcome {
+    const EXECUTABLE: bool = false;
+    fn cls_name() -> &'static str {
+        "icechunk.storage.PublishOutcome"
+    }
+    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
+        vec![("current", py_bool(self.current)), ("left", py_option_str(&self.left))]
+    }
+}
+
+#[pymethods]
+impl PyPublishOutcome {
+    fn __repr__(&self) -> String {
+        <Self as PyRepr>::__repr__(self)
+    }
+    fn __str__(&self) -> String {
+        <Self as PyRepr>::__str__(self)
+    }
+    fn _repr_html_(&self) -> String {
+        <Self as PyRepr>::_repr_html_(self)
+    }
+}
+
 /// Effective `(read, write)` extra-header vecs.
 type RoleHeaders = (Vec<(String, String)>, Vec<(String, String)>);
 
@@ -3200,6 +3359,17 @@ impl PyStorage {
                 Ok(PyStorage(storage))
             })
         })
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (path, *, fsync = true))]
+    pub(crate) fn new_filesystem<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        path: PathBuf,
+        fsync: bool,
+    ) -> PyResult<Bound<'py, PyFilesystemStorage>> {
+        Bound::new(py, PyFilesystemStorage::new(path, fsync)?)
     }
 
     #[classmethod]

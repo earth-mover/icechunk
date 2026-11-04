@@ -20,7 +20,6 @@ from icechunk import (
     containers_credentials,
     http_store,
     in_memory_storage,
-    local_filesystem_storage,
     local_filesystem_store,
     s3_credentials,
     s3_store,
@@ -33,7 +32,7 @@ from icechunk.credentials import (
     s3_anonymous_credentials,
 )
 from icechunk.repository import Repository
-from tests.conftest import Permission, write_chunks_to_minio
+from tests.conftest import Permission, fs_storage, write_chunks_to_minio
 
 
 @pytest.mark.filterwarnings("ignore:datetime.datetime.utcnow")
@@ -268,6 +267,7 @@ async def test_public_virtual_refs(
     authorize_with_none: bool,
     use_async: bool,
     any_spec_version: int | None,
+    fs_backend: str,
 ) -> None:
     config = RepositoryConfig.default()
     container = VirtualChunkContainer(url_prefix, store_config)
@@ -277,7 +277,9 @@ async def test_public_virtual_refs(
 
     def open_repo() -> Repository:
         return Repository.open_or_create(
-            storage=local_filesystem_storage(f"{tmpdir}/virtual-{container_type}"),
+            storage=fs_storage(
+                fs_backend, f"{tmpdir}/virtual-{container_type}", any_spec_version
+            ),
             config=config,
             authorize_virtual_chunk_access={url_prefix: credentials},
             create_version=any_spec_version,

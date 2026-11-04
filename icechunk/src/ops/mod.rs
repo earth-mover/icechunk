@@ -12,13 +12,13 @@ use tracing::{info, instrument, warn};
 
 use crate::{
     StorageError,
-    asset_manager::AssetManager,
+    asset_manager::{AssetManager, Modification},
     config::RepoUpdateRetryConfig,
     feature_flags::raise_if_feature_flag_disabled,
     format::{
         IcechunkFormatError, IcechunkResult, SnapshotId,
         format_constants::SpecVersionBin,
-        repo_info::{RepoAvailability, RepoInfo},
+        repo_info::RepoInfo,
         snapshot::{Snapshot, SnapshotInfo},
     },
     refs::{RefError, RefResult, list_refs},
@@ -44,8 +44,8 @@ pub enum GCError {
 pub type GCResult<A> = Result<A, GCError>;
 
 /// Refuse to run a maintenance operation on read-only storage, on a repo that
-/// is not online, or when its feature flag is disabled. `op_name` names the
-/// operation in the error message.
+/// can't be modified (see [`AssetManager::ensure_modifiable`]), or when its
+/// feature flag is disabled. `op_name` names the operation in the error message.
 pub(crate) async fn ensure_repo_writable(
     asset_manager: &AssetManager,
     op_name: &str,
@@ -57,16 +57,16 @@ pub(crate) async fn ensure_repo_writable(
             .capture()
             .map_err(GCError::Repository);
     }
-    // repo status only exists on IC2+
+    // the repo info only exists on IC2+
     if asset_manager.spec_version() >= SpecVersionBin::V2 {
         let (repo_info, _) = asset_manager.fetch_repo_info().await?;
-        if repo_info.status()?.availability != RepoAvailability::Online {
-            return Err(RepositoryErrorKind::ReadonlyRepository(format!(
-                "Cannot {op_name}"
-            )))
-            .capture()
-            .map_err(GCError::Repository);
-        }
+        asset_manager
+            .ensure_modifiable(
+                &repo_info,
+                Modification::Any,
+                Some(&format!("Cannot {op_name}")),
+            )
+            .await?;
         raise_if_feature_flag_disabled(repo_info.as_ref(), flag, flag_description)
             .inject()
             .map_err(GCError::Repository)?;
@@ -182,6 +182,8 @@ pub mod deleter;
 pub mod expiration;
 /// Garbage collection to remove unreferenced data.
 pub mod gc;
+#[cfg(all(test, not(feature = "shuttle")))]
+mod gc_order_tests;
 /// Manifest optimization and rebuilding.
 pub mod manifests;
 /// A hash set sharded across many locks, for parallel accumulation.

@@ -1,0 +1,198 @@
+include "common.fbs";
+
+namespace generated;
+
+// --8<-- [start:manifest_file_info]
+// V1 manifest file metadata.
+struct ManifestFileInfo {
+    // The id of the manifest file in the repository's storage.
+    id: ObjectId12;
+
+    // Total serialized size of the manifest in bytes.
+    size_bytes: uint64;
+
+    // Total number of chunk references in the manifest.
+    num_chunk_refs: uint32;
+}
+// --8<-- [end:manifest_file_info]
+
+// --8<-- [start:manifest_file_info_v2]
+// V2 manifest file metadata.
+// The id, size_bytes, and num_chunk_refs fields MUST be present.
+// They are not marked `required` to allow future schema evolution.
+// Introduced in spec version 2.
+table ManifestFileInfoV2 {
+    // The id of the manifest file in the repository's storage.
+    id: ObjectId12;
+
+    // Total serialized size of the manifest in bytes.
+    size_bytes: uint64;
+
+    // Total number of chunk references in the manifest.
+    num_chunk_refs: uint32;
+
+    // Reserved for future use. Opaque bytes for future extensions.
+    extra: [uint8];
+}
+// --8<-- [end:manifest_file_info_v2]
+
+// --8<-- [start:chunk_index_range]
+// A range of chunk indexes
+struct ChunkIndexRange {
+  // inclusive
+  from: uint32;
+
+  // exclusive
+  to: uint32;
+}
+// --8<-- [end:chunk_index_range]
+
+// --8<-- [start:manifest_ref]
+// A pointer to a manifest file for a specific region of an array's chunk grid.
+table ManifestRef {
+    // The id of the manifest file in the repository's storage.
+    object_id: ObjectId12 (required);
+
+    // One ChunkIndexRange per dimension, in the same order as the array's
+    // dimensions. Defines which chunk coordinates this manifest covers.
+    extents: [ChunkIndexRange] (required);
+}
+// --8<-- [end:manifest_ref]
+
+// --8<-- [start:dimension_shape]
+// V1 shape representation for one dimension.
+struct DimensionShape {
+  // Total number of elements along this dimension.
+  array_length: uint64;
+
+  // Size of each chunk along this dimension.
+  // When a V2 implementation writes a V1 repo, this field may be
+  // inaccurate: V2 only tracks num_chunks, so chunk_length is
+  // back-computed as array_length.div_ceil(num_chunks).
+  // The authoritative chunk size comes from the Zarr metadata
+  // in user_data, not from this field.
+  chunk_length: uint64;
+}
+// --8<-- [end:dimension_shape]
+
+// --8<-- [start:dimension_shape_v2]
+// V2 shape representation for one dimension.
+table DimensionShapeV2 {
+  // Total number of array elements along this dimension.
+  array_length: uint64;
+
+  // Number of chunks along this dimension.
+  num_chunks: uint32;
+}
+// --8<-- [end:dimension_shape_v2]
+
+// --8<-- [start:dimension_name]
+table DimensionName {
+  // The name of this dimension. Absent if the dimension is unnamed.
+  name: string;
+}
+// --8<-- [end:dimension_name]
+
+// --8<-- [start:group_node_data]
+// Marker for a group node. Contains no data.
+table GroupNodeData {}
+// --8<-- [end:group_node_data]
+
+// --8<-- [start:array_node_data]
+// Data for an array node.
+table ArrayNodeData {
+  // V1 shape representation: one entry per dimension.
+  // In V2 snapshots this MUST be an empty list (use shape_v2 instead).
+  shape: [DimensionShape] (required);
+
+  // Optional dimension names, one per dimension.
+  dimension_names: [DimensionName];
+
+  // Pointers to all manifest files containing chunk references for this array.
+  // For a given array, manifest extents MUST NOT overlap — each chunk
+  // coordinate MUST be covered by at most one ManifestRef.
+  manifests: [ManifestRef] (required);
+
+  // V2 shape representation: one entry per dimension.
+  // In V1 snapshots this is absent. In V2 snapshots this MUST be present.
+  // Introduced in spec version 2.
+  shape_v2: [DimensionShapeV2];
+}
+// --8<-- [end:array_node_data]
+
+// --8<-- [start:node_data]
+// the node contents, that can be either a group or an array
+union NodeData {
+  Array :ArrayNodeData,
+  Group :GroupNodeData,
+}
+// --8<-- [end:node_data]
+
+// --8<-- [start:node_snapshot]
+// A single node (array or group) in the repository hierarchy.
+table NodeSnapshot {
+    // 8 random bytes identifying this node.
+    // Stable across snapshots — a node keeps its id for its lifetime.
+    id: ObjectId8 (required);
+
+    // The node's absolute path (see node path definition in common.fbs).
+    path: string (required);
+
+    // The Zarr metadata for this node — the contents of its zarr.json,
+    // stored as a UTF-8 JSON byte string.
+    user_data: [uint8] (required);
+
+    // The node contents — either an array or a group.
+    node_data: NodeData (required);
+
+    // Reserved for future use. Opaque bytes for future extensions.
+    // Introduced in spec version 2.
+    extra: [uint8];
+}
+// --8<-- [end:node_snapshot]
+
+
+// --8<-- [start:snapshot_table]
+table Snapshot {
+  // 12 random bytes identifying this snapshot.
+  // Also encoded in the file name.
+  id: ObjectId12 (required);
+
+  // The id of the parent snapshot.
+  // In V1 snapshots: MUST be present for all snapshots except the initial one.
+  // In V2 snapshots: MUST be empty (parent tracking moved to RepoInfo).
+  parent_id: ObjectId12;
+
+  // All nodes in this snapshot.
+  // MUST be sorted by path (see node path sort order in common.fbs).
+  nodes: [NodeSnapshot] (required);
+
+  // Time at which this snapshot was committed.
+  // Non-leap microseconds since Jan 1, 1970 UTC.
+  flushed_at: uint64;
+
+  // Commit message.
+  message: string (required);
+
+  // Snapshot-level metadata.
+  // MUST be sorted in ascending UTF-8 byte order of MetadataItem.name.
+  metadata: [MetadataItem] (required);
+
+  // The list of all manifest files this snapshot points to.
+  // MUST be sorted in ascending byte order of ManifestFileInfo.id.
+  // MUST be empty in V2 snapshots (use manifest_files_v2 instead).
+  manifest_files: [ManifestFileInfo] (required);
+
+  // V2 replacement for manifest_files.
+  // MUST be populated in V2 snapshots.
+  // MUST be sorted in ascending byte order of ManifestFileInfoV2.id.
+  // Introduced in spec version 2.
+  manifest_files_v2: [ManifestFileInfoV2];
+
+  // Reserved for future use. Opaque bytes for future extensions.
+  // Introduced in spec version 2.
+  extra: [uint8];
+}
+// --8<-- [end:snapshot_table]
+
+root_type Snapshot;
