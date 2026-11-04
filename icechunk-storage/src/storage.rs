@@ -56,6 +56,16 @@ pub enum StorageErrorKind {
     /// The store asked us to slow down (S3 `SlowDown` / HTTP 503 / 429). Retry with backoff.
     #[error("storage throttled the request: {code}: {message}")]
     Throttled { code: String, message: String },
+    /// The storage host could not be reached, or something other than the storage
+    /// service answered (typically a firewall or proxy).
+    #[error("{}", unreachable_message(host, failure))]
+    Unreachable {
+        // Boxed to keep `StorageError` under clippy's `result_large_err` threshold.
+        host: Box<str>,
+        failure: Box<NetworkFailure>,
+        #[source]
+        cause: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     #[error("storage error: {0}")]
     Other(String),
 }
@@ -63,6 +73,124 @@ pub enum StorageErrorKind {
 impl StorageErrorKind {
     pub fn is_throttled(&self) -> bool {
         matches!(self, StorageErrorKind::Throttled { .. })
+    }
+
+    pub fn is_unreachable(&self) -> bool {
+        matches!(self, StorageErrorKind::Unreachable { .. })
+    }
+}
+
+/// How a request to a storage host failed at the network level.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NetworkFailure {
+    Connect,
+    Timeout,
+    Tls,
+    /// Something answered, but not the storage service.
+    UnexpectedResponse {
+        status: u16,
+        content_type: Option<String>,
+        snippet: Option<String>,
+    },
+}
+
+impl Display for NetworkFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NetworkFailure::Connect => write!(f, "could not connect"),
+            NetworkFailure::Timeout => write!(f, "the request timed out"),
+            NetworkFailure::Tls => write!(f, "the TLS handshake failed"),
+            NetworkFailure::UnexpectedResponse { status, content_type, snippet } => {
+                write!(
+                    f,
+                    "got an unexpected response (HTTP {status}, Content-Type: {}) instead of a storage service response",
+                    content_type.as_deref().unwrap_or("none")
+                )?;
+                if let Some(snippet) = snippet {
+                    write!(f, "; response begins: \"{snippet}\"")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl NetworkFailure {
+    fn hint(&self) -> &'static str {
+        match self {
+            NetworkFailure::Tls => {
+                " If your network uses a TLS-inspecting proxy, its CA certificate may need to be trusted on this machine."
+            }
+            _ => "",
+        }
+    }
+}
+
+/// The user-facing text for an unreachable storage host.
+pub fn unreachable_message(host: &str, failure: &NetworkFailure) -> String {
+    format!(
+        "could not reach storage at {host}: {failure}. This can happen when a firewall or proxy blocks or intercepts traffic to {host}. If you are on a corporate or institutional network, ask your network administrator to allow access to this host.{}",
+        failure.hint()
+    )
+}
+
+pub fn unreachable_error(
+    host: impl Into<String>,
+    failure: NetworkFailure,
+    cause: impl std::error::Error + Send + Sync + 'static,
+) -> StorageError {
+    StorageError::capture(StorageErrorKind::Unreachable {
+        host: host.into().into_boxed_str(),
+        failure: Box::new(failure),
+        cause: Box::new(cause),
+    })
+}
+
+const MAX_SNIPPET_CHARS: usize = 200;
+
+/// Printable, whitespace-collapsed prefix of a response body, at most 200 characters.
+pub fn sanitize_snippet(body: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(body);
+    let cleaned: String =
+        text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let collapsed = cleaned.split_whitespace().join(" ");
+    let out: String = collapsed.chars().take(MAX_SNIPPET_CHARS).collect();
+    let out = out.trim().to_string();
+    (!out.is_empty()).then_some(out)
+}
+
+/// True if the error chain contains a rustls error, directly or wrapped in an `io::Error`.
+pub fn error_chain_has_tls_failure(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = current {
+        if e.downcast_ref::<rustls::Error>().is_some() {
+            return true;
+        }
+        if let Some(io) = e.downcast_ref::<std::io::Error>()
+            && let Some(inner) = io.get_ref()
+            && inner.downcast_ref::<rustls::Error>().is_some()
+        {
+            return true;
+        }
+        current = e.source();
+    }
+    false
+}
+
+/// The body format a storage service is expected to answer with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExpectedBody {
+    Xml,
+    Json,
+}
+
+/// True when a `Content-Type` is present and is not the format the storage service uses.
+pub fn is_non_storage_content_type(ct: Option<&str>, expected: ExpectedBody) -> bool {
+    let Some(ct) = ct else { return false };
+    let media = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    match expected {
+        ExpectedBody::Xml => media != "application/xml" && media != "text/xml",
+        ExpectedBody::Json => media != "application/json",
     }
 }
 
@@ -930,5 +1058,92 @@ mod tests {
         assert_eq!(filtered(&ids, &["0B"]), vec!["0B"]);
         assert!(filtered(&ids, &[]).is_empty());
         assert!(filtered(&ids, &["1"]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod network_failure_tests {
+    use super::*;
+
+    #[test]
+    fn unexpected_response_display() {
+        let e = StorageErrorKind::Unreachable {
+            host: "abc123.r2.cloudflarestorage.com".into(),
+            failure: NetworkFailure::UnexpectedResponse {
+                status: 403,
+                content_type: Some("text/html".into()),
+                snippet: Some("Access blocked".into()),
+            }
+            .into(),
+            cause: "x".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "could not reach storage at abc123.r2.cloudflarestorage.com: got an unexpected response (HTTP 403, Content-Type: text/html) instead of a storage service response; response begins: \"Access blocked\". This can happen when a firewall or proxy blocks or intercepts traffic to abc123.r2.cloudflarestorage.com. If you are on a corporate or institutional network, ask your network administrator to allow access to this host."
+        );
+    }
+
+    #[test]
+    fn tls_display_adds_ca_sentence() {
+        let e = StorageErrorKind::Unreachable {
+            host: "h.invalid".into(),
+            failure: NetworkFailure::Tls.into(),
+            cause: "x".into(),
+        };
+        assert!(
+            e.to_string()
+                .ends_with("its CA certificate may need to be trusted on this machine.")
+        );
+    }
+
+    #[test]
+    fn connect_display_has_no_ca_sentence() {
+        let e = StorageErrorKind::Unreachable {
+            host: "h.invalid".into(),
+            failure: NetworkFailure::Connect.into(),
+            cause: "x".into(),
+        };
+        let s = e.to_string();
+        assert!(s.contains("could not connect."));
+        assert!(!s.contains("CA certificate"));
+    }
+
+    #[test]
+    fn snippet_is_capped_and_printable() {
+        let mut body = b"<html>\n\t<body>\x00\x07Blocked".to_vec();
+        body.extend(iter::repeat_n(b'a', 1000));
+        let s = sanitize_snippet(&body).unwrap();
+        assert!(s.chars().count() <= 200);
+        assert!(s.starts_with("<html> <body> Blocked"));
+        assert!(s.chars().all(|c| !c.is_control()));
+    }
+
+    #[test]
+    fn empty_snippet_is_none() {
+        assert_eq!(sanitize_snippet(b" \n\t"), None);
+    }
+
+    #[test]
+    fn content_type_checks() {
+        assert!(!is_non_storage_content_type(
+            Some("application/xml; charset=utf-8"),
+            ExpectedBody::Xml
+        ));
+        assert!(!is_non_storage_content_type(Some("TEXT/XML"), ExpectedBody::Xml));
+        assert!(is_non_storage_content_type(Some("text/html"), ExpectedBody::Xml));
+        assert!(!is_non_storage_content_type(None, ExpectedBody::Xml));
+        assert!(!is_non_storage_content_type(
+            Some("application/json"),
+            ExpectedBody::Json
+        ));
+    }
+
+    #[test]
+    fn tls_detected_through_io_error() {
+        let io = std::io::Error::other(rustls::Error::General("bad".into()));
+        assert!(error_chain_has_tls_failure(&io));
+        assert!(!error_chain_has_tls_failure(&std::io::Error::from(
+            std::io::ErrorKind::ConnectionRefused
+        )));
     }
 }
