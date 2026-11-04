@@ -1059,10 +1059,9 @@ mod network_failure_tests {
             failure: NetworkFailure::Tls.into(),
             cause: "x".into(),
         };
-        assert!(
-            e.to_string()
-                .ends_with("its CA certificate may need to be trusted on this machine.")
-        );
+        assert!(e.to_string().ends_with(
+            "its CA certificate may need to be trusted, for example by setting ICECHUNK_TLS_CA_FILE to a PEM bundle that includes it."
+        ));
     }
 
     #[test]

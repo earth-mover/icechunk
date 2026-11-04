@@ -9,7 +9,7 @@ use icechunk::{
     refs::RefErrorKind,
     repository::{RepositoryError, RepositoryErrorKind},
     session::{SessionError, SessionErrorKind},
-    storage::StorageErrorKind,
+    storage::{NetworkFailure, StorageErrorKind},
     store::{KeyNotFoundError, StoreError, StoreErrorKind},
 };
 use miette::{Diagnostic, GraphicalReportHandler};
@@ -213,18 +213,36 @@ enum Classified {
     },
     /// `class` names a class in `icechunk._exceptions`; `None` is the
     /// Rust-defined `IcechunkError` root.
+    /// `ca_hint_in_message` is set when the error's own message already
+    /// suggests `ICECHUNK_TLS_CA_FILE` (an unreachable host after a TLS
+    /// failure), so the generic TLS hint would only repeat it.
     Class {
         class: Option<&'static str>,
         code: &'static str,
+        ca_hint_in_message: bool,
     },
 }
 
 fn class(class: &'static str, code: &'static str) -> Classified {
-    Classified::Class { class: Some(class), code }
+    Classified::Class { class: Some(class), code, ca_hint_in_message: false }
 }
 
 fn general(code: &'static str) -> Classified {
-    Classified::Class { class: None, code }
+    Classified::Class { class: None, code, ca_hint_in_message: false }
+}
+
+fn unreachable(failure: &NetworkFailure) -> Classified {
+    Classified::Class {
+        class: Some("StorageError"),
+        code: codes::STORAGE_UNREACHABLE,
+        ca_hint_in_message: *failure == NetworkFailure::Tls,
+    }
+}
+
+impl Classified {
+    fn ca_hint_in_message(&self) -> bool {
+        matches!(self, Classified::Class { ca_hint_in_message: true, .. })
+    }
 }
 
 // The `Kind` enums in the core crates are mostly #[non_exhaustive], which
@@ -403,7 +421,7 @@ fn classify_storage(kind: &StorageErrorKind) -> Classified {
         K::CannotParseUrl { .. } => class("StorageError", codes::CANNOT_PARSE_URL),
         K::BadRedirect(_) => class("StorageError", codes::BAD_REDIRECT),
         K::Throttled { .. } => class("StorageError", codes::THROTTLED),
-        K::Unreachable { .. } => class("StorageError", codes::STORAGE_UNREACHABLE),
+        K::Unreachable { failure, .. } => unreachable(failure),
         K::Other(_) => class("StorageError", codes::STORAGE_OTHER),
     }
 }
@@ -516,7 +534,7 @@ fn classify_virtual_ref(kind: &VirtualReferenceErrorKind) -> Classified {
         | K::UnsupportedObjectKeyForBackend(_)
         | K::Decoding(_) => class("InvalidInputError", codes::INVALID_VIRTUAL_REF),
         K::FetchError(_) => class("StorageError", codes::VIRTUAL_CHUNK_FETCH),
-        K::Unreachable { .. } => class("StorageError", codes::STORAGE_UNREACHABLE),
+        K::Unreachable { failure, .. } => unreachable(failure),
         K::ObjectModified(_) => class("StorageError", codes::VIRTUAL_CHUNK_MODIFIED),
         K::InvalidObjectSize { .. } => class("StorageError", codes::INVALID_OBJECT_SIZE),
         K::AzureConfigurationMustIncludeAccount => {
@@ -626,7 +644,13 @@ fn classify(error: &PyIcechunkStoreError) -> Classified {
 /// `str(e)`: a one-line Display chain of causes, followed by the `ICError`
 /// span-trace context blocks (tests and users rely on the spans being in the
 /// message). The full miette report goes into a PEP 678 note as well.
-fn chain_message(error: &(dyn std::error::Error + 'static)) -> String {
+///
+/// `ca_hint_in_message` drops the generic TLS hint, which the message already
+/// carries; hints about a CA file that is set say something new and are kept.
+fn chain_message(
+    error: &(dyn std::error::Error + 'static),
+    ca_hint_in_message: bool,
+) -> String {
     const CTX_MARKER: &str = "\n\ncontext:\n";
     let mut parts: Vec<String> = Vec::new();
     let mut contexts: Vec<String> = Vec::new();
@@ -647,7 +671,9 @@ fn chain_message(error: &(dyn std::error::Error + 'static)) -> String {
         current = err.source();
     }
     let mut out = parts.join(": ");
-    if let Some(hint) = icechunk::storage::tls::tls_hint(error) {
+    let hint = icechunk::storage::tls::tls_hint(error)
+        .filter(|hint| !ca_hint_in_message || hint != icechunk::storage::tls::TLS_HINT);
+    if let Some(hint) = hint {
         out.push_str("\n\nhint: ");
         out.push_str(&hint);
     }
@@ -688,10 +714,10 @@ fn build_pyerr(
         Classified::RebaseFailed { snapshot, conflicts } => {
             py.get_type::<PyRebaseFailedError>().call1((snapshot, conflicts))?
         }
-        Classified::Class { class: None, code } => {
+        Classified::Class { class: None, code, .. } => {
             py.get_type::<IcechunkError>().call1((message, Some(code)))?
         }
-        Classified::Class { class: Some(name), code } => {
+        Classified::Class { class: Some(name), code, .. } => {
             exc_class(py, name)?.call1((message, Some(code)))?
         }
     };
@@ -735,11 +761,12 @@ impl From<PyIcechunkStoreError> for PyErr {
                 };
                 // the SessionError variant is not #[error(transparent)], so it
                 // has no source(); chain from the inner error to keep causes
+                let ca_hint = classified.ca_hint_in_message();
                 let message = match &error {
                     PyIcechunkStoreError::SessionError(e) => {
-                        format!("session error: {}", chain_message(e))
+                        format!("session error: {}", chain_message(e, ca_hint))
                     }
-                    error => chain_message(error),
+                    error => chain_message(error, ca_hint),
                 };
                 Python::attach(|py| {
                     build_pyerr(py, classified, message, note).unwrap_or_else(|e| e)

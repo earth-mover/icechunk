@@ -25,7 +25,7 @@
 - Body snippet: at most 200 characters; non-printable characters become spaces, runs of whitespace collapse, and the result is trimmed. If empty, `None`.
 - Exact wording (Display), with `{host}` substituted:
   - `could not reach storage at {host}: {shape}. This can happen when a firewall or proxy blocks or intercepts traffic to {host}. If you are on a corporate or institutional network, ask your network administrator to allow access to this host.`
-  - Extra sentence appended for `Tls` only: ` If your network uses a TLS-inspecting proxy, its CA certificate may need to be trusted on this machine.`
+  - Extra sentence appended for `Tls` only: ` If your network uses a TLS-inspecting proxy, its CA certificate may need to be trusted, for example by setting ICECHUNK_TLS_CA_FILE to a PEM bundle that includes it.` In Python, the generic `ICECHUNK_TLS_CA_FILE` hint is then not appended a second time.
   - `{shape}`:
     - Connect: `could not connect`
     - Timeout: `the request timed out`

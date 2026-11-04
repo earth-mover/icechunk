@@ -42,7 +42,7 @@ impl NetworkFailure {
     fn hint(&self) -> &'static str {
         match self {
             NetworkFailure::Tls => {
-                " If your network uses a TLS-inspecting proxy, its CA certificate may need to be trusted on this machine."
+                " If your network uses a TLS-inspecting proxy, its CA certificate may need to be trusted, for example by setting ICECHUNK_TLS_CA_FILE to a PEM bundle that includes it."
             }
             _ => "",
         }
@@ -60,6 +60,13 @@ pub fn unreachable_message(host: &str, failure: &NetworkFailure) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tls_message_points_at_ca_file() {
+        assert!(unreachable_message("h.invalid", &NetworkFailure::Tls).ends_with(
+            " If your network uses a TLS-inspecting proxy, its CA certificate may need to be trusted, for example by setting ICECHUNK_TLS_CA_FILE to a PEM bundle that includes it."
+        ));
+    }
 
     #[test]
     fn unexpected_response_without_snippet_or_content_type() {
