@@ -1195,24 +1195,29 @@ impl PyRepository {
 /// Most functions in this class call `Runtime.block_on` so they need to `detach` so other
 /// python threads can make progress in the case of an actual block
 impl PyRepository {
-    pub(crate) fn __repr__(&self) -> String {
-        let cls = self.cls_name_with_version();
-        let fields = self.fields(ReprMode::Str);
-        let refs: Vec<(&str, &str)> =
-            fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        crate::display::dataclass_str(&cls, &refs)
+    // The repository lock holder may need the GIL, so wait for it detached.
+    pub(crate) fn __repr__(&self, py: Python<'_>) -> String {
+        py.detach(|| {
+            let cls = self.cls_name_with_version();
+            let fields = self.fields(ReprMode::Str);
+            let refs: Vec<(&str, &str)> =
+                fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            crate::display::dataclass_str(&cls, &refs)
+        })
     }
 
-    pub(crate) fn __str__(&self) -> String {
-        self.__repr__()
+    pub(crate) fn __str__(&self, py: Python<'_>) -> String {
+        self.__repr__(py)
     }
 
-    pub(crate) fn _repr_html_(&self) -> String {
-        let cls = self.cls_name_with_version();
-        let fields = self.fields(ReprMode::Html);
-        let refs: Vec<(&str, &str)> =
-            fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        crate::display::dataclass_html_repr(&cls, &refs)
+    pub(crate) fn _repr_html_(&self, py: Python<'_>) -> String {
+        py.detach(|| {
+            let cls = self.cls_name_with_version();
+            let fields = self.fields(ReprMode::Html);
+            let refs: Vec<(&str, &str)> =
+                fields.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            crate::display::dataclass_html_repr(&cls, &refs)
+        })
     }
 
     #[classmethod]
@@ -1636,21 +1641,21 @@ impl PyRepository {
         })
     }
 
-    pub(crate) fn config(&self) -> PyRepositoryConfig {
-        self.0.blocking_read().config().clone().into()
+    pub(crate) fn config(&self, py: Python<'_>) -> PyRepositoryConfig {
+        py.detach(|| self.0.blocking_read().config().clone().into())
     }
 
     #[getter]
-    pub(crate) fn attribution(&self) -> PyAttribution {
-        PyAttribution(self.0.blocking_read().attribution().clone())
+    pub(crate) fn attribution(&self, py: Python<'_>) -> PyAttribution {
+        py.detach(|| PyAttribution(self.0.blocking_read().attribution().clone()))
     }
 
-    pub(crate) fn storage_settings(&self) -> PyStorageSettings {
-        self.0.blocking_read().storage_settings().clone().into()
+    pub(crate) fn storage_settings(&self, py: Python<'_>) -> PyStorageSettings {
+        py.detach(|| self.0.blocking_read().storage_settings().clone().into())
     }
 
-    pub(crate) fn storage(&self) -> PyStorage {
-        PyStorage(Arc::clone(self.0.blocking_read().storage()))
+    pub(crate) fn storage(&self, py: Python<'_>) -> PyStorage {
+        py.detach(|| PyStorage(Arc::clone(self.0.blocking_read().storage())))
     }
 
     #[getter]
@@ -1658,7 +1663,8 @@ impl PyRepository {
         &self,
         py: Python<'py>,
     ) -> PyResult<Bound<'py, PySet>> {
-        let prefixes = self.0.blocking_read().authorized_virtual_container_prefixes();
+        let prefixes =
+            py.detach(|| self.0.blocking_read().authorized_virtual_container_prefixes());
         PySet::new(py, prefixes.iter().map(|s| s.as_str()))
     }
 
@@ -2255,6 +2261,7 @@ impl PyRepository {
 
     pub(crate) fn list_manifest_files(
         &self,
+        py: Python<'_>,
         snapshot_id: &str,
     ) -> PyResult<Vec<PyManifestFileInfo>> {
         let snapshot_id = SnapshotId::try_from(snapshot_id).map_err(|_| {
@@ -2262,17 +2269,19 @@ impl PyRepository {
                 RepositoryErrorKind::InvalidSnapshotId(snapshot_id.to_owned()),
             ))
         })?;
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let res = self
-                .0
-                .read()
-                .await
-                .lookup_manifest_files(&snapshot_id)
-                .await
-                .map_err(PyIcechunkStoreError::RepositoryError)?
-                .map_into()
-                .collect();
-            Ok(res)
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let res = self
+                    .0
+                    .read()
+                    .await
+                    .lookup_manifest_files(&snapshot_id)
+                    .await
+                    .map_err(PyIcechunkStoreError::RepositoryError)?
+                    .map_into()
+                    .collect();
+                Ok(res)
+            })
         })
     }
 
@@ -3032,17 +3041,27 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (snapshot_id, *, pretty = true))]
-    fn inspect_snapshot(&self, snapshot_id: String, pretty: bool) -> PyResult<String> {
-        let result = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(async move {
-                let lock = self.0.read().await;
-                let snap = SnapshotId::try_from(snapshot_id.as_str()).map_err(|e| {
-                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
-                })?;
-                let res = snapshot_json(lock.asset_manager(), &snap, pretty).await?;
-                Ok(res)
-            })
-            .map_err(PyIcechunkStoreError::RepositoryError)?;
+    fn inspect_snapshot(
+        &self,
+        py: Python<'_>,
+        snapshot_id: String,
+        pretty: bool,
+    ) -> PyResult<String> {
+        let result = py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(async move {
+                    let lock = self.0.read().await;
+                    let snap =
+                        SnapshotId::try_from(snapshot_id.as_str()).map_err(|e| {
+                            RepositoryError::capture(RepositoryErrorKind::Other(
+                                e.to_string(),
+                            ))
+                        })?;
+                    let res = snapshot_json(lock.asset_manager(), &snap, pretty).await?;
+                    Ok(res)
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)
+        })?;
         Ok(result)
     }
 
@@ -3069,14 +3088,16 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (*, pretty = true))]
-    fn inspect_repo_info(&self, pretty: bool) -> PyResult<String> {
-        let result = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(async move {
-                let lock = self.0.read().await;
-                let res = repo_info_json(lock.asset_manager(), pretty).await?;
-                Ok(res)
-            })
-            .map_err(PyIcechunkStoreError::RepositoryError)?;
+    fn inspect_repo_info(&self, py: Python<'_>, pretty: bool) -> PyResult<String> {
+        let result = py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(async move {
+                    let lock = self.0.read().await;
+                    let res = repo_info_json(lock.asset_manager(), pretty).await?;
+                    Ok(res)
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)
+        })?;
         Ok(result)
     }
 
@@ -3097,17 +3118,26 @@ impl PyRepository {
     }
 
     #[pyo3(signature = (manifest_id, *, pretty = true))]
-    fn inspect_manifest(&self, manifest_id: String, pretty: bool) -> PyResult<String> {
-        let result = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(async move {
-                let lock = self.0.read().await;
-                let id = ManifestId::try_from(manifest_id.as_str()).map_err(|e| {
-                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
-                })?;
-                let res = manifest_json(lock.asset_manager(), &id, pretty).await?;
-                Ok(res)
-            })
-            .map_err(PyIcechunkStoreError::RepositoryError)?;
+    fn inspect_manifest(
+        &self,
+        py: Python<'_>,
+        manifest_id: String,
+        pretty: bool,
+    ) -> PyResult<String> {
+        let result = py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(async move {
+                    let lock = self.0.read().await;
+                    let id = ManifestId::try_from(manifest_id.as_str()).map_err(|e| {
+                        RepositoryError::capture(RepositoryErrorKind::Other(
+                            e.to_string(),
+                        ))
+                    })?;
+                    let res = manifest_json(lock.asset_manager(), &id, pretty).await?;
+                    Ok(res)
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)
+        })?;
         Ok(result)
     }
 
@@ -3136,20 +3166,26 @@ impl PyRepository {
     #[pyo3(signature = (snapshot_id, *, pretty = true))]
     fn inspect_transaction_log(
         &self,
+        py: Python<'_>,
         snapshot_id: String,
         pretty: bool,
     ) -> PyResult<String> {
-        let result = pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(async move {
-                let lock = self.0.read().await;
-                let snap = SnapshotId::try_from(snapshot_id.as_str()).map_err(|e| {
-                    RepositoryError::capture(RepositoryErrorKind::Other(e.to_string()))
-                })?;
-                let res =
-                    transaction_log_json(lock.asset_manager(), &snap, pretty).await?;
-                Ok(res)
-            })
-            .map_err(PyIcechunkStoreError::RepositoryError)?;
+        let result = py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(async move {
+                    let lock = self.0.read().await;
+                    let snap =
+                        SnapshotId::try_from(snapshot_id.as_str()).map_err(|e| {
+                            RepositoryError::capture(RepositoryErrorKind::Other(
+                                e.to_string(),
+                            ))
+                        })?;
+                    let res =
+                        transaction_log_json(lock.asset_manager(), &snap, pretty).await?;
+                    Ok(res)
+                })
+                .map_err(PyIcechunkStoreError::RepositoryError)
+        })?;
         Ok(result)
     }
 
@@ -3176,11 +3212,8 @@ impl PyRepository {
     }
 
     #[getter]
-    fn spec_version(&self) -> PySpecVersion {
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let repo = self.0.read().await;
-            repo.spec_version().into()
-        })
+    fn spec_version(&self, py: Python<'_>) -> PySpecVersion {
+        py.detach(|| self.0.blocking_read().spec_version().into())
     }
 }
 
