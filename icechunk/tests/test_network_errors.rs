@@ -64,7 +64,10 @@ fn fast_settings() -> Settings {
             max_backoff_ms: Some(20),
         }),
         timeouts: Some(TimeoutSettings {
-            connect_timeout_ms: Some(2000),
+            // Generous: a refused loopback connect can take ~2s on Windows (SYN
+            // retries), and must classify as Connect, not Timeout.
+            // `hung_server_is_timeout` relies on `operation_timeout_ms` instead.
+            connect_timeout_ms: Some(5000),
             operation_timeout_ms: Some(2000),
             ..Default::default()
         }),
