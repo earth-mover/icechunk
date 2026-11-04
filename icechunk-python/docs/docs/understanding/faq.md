@@ -6,7 +6,7 @@ title: Frequently Asked Questions
 
 ## Why was Icechunk created?
 
-Icechunk was created by [Earthmover](https://earthmover.io/) as the open-source format for its cloud data platform [Arraylake](https://docs.earthmover.io).
+Icechunk is an open-source (Apache 2.0) storage format with a public, versioned [specification](../reference/spec-v2-1.md). The project started at [Earthmover](https://earthmover.io/).
 
 Icechunk builds on the successful [Zarr](https://zarr.dev) project.
 Zarr is a great foundation for storing and querying large multidimensional array data in a flexible, scalable way.
@@ -107,19 +107,25 @@ However, because it sits _below_ Zarr in the stack, it's not immediately clear h
 
 ## Should I implement Icechunk on my own based on the spec?
 
-No, we do not recommend implementing Icechunk independently of the existing Rust library.
-There are two reasons for this:
+You can. The specification is written so that independent implementations are possible, and three already exist (see below).
 
-1. The 1.0 version of the spec is stable. We are continuing to make improvements and will publish new versions of the spec as needed, accompanied with working reference implementation.
-1. It's probably much easier to bind to the Rust library from your language of choice,
-   rather than re-implement from scratch.
+For most languages, binding to the Rust library is less work than a full re-implementation, and you get new spec versions as soon as they ship. We welcome both new bindings and new independent implementations.
 
-We welcome contributions from folks interested in developing Icechunk bindings for other languages!
+## What is Icechunk's development model?
+
+Icechunk is developed in the open on GitHub and accepts outside contributions. Icechunk does not need Earthmover's products or services: a repository is a set of plain objects in your own bucket, and any implementation that follows the spec can read it.
+
+## What happens to my data if Earthmover stops working on Icechunk?
+
+Your data stays readable. Icechunk does not depend on any Earthmover service, and you keep full control of the data in your own bucket.
+
+- The on-disk format has a public [specification](../reference/spec-v2-1.md) written in RFC 2119 language, with a [version policy](../reference/version-policy.md) that keeps data from Icechunk 1.0 and later readable by future versions.
+- The reference library is Apache 2.0, so anyone can fork and maintain it.
+- Public agencies run it in production, for example NOAA's National Weather Service in its CIRRUS platform.
 
 ## Are there any independent implementations based on the Icechunk spec?
 
-At least one independent (read-only) implementation does exist: Google's [Neuroglancer](https://github.com/google/neuroglancer) application - [Icechunk docs here](https://neuroglancer-docs.web.app/datasource/icechunk/index.html)).
-This demonstrates that the Icechunk (1.0) specification is well-defined enough to be interoperable between implementations.
+Yes. The [GDAL Icechunk driver](https://gdal.org/en/latest/drivers/raster/icechunk.html), [EarthyScience/icechunk-js](https://github.com/EarthyScience/icechunk-js), and Google's [Neuroglancer](https://neuroglancer-docs.web.app/datasource/icechunk/index.html) each read Icechunk repositories from the specification alone. See [Languages](../languages.md) for the full list.
 
 If you are aware of any other implementations then please let us know!
 
