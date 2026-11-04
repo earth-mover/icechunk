@@ -259,6 +259,17 @@ async fn gcs_closed_port_is_connect() {
     assert!(text.contains("firewall or proxy"), "{text}");
 }
 
+#[tokio_test]
+async fn gcs_https_to_plain_http_is_tls() {
+    let server = html_server(200, "GET", None, "").await;
+    let storage = gcs_at(&format!("https://{}", host_of(&server)));
+    let err = read_error(&storage).await;
+    let (host, failure) = expect_unreachable(&err);
+    assert_eq!(host, host_of(&server));
+    assert!(matches!(failure, NetworkFailure::Tls), "got {failure:?}");
+    assert!(err.to_string().contains("ICECHUNK_TLS_CA_FILE"), "{err}");
+}
+
 /// `object_store` keeps the status and body of a failed response private, so an
 /// intercepted GCS response cannot be recognised and stays a plain error.
 #[tokio_test]
