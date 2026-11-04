@@ -516,6 +516,7 @@ fn classify_virtual_ref(kind: &VirtualReferenceErrorKind) -> Classified {
         | K::UnsupportedObjectKeyForBackend(_)
         | K::Decoding(_) => class("InvalidInputError", codes::INVALID_VIRTUAL_REF),
         K::FetchError(_) => class("StorageError", codes::VIRTUAL_CHUNK_FETCH),
+        K::Unreachable { .. } => class("StorageError", codes::STORAGE_UNREACHABLE),
         K::ObjectModified(_) => class("StorageError", codes::VIRTUAL_CHUNK_MODIFIED),
         K::InvalidObjectSize { .. } => class("StorageError", codes::INVALID_OBJECT_SIZE),
         K::AzureConfigurationMustIncludeAccount => {

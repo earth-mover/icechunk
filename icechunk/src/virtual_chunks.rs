@@ -1037,6 +1037,7 @@ fn fetcher_cache_key(
 #[derive(Debug)]
 pub struct S3Fetcher {
     client: Arc<Client>,
+    opts: S3Options,
     settings: storage::Settings,
 }
 
@@ -1049,7 +1050,26 @@ impl S3Fetcher {
     ) -> Self {
         let client =
             mk_client(opts, credentials.clone(), Vec::new(), Vec::new(), &settings).await;
-        Self { settings, client: Arc::new(client) }
+        Self { settings, opts: opts.clone(), client: Arc::new(client) }
+    }
+
+    /// Wraps a failed `GetObject` call, as `Unreachable` when it is a network
+    /// failure and as `FetchError` otherwise.
+    fn fetch_error(
+        &self,
+        chunk_location: &Url,
+        bucket: &str,
+        err: SdkError<GetObjectError>,
+    ) -> VirtualReferenceErrorKind {
+        match icechunk_s3::classify_s3_error(&err) {
+            Some(failure) => VirtualReferenceErrorKind::Unreachable {
+                location: chunk_location.to_string(),
+                host: icechunk_s3::s3_endpoint_host(&self.opts, bucket).into(),
+                failure: Box::new(failure),
+                cause: Box::new(err),
+            },
+            None => VirtualReferenceErrorKind::FetchError(Box::new(err)),
+        }
     }
 }
 
@@ -1090,7 +1110,7 @@ impl ChunkFetcher for S3Fetcher {
         let mut b = self
             .client
             .get_object()
-            .bucket(bucket_name)
+            .bucket(&bucket_name)
             .key(key)
             .range(range_to_header(&range));
 
@@ -1123,11 +1143,11 @@ impl ChunkFetcher for S3Fetcher {
                             chunk_location.to_string(),
                         )
                     } else {
-                        VirtualReferenceErrorKind::FetchError(Box::new(SdkError::<
-                            GetObjectError,
-                        >::ServiceError(
-                            err
-                        )))
+                        self.fetch_error(
+                            chunk_location,
+                            &bucket_name,
+                            SdkError::ServiceError(err),
+                        )
                     }
                 }
                 // S3 API documents this
@@ -1139,14 +1159,14 @@ impl ChunkFetcher for S3Fetcher {
                             chunk_location.to_string(),
                         )
                     } else {
-                        VirtualReferenceErrorKind::FetchError(Box::new(SdkError::<
-                            GetObjectError,
-                        >::ResponseError(
-                            err
-                        )))
+                        self.fetch_error(
+                            chunk_location,
+                            &bucket_name,
+                            SdkError::ResponseError(err),
+                        )
                     }
                 }
-                other_err => VirtualReferenceErrorKind::FetchError(Box::new(other_err)),
+                other_err => self.fetch_error(chunk_location, &bucket_name, other_err),
             })
             .capture()?
             .body
@@ -1168,6 +1188,9 @@ impl ChunkFetcher for S3Fetcher {
 #[derive(Debug)]
 pub struct ObjectStoreFetcher {
     client: Arc<dyn ObjectStore>,
+    /// Host used to word "storage unreachable" errors; `None` opts the store out
+    /// of that classification.
+    endpoint_host: Option<String>,
     settings: storage::Settings,
 }
 
@@ -1192,6 +1215,7 @@ impl ObjectStoreFetcher {
     fn new_local(settings: storage::Settings) -> Self {
         ObjectStoreFetcher {
             client: Arc::new(LocalFileSystem::new()),
+            endpoint_host: None,
             settings: storage::Settings {
                 unsafe_use_conditional_update: Some(false),
                 unsafe_use_metadata: Some(false),
@@ -1208,6 +1232,8 @@ impl ObjectStoreFetcher {
         config: Option<S3Options>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
+        let endpoint_host =
+            Some(icechunk_arrow_object_store::s3_endpoint_host(config.as_ref(), &bucket));
         let backend = S3ObjectStoreBackend {
             bucket,
             prefix,
@@ -1220,7 +1246,7 @@ impl ObjectStoreFetcher {
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, endpoint_host, settings })
     }
 
     #[cfg(feature = "object-store-http")]
@@ -1245,7 +1271,7 @@ impl ObjectStoreFetcher {
             .mk_object_store(&settings, Role::Read)
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, endpoint_host: None, settings })
     }
 
     #[cfg(feature = "object-store-gcs")]
@@ -1262,6 +1288,8 @@ impl ObjectStoreFetcher {
                 GoogleConfigKey::from_str(&k).ok().map(|key| (key, v.clone()))
             })
             .collect();
+        let endpoint_host =
+            Some(icechunk_arrow_object_store::gcs_endpoint_host(Some(&config)));
         let backend = GcsObjectStoreBackend {
             bucket,
             prefix,
@@ -1275,7 +1303,7 @@ impl ObjectStoreFetcher {
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, endpoint_host, settings })
     }
 
     #[cfg(feature = "object-store-azure")]
@@ -1306,7 +1334,7 @@ impl ObjectStoreFetcher {
             .map_err(|e| VirtualReferenceErrorKind::OtherError(Box::new(e)))
             .capture()?;
 
-        Ok(ObjectStoreFetcher { client, settings })
+        Ok(ObjectStoreFetcher { client, endpoint_host: None, settings })
     }
 }
 
@@ -1386,9 +1414,21 @@ impl ChunkFetcher for ObjectStoreFetcher {
                 Err(VirtualReferenceErrorKind::ObjectModified(chunk_location.to_string()))
                     .capture()
             }
-            Err(err) => Err(VirtualReferenceError::capture(
-                VirtualReferenceErrorKind::FetchError(Box::new(err)),
-            )),
+            Err(err) => {
+                let failure = self
+                    .endpoint_host
+                    .as_ref()
+                    .zip(icechunk_arrow_object_store::classify_object_store_error(&err));
+                Err(VirtualReferenceError::capture(match failure {
+                    Some((host, failure)) => VirtualReferenceErrorKind::Unreachable {
+                        location: chunk_location.to_string(),
+                        host: host.as_str().into(),
+                        failure: Box::new(failure),
+                        cause: Box::new(err),
+                    },
+                    None => VirtualReferenceErrorKind::FetchError(Box::new(err)),
+                }))
+            }
         }
     }
 }

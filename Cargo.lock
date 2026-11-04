@@ -2438,6 +2438,7 @@ dependencies = [
  "flexbuffers",
  "futures",
  "icechunk-macros",
+ "icechunk-storage",
  "icechunk-types",
  "itertools 0.15.0",
  "pretty_assertions",

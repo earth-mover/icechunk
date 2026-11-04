@@ -5,14 +5,28 @@ use std::{
     collections::HashMap, net::TcpListener as StdTcpListener, num::NonZeroU16, sync::Arc,
 };
 
+use bytes::Bytes;
 use icechunk::{
-    Storage,
-    config::{GcsCredentials, S3Credentials, S3Options, S3StaticCredentials},
-    new_s3_storage,
+    ObjectStoreConfig, Repository, Storage,
+    config::{
+        Credentials, GcsCredentials, RepositoryConfig, S3Credentials, S3Options,
+        S3StaticCredentials,
+    },
+    format::{
+        ByteRange, ChunkIndices, Path,
+        manifest::{
+            ChunkPayload, VirtualChunkLocation, VirtualChunkRef,
+            VirtualReferenceErrorKind,
+        },
+        snapshot::ArrayShape,
+    },
+    new_in_memory_storage, new_s3_storage,
+    session::{SessionError, SessionErrorKind, get_chunk},
     storage::{
         NetworkFailure, RetriesSettings, Settings, StorageContext, StorageError,
         StorageErrorKind, TimeoutSettings, new_gcs_storage,
     },
+    virtual_chunks::VirtualChunkContainer,
 };
 use icechunk_macros::tokio_test;
 use tokio::{io::AsyncReadExt as _, net::TcpListener};
@@ -251,4 +265,157 @@ async fn gcs_html_403_is_not_unreachable() {
     let storage = gcs_at(&server.uri());
     let err = read_error(&storage).await;
     assert!(!err.kind.is_unreachable(), "{err}");
+}
+
+/// Reads one virtual chunk located at `location`, served by `container`, from a
+/// repository kept on in-memory storage, and returns the read's error.
+async fn virtual_read_error(
+    container: VirtualChunkContainer,
+    credentials: Option<Credentials>,
+    location: &str,
+) -> SessionError {
+    let prefix = container.url_prefix().to_string();
+    let mut config =
+        RepositoryConfig { inline_chunk_threshold_bytes: Some(0), ..Default::default() };
+    config.set_virtual_chunk_container(container).unwrap();
+    let repo = Repository::create(new_in_memory_storage().await.unwrap())
+        .config(config)
+        .authorize_virtual_chunk_access(HashMap::from([(prefix, credentials)]))
+        .execute()
+        .await
+        .unwrap();
+
+    let array = Path::new("/g/temp").unwrap();
+    let coords = ChunkIndices(vec![0, 1]);
+    let mut session = repo.writable_session("main").await.unwrap();
+    session.add_group(Path::root(), Bytes::new()).await.unwrap();
+    session.add_group(Path::new("/g").unwrap(), Bytes::new()).await.unwrap();
+    let shape = ArrayShape::new(vec![(4, 2), (4, 2)]).unwrap();
+    session.add_array(array.clone(), shape, None, Bytes::new()).await.unwrap();
+    let vref = VirtualChunkRef {
+        location: VirtualChunkLocation::from_url(location).unwrap(),
+        offset: 0,
+        length: 4,
+        checksum: None,
+    };
+    session
+        .set_chunk_ref(array.clone(), coords.clone(), Some(ChunkPayload::Virtual(vref)))
+        .await
+        .unwrap();
+
+    let reader =
+        session.get_chunk_reader(&array, &coords, &ByteRange::ALL).await.unwrap();
+    match get_chunk(reader).await {
+        Ok(_) => panic!("expected the virtual chunk read to fail"),
+        Err(err) => err,
+    }
+}
+
+fn virtual_s3_container(endpoint: &str) -> VirtualChunkContainer {
+    let options = S3Options::default()
+        .with_region("us-east-1")
+        .with_endpoint_url(endpoint)
+        .with_allow_http(true)
+        .with_force_path_style(true);
+    VirtualChunkContainer::new(
+        "s3://virtual-bucket/".to_string(),
+        ObjectStoreConfig::S3Compatible(options),
+    )
+    .unwrap()
+}
+
+fn virtual_s3_credentials() -> Option<Credentials> {
+    Some(Credentials::S3(S3Credentials::Static(S3StaticCredentials {
+        access_key_id: "k".into(),
+        secret_access_key: "s".into(),
+        session_token: None,
+        expires_after: None,
+    })))
+}
+
+fn virtual_kind(err: &SessionError) -> &VirtualReferenceErrorKind {
+    match &err.kind {
+        SessionErrorKind::VirtualReferenceError(kind) => kind,
+        other => panic!("expected a virtual reference error, got {other:?}: {err}"),
+    }
+}
+
+#[tokio_test]
+async fn virtual_s3_html_403_is_unreachable() {
+    let server = html_server(
+        403,
+        "GET",
+        Some("text/html"),
+        "<html>Access blocked by policy</html>",
+    )
+    .await;
+    let err = virtual_read_error(
+        virtual_s3_container(&server.uri()),
+        virtual_s3_credentials(),
+        "s3://virtual-bucket/some/file.nc",
+    )
+    .await;
+    match virtual_kind(&err) {
+        VirtualReferenceErrorKind::Unreachable { host, failure, .. } => {
+            assert_eq!(&**host, host_of(&server));
+            assert!(
+                matches!(
+                    **failure,
+                    NetworkFailure::UnexpectedResponse { status: 403, .. }
+                ),
+                "got {failure:?}"
+            );
+        }
+        other => panic!("expected Unreachable, got {other:?}"),
+    }
+    let text = err.to_string();
+    assert!(text.contains(&host_of(&server)), "{text}");
+    assert!(text.contains("virtual chunk"), "{text}");
+    assert!(text.contains("firewall or proxy"), "{text}");
+}
+
+#[tokio_test]
+async fn virtual_s3_precondition_still_object_modified() {
+    let server = html_server(
+        412,
+        "GET",
+        Some("application/xml"),
+        "<?xml version=\"1.0\"?><Error><Code>PreconditionFailed</Code></Error>",
+    )
+    .await;
+    let err = virtual_read_error(
+        virtual_s3_container(&server.uri()),
+        virtual_s3_credentials(),
+        "s3://virtual-bucket/some/file.nc",
+    )
+    .await;
+    assert!(
+        matches!(virtual_kind(&err), VirtualReferenceErrorKind::ObjectModified(_)),
+        "got {err}"
+    );
+}
+
+#[tokio_test]
+async fn virtual_gcs_closed_port_is_unreachable() {
+    let port = {
+        let listener = StdTcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let container = VirtualChunkContainer::new(
+        "gcs://virtual-bucket/".to_string(),
+        ObjectStoreConfig::Gcs(HashMap::from([(
+            "google_base_url".to_string(),
+            format!("http://127.0.0.1:{port}"),
+        )])),
+    )
+    .unwrap();
+    let err =
+        virtual_read_error(container, None, "gcs://virtual-bucket/some/file.nc").await;
+    match virtual_kind(&err) {
+        VirtualReferenceErrorKind::Unreachable { host, failure, .. } => {
+            assert_eq!(&**host, format!("127.0.0.1:{port}"));
+            assert!(matches!(**failure, NetworkFailure::Connect), "got {failure:?}");
+        }
+        other => panic!("expected Unreachable, got {other:?}"),
+    }
 }
