@@ -39,7 +39,7 @@ use pyo3::{
 use crate::display::{
     PyRepr, ReprMode, dataclass_html_repr, dataclass_str, py_bool, py_option,
     py_option_bool_or_default, py_option_nested_repr, py_option_nested_repr_or_default,
-    py_option_or_default, py_option_str,
+    py_option_or_default, py_option_str, py_option_str_dict,
 };
 use crate::errors::PyIcechunkStoreError;
 
@@ -732,11 +732,12 @@ impl PyObjectStoreConfig {
             Self::S3Compatible(opts) | Self::S3(opts) | Self::Tigris(opts) => {
                 opts.fields(mode)
             }
-            Self::Gcs(opts) => vec![("config", format!("{opts:?}"))],
-            Self::Azure(config) => vec![("config", format!("{config:?}"))],
-            Self::Http(opts, headers) => {
-                vec![("opts", format!("{opts:?}")), ("headers", format!("{headers:?}"))]
-            }
+            Self::Gcs(opts) => vec![("config", py_option_str_dict(opts))],
+            Self::Azure(config) => vec![("config", py_option_str_dict(config))],
+            Self::Http(opts, headers) => vec![
+                ("opts", py_option_str_dict(opts)),
+                ("headers", py_option_str_dict(headers)),
+            ],
         }
     }
 
@@ -755,11 +756,15 @@ impl PyObjectStoreConfig {
                     Self::S3Compatible(opts) | Self::S3(opts) | Self::Tigris(opts) => {
                         format!("{cls}({})", <PyS3Options as PyRepr>::__repr__(opts))
                     }
-                    Self::Gcs(opts) => format!("{cls}({opts:?})"),
-                    Self::Azure(config) => format!("{cls}({config:?})"),
-                    Self::Http(opts, headers) => {
-                        format!("{cls}({opts:?}, {headers:?})")
+                    Self::Gcs(opts) => format!("{cls}({})", py_option_str_dict(opts)),
+                    Self::Azure(config) => {
+                        format!("{cls}({})", py_option_str_dict(config))
                     }
+                    Self::Http(opts, headers) => format!(
+                        "{cls}({}, {})",
+                        py_option_str_dict(opts),
+                        py_option_str_dict(headers)
+                    ),
                 }
             }
             ReprMode::Str | ReprMode::Html => {

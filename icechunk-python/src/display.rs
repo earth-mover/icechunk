@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Write as _};
 
 use icechunk::display::AncestryGraph;
@@ -34,6 +35,21 @@ pub(crate) fn py_option_str(o: &Option<String>) -> String {
     match o {
         None => "None".to_string(),
         Some(s) => format!("\"{s}\""),
+    }
+}
+
+/// Format an `Option<HashMap<String, String>>` as a Python repr: `None` or a dict
+/// literal with sorted keys.
+pub(crate) fn py_option_str_dict(o: &Option<HashMap<String, String>>) -> String {
+    match o {
+        None => "None".to_string(),
+        Some(m) => {
+            let mut items: Vec<_> = m.iter().collect();
+            items.sort();
+            let body: Vec<String> =
+                items.iter().map(|(k, v)| format!("{k:?}: {v:?}")).collect();
+            format!("{{{}}}", body.join(", "))
+        }
     }
 }
 
