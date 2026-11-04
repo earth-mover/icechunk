@@ -166,11 +166,15 @@ pub fn error_chain_has_tls_failure(err: &(dyn std::error::Error + 'static)) -> b
         if e.downcast_ref::<rustls::Error>().is_some() {
             return true;
         }
-        if let Some(io) = e.downcast_ref::<std::io::Error>()
-            && let Some(inner) = io.get_ref()
-            && inner.downcast_ref::<rustls::Error>().is_some()
-        {
-            return true;
+        // `io::Error::source` skips the error it wraps, so unwrap nested
+        // `io::Error`s by hand.
+        let mut io = e.downcast_ref::<std::io::Error>();
+        while let Some(err) = io {
+            let Some(inner) = err.get_ref() else { break };
+            if inner.downcast_ref::<rustls::Error>().is_some() {
+                return true;
+            }
+            io = inner.downcast_ref::<std::io::Error>();
         }
         current = e.source();
     }
@@ -1145,5 +1149,15 @@ mod network_failure_tests {
         assert!(!error_chain_has_tls_failure(&std::io::Error::from(
             std::io::ErrorKind::ConnectionRefused
         )));
+    }
+
+    #[test]
+    fn tls_detected_through_nested_io_errors() {
+        let inner = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::General("bad".into()),
+        );
+        let outer = std::io::Error::other(inner);
+        assert!(error_chain_has_tls_failure(&outer));
     }
 }

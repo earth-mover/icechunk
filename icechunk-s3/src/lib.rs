@@ -28,7 +28,10 @@ use aws_sdk_s3::{
         },
     },
     error::{BoxError, ProvideErrorMetadata, SdkError},
-    operation::{copy_object::CopyObjectError, put_object::PutObjectError},
+    operation::{
+        copy_object::CopyObjectError, delete_objects::DeleteObjectsError,
+        put_object::PutObjectError,
+    },
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
@@ -51,7 +54,7 @@ use icechunk_storage::{
     RepositoryCreation, Settings, Storage, StorageContext, StorageError,
     StorageErrorKind, StorageInfo, StorageResult, Timeout, VersionInfo,
     VersionedUpdateResult, error_chain_has_tls_failure, is_non_storage_content_type,
-    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    obj_not_found_res, obj_store_error, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -663,6 +666,11 @@ fn transient_per_key_code(errors: &[aws_sdk_s3::types::Error]) -> Option<&str> {
 }
 
 impl S3Storage {
+    /// The host that requests go to, used to word network-failure errors.
+    fn host(&self) -> String {
+        s3_endpoint_host(&self.config, &self.bucket)
+    }
+
     /// Build an [`S3Storage`].
     ///
     /// `extra_read_headers`/`extra_write_headers` are extra HTTP headers injected
@@ -786,10 +794,11 @@ impl S3Storage {
 
         // FIXME: The SDK paginator drops per-request config, so listings carry no
         // attribution fragment.
+        let host = self.host();
         req.into_paginator()
             .send()
             .into_stream_03x()
-            .map_err(obj_store_error)
+            .map_err(move |e| s3_error(e, &host))
             .try_filter_map(|page| {
                 let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
                 ready(Ok(contents))
@@ -865,7 +874,7 @@ impl S3Storage {
                     || sdk_err
                         .raw_response()
                         .is_some_and(|r| matches!(r.status().as_u16(), 404 | 400));
-                if absent { Ok(None) } else { obj_store_error_res(sdk_err) }
+                if absent { Ok(None) } else { Err(s3_error(sdk_err, &self.host())) }
             }
         }
     }
@@ -940,7 +949,10 @@ impl S3Storage {
                 if is_precondition_code(code) {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
+                    Err(s3_error(
+                        SdkError::<PutObjectError>::ServiceError(err),
+                        &self.host(),
+                    ))
                 }
             }
             // S3 API documents this
@@ -950,10 +962,13 @@ impl S3Storage {
                 if status == 409 || status == 412 {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    Err(s3_error(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                        &self.host(),
+                    ))
                 }
             }
-            Err(err) => obj_store_error_res(err),
+            Err(err) => Err(s3_error(err, &self.host())),
         }
     }
 
@@ -1006,7 +1021,7 @@ impl S3Storage {
             .config_override(attribution_override(ctx))
             .send()
             .await
-            .capture_box()?;
+            .map_err(|e| s3_error(e, &self.host()))?;
         let upload_id = create_res.upload_id().ok_or(other_error(
             "No upload_id in create multipart upload result".to_string(),
         ))?;
@@ -1058,7 +1073,7 @@ impl S3Storage {
             })
             .try_collect::<Vec<_>>()
             .await
-            .capture_box()?;
+            .map_err(|e| s3_error(e, &self.host()))?;
 
         let completed_parts =
             CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
@@ -1099,11 +1114,11 @@ impl S3Storage {
                         ctx,
                         key,
                         write_id.as_deref(),
-                        obj_store_error(SdkError::ServiceError(err)),
+                        s3_error(SdkError::ServiceError(err), &self.host()),
                     )
                     .await
                 } else {
-                    obj_store_error_res(SdkError::ServiceError(err))
+                    Err(s3_error(SdkError::ServiceError(err), &self.host()))
                 }
             }
             Err(SdkError::ResponseError(err)) => {
@@ -1116,14 +1131,20 @@ impl S3Storage {
                         ctx,
                         key,
                         write_id.as_deref(),
-                        obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
+                        s3_error(
+                            SdkError::<PutObjectError>::ResponseError(err),
+                            &self.host(),
+                        ),
                     )
                     .await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    Err(s3_error(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                        &self.host(),
+                    ))
                 }
             }
-            Err(err) => obj_store_error_res(err),
+            Err(err) => Err(s3_error(err, &self.host())),
         }
     }
 
@@ -1193,7 +1214,7 @@ impl S3Storage {
             }
             Err(sdk_err) => {
                 warn!(key, error = %sdk_err, "readback HEAD failed; propagating the HEAD error");
-                return obj_store_error_res(sdk_err);
+                return Err(s3_error(sdk_err, &self.host()));
             }
         };
         Ok(ReadbackOutcome::classify(write_id, stored_write_id.as_deref(), &version))
@@ -1308,7 +1329,10 @@ impl Storage for S3Storage {
                 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    obj_store_error_res(SdkError::<CopyObjectError>::ServiceError(err))
+                    Err(s3_error(
+                        SdkError::<CopyObjectError>::ServiceError(err),
+                        &self.host(),
+                    ))
                 }
             }
             // S3 API documents this
@@ -1318,7 +1342,10 @@ impl Storage for S3Storage {
                 if status == 409 || status == 412 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    Err(s3_error(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                        &self.host(),
+                    ))
                 }
             }
             Err(sdk_err) => match sdk_err.as_service_error() {
@@ -1333,7 +1360,7 @@ impl Storage for S3Storage {
                     // the status code.
                     obj_not_found_res()
                 }
-                _ => obj_store_error_res(sdk_err),
+                _ => Err(s3_error(sdk_err, &self.host())),
             },
         }
     }
@@ -1448,12 +1475,16 @@ impl Storage for S3Storage {
                 });
             }
             Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
+                let sdk_err = SdkError::<DeleteObjectsError, _>::ResponseError(err);
+                if let Some(failure) = classify_s3_error(&sdk_err) {
+                    return Err(unreachable_error(self.host(), failure, sdk_err));
+                }
                 return Err(other_error(format!(
-                    "DeleteObjects failed: unparsable response, status {}",
-                    err.raw().status().as_u16()
+                    "DeleteObjects failed: unparsable response, status {status}"
                 )));
             }
-            Err(err) => return Err(obj_store_error(err)),
+            Err(err) => return Err(s3_error(err, &self.host())),
         };
 
         if let Some(errors) = res.errors.as_deref().filter(|e| !e.is_empty()) {
@@ -1511,7 +1542,7 @@ impl Storage for S3Storage {
             .config_override(attribution_override(ctx))
             .send()
             .await
-            .capture_box()?;
+            .map_err(|e| s3_error(e, &self.host()))?;
 
         let res = res
             .last_modified
@@ -1631,7 +1662,7 @@ impl S3Storage {
                         trace!("Received 304 (Not Modified). Treating requested object as up-to-date.");
                         Ok(None)
                     }
-                    _ => obj_store_error_res(sdk_err),
+                    _ => Err(s3_error(sdk_err, &self.host())),
                 }
             }
         }
