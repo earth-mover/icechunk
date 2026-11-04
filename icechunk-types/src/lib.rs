@@ -1,4 +1,5 @@
 pub mod error;
+pub mod network;
 
 use core::fmt;
 use std::fmt::{Debug, Display};

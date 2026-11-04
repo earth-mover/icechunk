@@ -19,8 +19,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{IcechunkFormatError, IcechunkFormatErrorKind};
-use icechunk_storage::{NetworkFailure, unreachable_message};
-use icechunk_types::{ETag, error::ICError};
+use icechunk_types::{
+    ETag,
+    error::ICError,
+    network::{NetworkFailure, unreachable_message},
+};
 
 /// Resolved configuration for virtual chunk location compression within a manifest.
 #[derive(Debug, Clone, Copy)]

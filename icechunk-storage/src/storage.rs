@@ -75,65 +75,17 @@ impl StorageErrorKind {
         matches!(self, StorageErrorKind::Throttled { .. })
     }
 
+    /// True for [`StorageErrorKind::Unreachable`]: the storage host could not be
+    /// reached, or something other than the storage service answered.
     pub fn is_unreachable(&self) -> bool {
         matches!(self, StorageErrorKind::Unreachable { .. })
     }
 }
 
-/// How a request to a storage host failed at the network level.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NetworkFailure {
-    Connect,
-    Timeout,
-    Tls,
-    /// Something answered, but not the storage service.
-    UnexpectedResponse {
-        status: u16,
-        content_type: Option<String>,
-        snippet: Option<String>,
-    },
-}
+pub use icechunk_types::network::{NetworkFailure, unreachable_message};
 
-impl Display for NetworkFailure {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            NetworkFailure::Connect => write!(f, "could not connect"),
-            NetworkFailure::Timeout => write!(f, "the request timed out"),
-            NetworkFailure::Tls => write!(f, "the TLS handshake failed"),
-            NetworkFailure::UnexpectedResponse { status, content_type, snippet } => {
-                write!(
-                    f,
-                    "got an unexpected response (HTTP {status}, Content-Type: {}) instead of a storage service response",
-                    content_type.as_deref().unwrap_or("none")
-                )?;
-                if let Some(snippet) = snippet {
-                    write!(f, "; response begins: \"{snippet}\"")?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-impl NetworkFailure {
-    fn hint(&self) -> &'static str {
-        match self {
-            NetworkFailure::Tls => {
-                " If your network uses a TLS-inspecting proxy, its CA certificate may need to be trusted on this machine."
-            }
-            _ => "",
-        }
-    }
-}
-
-/// The user-facing text for an unreachable storage host.
-pub fn unreachable_message(host: &str, failure: &NetworkFailure) -> String {
-    format!(
-        "could not reach storage at {host}: {failure}. This can happen when a firewall or proxy blocks or intercepts traffic to {host}. If you are on a corporate or institutional network, ask your network administrator to allow access to this host.{}",
-        failure.hint()
-    )
-}
-
+/// Builds a [`StorageErrorKind::Unreachable`] error for `host`, keeping `cause`
+/// reachable through `source()`.
 pub fn unreachable_error(
     host: impl Into<String>,
     failure: NetworkFailure,
@@ -183,6 +135,7 @@ pub fn error_chain_has_tls_failure(err: &(dyn std::error::Error + 'static)) -> b
 
 /// The body format a storage service is expected to answer with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExpectedBody {
     Xml,
     Json,
