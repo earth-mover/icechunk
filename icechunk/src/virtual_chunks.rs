@@ -1232,8 +1232,9 @@ impl ObjectStoreFetcher {
         config: Option<S3Options>,
         settings: storage::Settings,
     ) -> Result<Self, VirtualReferenceError> {
-        let endpoint_host =
-            Some(icechunk_arrow_object_store::s3_endpoint_host(config.as_ref(), &bucket));
+        let endpoint_host = Some(
+            icechunk_arrow_object_store::object_store_s3_endpoint_host(config.as_ref()),
+        );
         let backend = S3ObjectStoreBackend {
             bucket,
             prefix,

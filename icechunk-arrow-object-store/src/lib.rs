@@ -1044,25 +1044,24 @@ fn url_host_port(endpoint: &str) -> Option<String> {
     })
 }
 
-/// The host (with explicit port, if any) S3 requests go to: the configured
-/// endpoint, else the AWS default for `bucket`.
+/// The host (with explicit port, if any) that `object_store` sends S3 requests
+/// to, for the options [`S3ObjectStoreBackend`] builds its client from.
 ///
-/// Twin of `icechunk_s3::s3_endpoint_host`, which this crate cannot depend on;
-/// keep the two in step.
+/// That client never enables virtual-hosted requests, so the bucket is always
+/// in the path: requests go to the configured endpoint, else to
+/// `s3.{region}.amazonaws.com`, with `object_store`'s default region
+/// `us-east-1` when none is configured. Credentials from the environment build
+/// the client from `AWS_*` variables, which may also set the region or
+/// endpoint; we report the host as far as the options tell us.
 #[cfg(feature = "s3")]
-pub fn s3_endpoint_host(opts: Option<&S3Options>, bucket: &str) -> String {
-    let Some(opts) = opts else {
-        return format!("{bucket}.s3.amazonaws.com");
-    };
-    if let Some(host) = opts.endpoint_url.as_deref().and_then(url_host_port) {
+pub fn object_store_s3_endpoint_host(opts: Option<&S3Options>) -> String {
+    if let Some(host) =
+        opts.and_then(|o| o.endpoint_url.as_deref()).and_then(url_host_port)
+    {
         return host;
     }
-    match (&opts.region, opts.force_path_style) {
-        (Some(region), true) => format!("s3.{region}.amazonaws.com"),
-        (None, true) => "s3.amazonaws.com".to_string(),
-        (Some(region), false) => format!("{bucket}.s3.{region}.amazonaws.com"),
-        (None, false) => format!("{bucket}.s3.amazonaws.com"),
-    }
+    let region = opts.and_then(|o| o.region.as_deref()).unwrap_or("us-east-1");
+    format!("s3.{region}.amazonaws.com")
 }
 
 /// The host (with explicit port, if any) GCS requests go to: the configured
@@ -1468,7 +1467,7 @@ impl Display for S3ObjectStoreBackend {
 #[typetag::serde(name = "s3_object_store_provider")]
 impl ObjectStoreBackend for S3ObjectStoreBackend {
     fn endpoint_host(&self) -> Option<String> {
-        Some(s3_endpoint_host(self.config.as_ref(), &self.bucket))
+        Some(object_store_s3_endpoint_host(self.config.as_ref()))
     }
 
     fn storage_info(&self) -> StorageInfo {
@@ -2711,5 +2710,99 @@ mod network_error_tests {
             "http://127.0.0.1:4443/x".to_string(),
         )]);
         assert_eq!(gcs_endpoint_host(Some(&config)), "127.0.0.1:4443");
+    }
+}
+
+#[cfg(all(test, feature = "s3"))]
+mod s3_endpoint_host_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_path_style_us_east_1() {
+        assert_eq!(object_store_s3_endpoint_host(None), "s3.us-east-1.amazonaws.com");
+        assert_eq!(
+            object_store_s3_endpoint_host(Some(&S3Options::default())),
+            "s3.us-east-1.amazonaws.com"
+        );
+    }
+
+    #[test]
+    fn region_is_used_without_endpoint() {
+        let opts = S3Options::default().with_region("us-west-2");
+        assert_eq!(
+            object_store_s3_endpoint_host(Some(&opts)),
+            "s3.us-west-2.amazonaws.com"
+        );
+    }
+
+    #[test]
+    fn endpoint_host_is_bare_whatever_the_addressing_options() {
+        let opts = S3Options::default()
+            .with_region("us-west-2")
+            .with_endpoint_url("https://abc123.r2.cloudflarestorage.com");
+        assert_eq!(
+            object_store_s3_endpoint_host(Some(&opts)),
+            "abc123.r2.cloudflarestorage.com"
+        );
+        let opts = S3Options::default()
+            .with_endpoint_url("http://127.0.0.1:9000/")
+            .with_force_path_style(true);
+        assert_eq!(object_store_s3_endpoint_host(Some(&opts)), "127.0.0.1:9000");
+    }
+
+    /// Guards the assumptions above against `object_store` changing its
+    /// defaults: the host of a URL the builder signs is the host we report.
+    #[icechunk_macros::tokio_test]
+    async fn matches_object_store_request_urls() {
+        use object_store::signer::Signer as _;
+        let cases = [
+            S3Options::default(),
+            S3Options::default().with_region("us-west-2"),
+            S3Options::default().with_endpoint_url("http://127.0.0.1:9000"),
+            S3Options::default().with_endpoint_url("https://storage.invalid"),
+        ];
+        for opts in cases {
+            let mut builder = AmazonS3Builder::new()
+                .with_bucket_name("my-bucket")
+                .with_access_key_id("k")
+                .with_secret_access_key("s");
+            if let Some(region) = &opts.region {
+                builder = builder.with_region(region);
+            }
+            if let Some(endpoint) = &opts.endpoint_url {
+                builder = builder.with_endpoint(endpoint).with_allow_http(true);
+            }
+            let url = builder
+                .build()
+                .unwrap()
+                .signed_url(
+                    http::Method::GET,
+                    &ObjectPath::from("k"),
+                    core::time::Duration::from_secs(60),
+                )
+                .await
+                .unwrap();
+            let host = match url.port() {
+                Some(port) => format!("{}:{port}", url.host_str().unwrap()),
+                None => url.host_str().unwrap().to_string(),
+            };
+            assert_eq!(host, object_store_s3_endpoint_host(Some(&opts)), "{opts:?}");
+        }
+    }
+
+    #[test]
+    fn backend_reports_the_same_host() {
+        let backend = S3ObjectStoreBackend {
+            bucket: "my-bucket".to_string(),
+            prefix: None,
+            credentials: None,
+            config: Some(S3Options::default().with_region("eu-west-1")),
+            extra_read_headers: vec![],
+            extra_write_headers: vec![],
+        };
+        assert_eq!(
+            backend.endpoint_host().as_deref(),
+            Some("s3.eu-west-1.amazonaws.com")
+        );
     }
 }
