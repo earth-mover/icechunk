@@ -1,5 +1,5 @@
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
@@ -339,3 +339,26 @@ async def test_gc_deletes_only_unreferenced_expired_tx_logs(use_async: bool) -> 
 
     # initial + root group + /a + /b + /c remain
     assert transaction_count() == 5
+
+
+@pytest.mark.parametrize("use_async", [True, False])
+async def test_gc_timeout_reports_where_it_stopped(use_async: bool) -> None:
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    zarr.group(store=session.store, overwrite=True)
+    session.commit("root group")
+    cutoff = datetime.now(UTC) + timedelta(hours=1)
+
+    async def gc(timeout: timedelta | None) -> ic.GCSummary:
+        if use_async:
+            return await repo.garbage_collect_async(cutoff, timeout=timeout)
+        return repo.garbage_collect(cutoff, timeout=timeout)
+
+    # the in-memory store can finish finding retained objects in one poll, so
+    # a zero timeout may first fire before the storage leftovers sweep
+    stopped = await gc(timedelta(0))
+    assert stopped.timed_out_phase in ("find_retained", "storage_leftovers")
+    assert stopped.bytes_deleted == 0
+
+    finished = await gc(None)
+    assert finished.timed_out_phase is None

@@ -2099,6 +2099,27 @@ class GCSummary:
         abandoned writes. Their bytes are included in `bytes_deleted`. Only
         `filesystem_storage` has such leftovers.
         """
+    @property
+    def timed_out_phase(
+        self,
+    ) -> (
+        Literal[
+            "find_retained",
+            "storage_leftovers",
+            "snapshots",
+            "transaction_logs",
+            "manifests",
+            "chunks",
+        ]
+        | None
+    ):
+        """
+        The phase running, or next to start, when the `timeout` passed. None
+        when the run finished. "find_retained" means nothing was deleted, and a
+        rerun with the same timeout repeats the same work. Any later phase
+        means the deleted counts are real progress, and a rerun continues
+        from there.
+        """
     def _repr_html_(self) -> str: ...
 
 @final
@@ -2576,6 +2597,7 @@ class PyRepository:
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
         max_concurrent_listings: int | None = None,
+        timeout: datetime.timedelta | None = None,
     ) -> GCSummary: ...
     async def garbage_collect_async(
         self,
@@ -2589,6 +2611,7 @@ class PyRepository:
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
         max_concurrent_listings: int | None = None,
+        timeout: datetime.timedelta | None = None,
     ) -> GCSummary: ...
     def chunk_storage_stats(
         self,
