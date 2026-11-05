@@ -27,7 +27,7 @@ use crate::{
     ops::{
         deleter::{
             self, DELETE_BATCH_SIZE, DeleteBackoff, DeleteConfig, DeleteError,
-            MAX_REPORTED_DELETE_ERRORS,
+            MAX_REPORTED_DELETE_ERRORS, deadline_passed, until_deadline,
         },
         ensure_repo_writable, pointed_snapshots, reachable_snapshots_v2,
         reparent_and_prune, retry_on_repo_info_update,
@@ -46,6 +46,30 @@ pub use crate::ops::{
     deleter::DeleteReport,
     expiration::{ExpireResult, ExpiredRefAction, expire, expire_v2},
 };
+
+/// The steps of a GC run, in the order they run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GCRunPhase {
+    FindRetained,
+    StorageLeftovers,
+    Snapshots,
+    TransactionLogs,
+    Manifests,
+    Chunks,
+}
+
+impl GCRunPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            GCRunPhase::FindRetained => "find_retained",
+            GCRunPhase::StorageLeftovers => "storage_leftovers",
+            GCRunPhase::Snapshots => "snapshots",
+            GCRunPhase::TransactionLogs => "transaction_logs",
+            GCRunPhase::Manifests => "manifests",
+            GCRunPhase::Chunks => "chunks",
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -82,6 +106,7 @@ pub struct GCConfig {
     max_consecutive_delete_failures: NonZeroU16,
     max_concurrent_listings: Option<NonZeroU16>,
     delete_backoff: DeleteBackoff,
+    timeout: Option<std::time::Duration>,
 
     dry_run: bool,
 }
@@ -121,8 +146,15 @@ impl GCConfig {
             max_consecutive_delete_failures,
             max_concurrent_listings,
             delete_backoff: DeleteBackoff::default(),
+            timeout: None,
             dry_run,
         }
+    }
+
+    /// Stop the run cleanly once `timeout` has passed; see
+    /// [`GCSummary::timed_out_phase`].
+    pub fn with_timeout(self, timeout: Option<std::time::Duration>) -> Self {
+        GCConfig { timeout, ..self }
     }
 
     #[cfg(all(test, not(feature = "shuttle")))]
@@ -164,12 +196,16 @@ impl GCConfig {
         )
     }
 
-    pub(crate) fn delete_config(&self) -> DeleteConfig {
+    pub(crate) fn delete_config(
+        &self,
+        deadline: Option<tokio::time::Instant>,
+    ) -> DeleteConfig {
         DeleteConfig {
             max_in_flight: self.max_concurrent_deletes,
             max_consecutive_failures: self.max_consecutive_delete_failures,
             backoff: self.delete_backoff,
             dry_run: self.dry_run,
+            deadline,
         }
     }
 
@@ -287,6 +323,11 @@ pub struct GCSummary {
     /// Leftovers of crashed or abandoned writes the storage backend swept
     /// (see `Storage::sweep_leftovers`); their bytes are in `bytes_deleted`.
     pub storage_leftovers_deleted: u64,
+    /// The phase that ran, or was next, when the timeout passed. `FindRetained` means that GC
+    /// changed nothing. A later phase means that GC removed the expired snapshots from the
+    /// repo info. This is true when all counts are zero too. The counts show what GC deleted.
+    /// A rerun starts from the objects that remain.
+    pub timed_out_phase: Option<GCRunPhase>,
 }
 
 impl GCSummary {
@@ -414,24 +455,35 @@ pub async fn garbage_collect(
         return Ok(GCSummary::default());
     }
     warn_on_low_fd_limit(config.peak_concurrent_requests(), "Garbage collection");
+    // one deadline for all attempts: a retry after a repo info conflict must
+    // not restart the clock
+    let deadline = config.timeout.map(|timeout| tokio::time::Instant::now() + timeout);
     let plan = retry_on_repo_info_update(repo_update_retries, "GC", async || {
         garbage_collect_one_attempt(
             Arc::clone(&asset_manager),
             config,
             num_updates_per_repo_info_file,
+            deadline,
         )
         .await
     })
     .await?;
+    let Some(plan) = plan else {
+        info!("Timed out finding retained objects, nothing deleted");
+        return Ok(GCSummary {
+            timed_out_phase: Some(GCRunPhase::FindRetained),
+            ..Default::default()
+        });
+    };
     if config.dry_run {
-        return sweep_and_delete(asset_manager.as_ref(), config, plan).await;
+        return sweep_and_delete(asset_manager.as_ref(), config, plan, deadline).await;
     }
 
     let changed = plan.changed.clone();
     let storage = asset_manager.storage();
     let ctx = asset_manager.storage_context();
     storage.gc_hook(&ctx, GcPhase::BeforeDeletes { changed: changed.as_ref() }).await?;
-    let deleted = sweep_and_delete(asset_manager.as_ref(), config, plan).await;
+    let deleted = sweep_and_delete(asset_manager.as_ref(), config, plan, deadline).await;
     // after a failed delete too: some deletes may have happened
     let after =
         storage.gc_hook(&ctx, GcPhase::AfterDeletes { changed: changed.as_ref() }).await;
@@ -450,9 +502,17 @@ async fn sweep_and_delete(
     asset_manager: &AssetManager,
     config: &GCConfig,
     plan: GcPlan,
+    deadline: Option<tokio::time::Instant>,
 ) -> GCResult<GCSummary> {
+    if config.deletes_storage_leftovers() && deadline_passed(deadline) {
+        info!("Timed out before sweeping storage leftovers");
+        return Ok(GCSummary {
+            timed_out_phase: Some(GCRunPhase::StorageLeftovers),
+            ..Default::default()
+        });
+    }
     let swept = sweep_storage_leftovers(asset_manager, config).await?;
-    let mut summary = delete_garbage(asset_manager, config, plan).await?;
+    let mut summary = delete_garbage(asset_manager, config, plan, deadline).await?;
     summary.storage_leftovers_deleted = swept.deleted_objects;
     summary.bytes_deleted += swept.deleted_bytes;
     Ok(summary)
@@ -512,9 +572,16 @@ async fn garbage_collect_one_attempt(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
     num_updates_per_repo_info_file: u16,
-) -> GCResult<GcPlan> {
+    deadline: Option<tokio::time::Instant>,
+) -> GCResult<Option<GcPlan>> {
     let (mut plan, drop_snapshots) = if config.deletes_objects() {
-        find_garbage(Arc::clone(&asset_manager), config).await?
+        // The search writes nothing, so dropping it at the deadline is safe.
+        // Box it: inline, it doubles the GC future and overflows the stack in unoptimized builds.
+        let found = Box::pin(find_garbage(Arc::clone(&asset_manager), config));
+        match until_deadline(deadline, found).await {
+            Some(found) => found?,
+            None => return Ok(None),
+        }
     } else {
         let repo_info = if asset_manager.spec_version() > SpecVersionBin::V1 {
             Some(asset_manager.fetch_repo_info().await?.0)
@@ -523,6 +590,10 @@ async fn garbage_collect_one_attempt(
         };
         (GcPlan { repo_info, ..Default::default() }, HashSet::new())
     };
+    // Stop before the first write if the deadline passed. Then `FindRetained` means no change.
+    if deadline_passed(deadline) {
+        return Ok(None);
+    }
 
     let layout = FeatureName::from(WriterFeature::FilesystemLayoutV1);
     let lists_layout = match &plan.repo_info {
@@ -545,7 +616,7 @@ async fn garbage_collect_one_attempt(
         plan.repo_info = Some(written);
         plan.changed = lists_layout.then_some(version);
     }
-    Ok(plan)
+    Ok(Some(plan))
 }
 
 /// Roots, reachability and retention: what GC keeps, and the snapshots it
@@ -652,6 +723,7 @@ async fn delete_garbage(
     asset_manager: &AssetManager,
     config: &GCConfig,
     plan: GcPlan,
+    deadline: Option<tokio::time::Instant>,
 ) -> GCResult<GCSummary> {
     let GcPlan {
         keep_chunks,
@@ -662,11 +734,24 @@ async fn delete_garbage(
         changed: _,
     } = plan;
     let mut summary = GCSummary::default();
+    // Stops before `phase` once the deadline has passed. Later phases are
+    // skipped too, so nothing is deleted before what references it.
+    let out_of_time = |summary: &mut GCSummary, phase: GCRunPhase| {
+        let passed = deadline_passed(deadline);
+        if passed {
+            info!(phase = phase.as_str(), "Timed out before starting the phase");
+            summary.timed_out_phase = Some(phase);
+        }
+        passed
+    };
     let mut earlier_phase_failed = false;
 
     info!("Starting deletes");
 
     if config.deletes_snapshots() {
+        if out_of_time(&mut summary, GCRunPhase::Snapshots) {
+            return Ok(summary);
+        }
         debug!("Garbage collecting snapshots");
         let report = match listed_snaps.take() {
             Some(listed) => {
@@ -675,16 +760,23 @@ async fn delete_garbage(
                         Ok(ListInfo { id, created_at, size_bytes })
                     },
                 ));
-                gc_snapshots(asset_manager, config, &keep_snapshots, candidates).await?
+                gc_snapshots(asset_manager, config, deadline, &keep_snapshots, candidates)
+                    .await?
             }
             None => {
                 let candidates = asset_manager
                     .list_snapshots_with_concurrency(config.list_concurrency())
                     .await?;
-                gc_snapshots(asset_manager, config, &keep_snapshots, candidates).await?
+                gc_snapshots(asset_manager, config, deadline, &keep_snapshots, candidates)
+                    .await?
             }
         };
+        let timed_out = report.timed_out;
         earlier_phase_failed |= summary.absorb(report, |s| &mut s.snapshots_deleted);
+        if timed_out {
+            summary.timed_out_phase = Some(GCRunPhase::Snapshots);
+            return Ok(summary);
+        }
     }
 
     // FIXME: with `dangling_snapshots == Action::Keep` but manifests or tx logs set to
@@ -694,6 +786,8 @@ async fn delete_garbage(
     if config.deletes_transaction_logs() {
         if earlier_phase_failed {
             summary.skipped_phases.push("transaction_logs".to_string());
+        } else if out_of_time(&mut summary, GCRunPhase::TransactionLogs) {
+            return Ok(summary);
         } else {
             // We need to retain tx logs of snapshots if any surviving
             // snapshot still references them in pruned_ancestor_tx_logs.
@@ -708,25 +802,44 @@ async fn delete_garbage(
                 itertools::process_results(pruned, |ids| keep_tx_logs.extend(ids))?;
             }
             let report =
-                gc_transaction_logs(asset_manager, config, &keep_tx_logs).await?;
+                gc_transaction_logs(asset_manager, config, deadline, &keep_tx_logs)
+                    .await?;
+            let timed_out = report.timed_out;
             earlier_phase_failed |=
                 summary.absorb(report, |s| &mut s.transaction_logs_deleted);
+            if timed_out {
+                summary.timed_out_phase = Some(GCRunPhase::TransactionLogs);
+                return Ok(summary);
+            }
         }
     }
     if config.deletes_manifests() {
         if earlier_phase_failed {
             summary.skipped_phases.push("manifests".to_string());
+        } else if out_of_time(&mut summary, GCRunPhase::Manifests) {
+            return Ok(summary);
         } else {
-            let report = gc_manifests(asset_manager, config, &keep_manifests).await?;
+            let report =
+                gc_manifests(asset_manager, config, deadline, &keep_manifests).await?;
+            let timed_out = report.timed_out;
             earlier_phase_failed |= summary.absorb(report, |s| &mut s.manifests_deleted);
+            if timed_out {
+                summary.timed_out_phase = Some(GCRunPhase::Manifests);
+                return Ok(summary);
+            }
         }
     }
     if config.deletes_chunks() {
         if earlier_phase_failed {
             summary.skipped_phases.push("chunks".to_string());
+        } else if out_of_time(&mut summary, GCRunPhase::Chunks) {
+            return Ok(summary);
         } else {
             asset_manager.clear_chunk_cache();
-            let report = gc_chunks(asset_manager, config, &keep_chunks).await?;
+            let report = gc_chunks(asset_manager, config, deadline, &keep_chunks).await?;
+            if report.timed_out {
+                summary.timed_out_phase = Some(GCRunPhase::Chunks);
+            }
             summary.absorb(report, |s| &mut s.chunks_deleted);
         }
     }
@@ -905,10 +1018,11 @@ async fn delete_snapshots_from_repo_info(
     Ok((written, version))
 }
 
-#[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, config, deadline, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 pub async fn gc_chunks(
     asset_manager: &AssetManager,
     config: &GCConfig,
+    deadline: Option<tokio::time::Instant>,
     keep_ids: &ChunkIdSet,
 ) -> GCResult<DeleteReport> {
     info!("Deleting chunks");
@@ -916,7 +1030,7 @@ pub async fn gc_chunks(
         asset_manager.list_chunks_with_concurrency(config.list_concurrency()).await?;
     Ok(deleter::delete_listed(
         asset_manager,
-        config.delete_config(),
+        config.delete_config(deadline),
         CHUNKS_FILE_PATH,
         DELETE_BATCH_SIZE,
         candidates,
@@ -925,10 +1039,11 @@ pub async fn gc_chunks(
     .await?)
 }
 
-#[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, config, deadline, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 pub async fn gc_manifests(
     asset_manager: &AssetManager,
     config: &GCConfig,
+    deadline: Option<tokio::time::Instant>,
     keep_ids: &HashSet<ManifestId>,
 ) -> GCResult<DeleteReport> {
     info!("Deleting manifests");
@@ -936,7 +1051,7 @@ pub async fn gc_manifests(
         asset_manager.list_manifests_with_concurrency(config.list_concurrency()).await?;
     Ok(deleter::delete_listed(
         asset_manager,
-        config.delete_config(),
+        config.delete_config(deadline),
         MANIFESTS_FILE_PATH,
         DELETE_BATCH_SIZE,
         candidates,
@@ -957,13 +1072,14 @@ pub async fn gc_manifests(
 pub async fn gc_snapshots(
     asset_manager: &AssetManager,
     config: &GCConfig,
+    deadline: Option<tokio::time::Instant>,
     keep_ids: &HashSet<SnapshotId>,
     snapshots: impl Stream<Item = RepositoryResult<ListInfo<SnapshotId>>> + Send,
 ) -> GCResult<DeleteReport> {
     info!("Deleting snapshots");
     Ok(deleter::delete_listed(
         asset_manager,
-        config.delete_config(),
+        config.delete_config(deadline),
         SNAPSHOTS_FILE_PATH,
         DELETE_BATCH_SIZE,
         snapshots,
@@ -979,10 +1095,11 @@ pub async fn gc_snapshots(
     .await?)
 }
 
-#[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]
+#[instrument(skip(asset_manager, config, deadline, keep_ids), fields(keep_ids.len = keep_ids.len()))]
 pub async fn gc_transaction_logs(
     asset_manager: &AssetManager,
     config: &GCConfig,
+    deadline: Option<tokio::time::Instant>,
     keep_ids: &HashSet<SnapshotId>,
 ) -> GCResult<DeleteReport> {
     info!("Deleting transaction logs");
@@ -991,7 +1108,7 @@ pub async fn gc_transaction_logs(
         .await?;
     Ok(deleter::delete_listed(
         asset_manager,
-        config.delete_config(),
+        config.delete_config(deadline),
         TRANSACTION_LOGS_FILE_PATH,
         DELETE_BATCH_SIZE,
         candidates,
@@ -1625,6 +1742,73 @@ mod tests {
                 .await
                 .map_err(|e| format!("{path} was deleted: {e}"))?;
         }
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn timeout_while_finding_retained_deletes_nothing()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let snapshots_before = repo.asset_manager().list_snapshots().await?.count().await;
+        // the gate stays closed, so the snapshot listing never returns
+        let (am, _flaky) =
+            wrapped_asset_manager(&repo, &backend, None, FailMode::GatedListings);
+        let config =
+            gc_config(50).with_timeout(Some(std::time::Duration::from_millis(100)));
+
+        let summary = garbage_collect(am, &config, None, 10).await?;
+
+        assert_eq!(
+            summary,
+            GCSummary {
+                timed_out_phase: Some(GCRunPhase::FindRetained),
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            repo.asset_manager().list_snapshots().await?.count().await,
+            snapshots_before
+        );
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 4);
+        Ok(())
+    }
+
+    /// The snapshot batch is held in flight past the deadline. It still
+    /// counts, the later phases do not start, and a rerun finishes them.
+    #[tokio_test]
+    async fn timeout_between_phases_keeps_progress_and_a_rerun_finishes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_garbage(&backend).await?;
+        let (am, flaky) = wrapped_asset_manager(&repo, &backend, None, FailMode::Gated);
+        let timeout = std::time::Duration::from_millis(300);
+        let config = gc_config(50).with_timeout(Some(timeout));
+
+        let started = Instant::now();
+        let am2 = Arc::clone(&am);
+        let run =
+            tokio::spawn(async move { garbage_collect(am2, &config, None, 10).await });
+        while flaky.running_deletes() == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(timeout.saturating_sub(started.elapsed())).await;
+        flaky.gate.add_permits(100);
+        let summary = run.await??;
+
+        assert_eq!(summary.timed_out_phase, Some(GCRunPhase::TransactionLogs));
+        assert_eq!(summary.snapshots_deleted, 3);
+        assert_eq!(summary.transaction_logs_deleted, 0);
+        assert_eq!(summary.manifests_deleted, 0);
+        assert_eq!(summary.chunks_deleted, 0);
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 4);
+
+        let second = garbage_collect(Arc::clone(&am), &gc_config(50), None, 10).await?;
+        assert_eq!(second.timed_out_phase, None);
+        assert_eq!(second.transaction_logs_deleted, 3);
+        assert_eq!(second.manifests_deleted, 1);
+        assert_eq!(second.chunks_deleted, 4);
+        assert_eq!(repo.asset_manager().list_chunks().await?.count().await, 0);
         Ok(())
     }
 }

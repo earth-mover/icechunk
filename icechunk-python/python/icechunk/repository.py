@@ -2002,6 +2002,7 @@ class Repository:
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
         max_concurrent_listings: int | None = None,
+        timeout: datetime.timedelta | None = None,
     ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags.
 
@@ -2056,6 +2057,10 @@ class Repository:
             How many object listings to run concurrently while looking for
             garbage. Must be at least 1. Defaults to eight per available core,
             between 32 and 256.
+        timeout : datetime.timedelta | None
+            Stop cleanly once this much time has passed: no new listings or delete
+            requests start, and requests in flight finish. The summary then has
+            `timed_out_phase` set; see `GCSummary.timed_out_phase`. Defaults to no limit.
 
         Returns
         -------
@@ -2077,6 +2082,7 @@ class Repository:
             max_concurrent_deletes=max_concurrent_deletes,
             max_consecutive_delete_failures=max_consecutive_delete_failures,
             max_concurrent_listings=max_concurrent_listings,
+            timeout=timeout,
         )
 
     async def garbage_collect_async(
@@ -2091,6 +2097,7 @@ class Repository:
         max_concurrent_deletes: int = 10,
         max_consecutive_delete_failures: int = 50,
         max_concurrent_listings: int | None = None,
+        timeout: datetime.timedelta | None = None,
     ) -> GCSummary:
         """Delete any objects no longer accessible from any branches or tags (async version).
 
@@ -2145,6 +2152,10 @@ class Repository:
             How many object listings to run concurrently while looking for
             garbage. Must be at least 1. Defaults to eight per available core,
             between 32 and 256.
+        timeout : datetime.timedelta | None
+            Stop cleanly once this much time has passed: no new listings or delete
+            requests start, and requests in flight finish. The summary then has
+            `timed_out_phase` set; see `GCSummary.timed_out_phase`. Defaults to no limit.
 
         Returns
         -------
@@ -2166,6 +2177,7 @@ class Repository:
             max_concurrent_deletes=max_concurrent_deletes,
             max_consecutive_delete_failures=max_consecutive_delete_failures,
             max_concurrent_listings=max_concurrent_listings,
+            timeout=timeout,
         )
 
     def chunk_storage_stats(

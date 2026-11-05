@@ -67,6 +67,9 @@ pub(crate) struct DeleteConfig {
     pub(crate) backoff: DeleteBackoff,
     /// Count what would be deleted without sending any request.
     pub(crate) dry_run: bool,
+    /// Past this instant the phase lists nothing more and sends no new delete
+    /// requests. Requests already in flight finish and are counted.
+    pub(crate) deadline: Option<tokio::time::Instant>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -93,6 +96,8 @@ pub struct DeleteReport {
     pub peak_in_flight: usize,
     /// First distinct error messages, at most `MAX_REPORTED_DELETE_ERRORS`.
     pub errors: Vec<String>,
+    /// The deadline passed before the phase had deleted every candidate.
+    pub timed_out: bool,
 }
 
 impl DeleteReport {
@@ -323,6 +328,9 @@ impl Congestion {
 /// are drained first and only then is the error returned, because everything
 /// queued has already passed `should_delete` and the listing failure says
 /// nothing about it.
+///
+/// At `config.deadline` the phase stops listing and spawning, waits for the
+/// requests in flight, and returns their counts with `timed_out` set.
 pub(crate) async fn delete_listed<Id, S>(
     asset_manager: &AssetManager,
     config: DeleteConfig,
@@ -352,16 +360,21 @@ where
     let _reporter =
         AbortOnDrop(tokio::spawn(report_delete_progress(Arc::clone(&progress), prefix)));
 
-    let collected: DeleteResult<()> = async {
+    let deadline = config.deadline;
+    let collected: DeleteResult<Collected> = async {
         let mut batch: Vec<(String, u64)> = Vec::with_capacity(batch_size.get());
         let mut candidates = pin!(candidates);
-        while let Some(candidate) = candidates.next().await {
+        loop {
+            let Some(next) = until_deadline(deadline, candidates.next()).await else {
+                return Ok(Collected::Deadline);
+            };
+            let Some(candidate) = next else { break };
             let candidate = candidate?;
             progress.candidates_listed.fetch_add(1, AtomicOrdering::Relaxed);
             // the deleter returned, so nothing more will be deleted; listing on
             // would be wasted work. Its error is reported after the join.
             if tx.is_closed() {
-                return Ok(());
+                return Ok(Collected::DeleterGone);
             }
             if !should_delete(&candidate) {
                 continue;
@@ -371,24 +384,60 @@ where
             if batch.len() == batch_size.get() {
                 let full =
                     std::mem::replace(&mut batch, Vec::with_capacity(batch_size.get()));
-                if tx.send(full).await.is_err() {
+                match until_deadline(deadline, tx.send(full)).await {
+                    None => return Ok(Collected::Deadline),
                     // the deleter gave up; its error is reported below
-                    return Ok(());
+                    Some(Err(_)) => return Ok(Collected::DeleterGone),
+                    Some(Ok(())) => {
+                        progress.batches_queued.fetch_add(1, AtomicOrdering::Relaxed);
+                    }
                 }
-                progress.batches_queued.fetch_add(1, AtomicOrdering::Relaxed);
             }
         }
-        if !batch.is_empty() && tx.send(batch).await.is_ok() {
-            progress.batches_queued.fetch_add(1, AtomicOrdering::Relaxed);
+        if !batch.is_empty() {
+            match until_deadline(deadline, tx.send(batch)).await {
+                None => return Ok(Collected::Deadline),
+                Some(Err(_)) => return Ok(Collected::DeleterGone),
+                Some(Ok(())) => {
+                    progress.batches_queued.fetch_add(1, AtomicOrdering::Relaxed);
+                }
+            }
         }
-        Ok(())
+        Ok(Collected::Exhausted)
     }
     .await;
     drop(tx);
 
-    let report = (&mut deleter.0).await.capture().map_err(DeleteError::Repository)??;
-    collected?;
+    let mut report =
+        (&mut deleter.0).await.capture().map_err(DeleteError::Repository)??;
+    // The deleter only returns `Ok` before the listing is exhausted when it
+    // stopped at the deadline, so any early stop here is a timeout.
+    report.timed_out |= !matches!(collected?, Collected::Exhausted);
     Ok(report)
+}
+
+/// How the listing side of a delete phase ended.
+enum Collected {
+    /// Every candidate was listed and every accepted one queued.
+    Exhausted,
+    Deadline,
+    /// The deleter task returned first.
+    DeleterGone,
+}
+
+/// Runs `fut` to completion, or returns `None` once `deadline` passes.
+pub(crate) async fn until_deadline<F: Future>(
+    deadline: Option<tokio::time::Instant>,
+    fut: F,
+) -> Option<F::Output> {
+    match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, fut).await.ok(),
+        None => Some(fut.await),
+    }
+}
+
+pub(crate) fn deadline_passed(deadline: Option<tokio::time::Instant>) -> bool {
+    deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
 }
 
 /// Live counters of one delete phase, shared by the collector, the deleter and
@@ -580,7 +629,9 @@ impl Deleter {
 
 /// The deleter task: pulls batches, keeps at most `limit` delete requests
 /// running, and stops with `DeletesFailing` after `threshold` consecutive
-/// failed batches (dropping the `JoinSet` aborts the rest).
+/// failed batches (dropping the `JoinSet` aborts the rest). At
+/// `config.deadline` it spawns nothing more and waits for the requests in
+/// flight.
 ///
 /// The limit is not `config.max_in_flight` but whatever rate the store
 /// sustains, discovered by [`Congestion`]: a throttled batch is re-queued rather
@@ -599,6 +650,15 @@ async fn run_deletes(
     let mut queue_open = true;
 
     loop {
+        if deadline_passed(config.deadline) {
+            while let Some(joined) = in_flight.join_next().await {
+                deleter.absorb(joined)?;
+            }
+            deleter.report.timed_out =
+                !deleter.retry_queue.is_empty() || rx.try_recv().is_ok();
+            break;
+        }
+
         // retries first: they are already past the listing filter
         let batch = match deleter.retry_queue.pop_front() {
             Some(batch) => batch,
@@ -650,8 +710,15 @@ async fn run_deletes(
         if let Some(quiet_until) = deleter.congestion.quiet_until() {
             let now = Instant::now();
             if quiet_until > now {
-                tokio::time::sleep(quiet_until - now).await;
+                let quiet = tokio::time::sleep(quiet_until - now);
+                until_deadline(config.deadline, quiet).await;
             }
+        }
+
+        // the waits above can outlast the deadline
+        if deadline_passed(config.deadline) {
+            deleter.retry_queue.push_front(batch);
+            continue;
         }
 
         let seq = deleter.congestion.take_seq();
@@ -709,6 +776,8 @@ pub(crate) mod testing {
         ShortByOne,
         /// every call waits for one permit from `gate` before delegating
         Gated,
+        /// every listing waits for one permit from `gate` before delegating
+        GatedListings,
         /// the first `n` calls under the failing prefix are throttled
         ThrottleFirst(usize),
         /// every call under the failing prefix is throttled
@@ -774,7 +843,7 @@ pub(crate) mod testing {
                 FailMode::Alternate if n.is_multiple_of(2) => Injected::Fail,
                 FailMode::Alternate => Injected::Nothing,
                 FailMode::ShortByOne => Injected::ReportOneFewer,
-                FailMode::Gated => Injected::Nothing,
+                FailMode::Gated | FailMode::GatedListings => Injected::Nothing,
                 FailMode::ThrottleFirst(first) if n < first => Injected::Throttle,
                 FailMode::ThrottleFirst(_) => Injected::Nothing,
                 FailMode::ThrottleAlways => Injected::Throttle,
@@ -796,6 +865,19 @@ pub(crate) mod testing {
         pub(crate) fn peak_deletes(&self) -> usize {
             self.peak_in_flight.load(Ordering::SeqCst)
         }
+
+        async fn wait_if_listings_gated(&self) -> StorageResult<()> {
+            if matches!(self.mode, FailMode::GatedListings) {
+                self.gate
+                    .acquire()
+                    .await
+                    .map_err(|err| {
+                        StorageError::capture(StorageErrorKind::Other(err.to_string()))
+                    })?
+                    .forget();
+            }
+            Ok(())
+        }
     }
 
     struct InFlightGuard<'a>(&'a FlakyDeletes);
@@ -814,6 +896,7 @@ pub(crate) mod testing {
             ctx: &StorageContext<'_>,
             prefix: &str,
         ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+            self.wait_if_listings_gated().await?;
             let listing = backend.list_objects(ctx, prefix).await?;
             if self.list_error_prefix.as_deref() != Some(prefix) {
                 return Ok(listing);
@@ -828,6 +911,7 @@ pub(crate) mod testing {
             prefix: &str,
             id_prefixes: &[String],
         ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+            self.wait_if_listings_gated().await?;
             let listing =
                 backend.list_objects_with_id_prefixes(ctx, prefix, id_prefixes).await?;
             // Fail a worker's listing, never the probe: the probe asks for the
@@ -1069,6 +1153,7 @@ mod tests {
             max_consecutive_failures: NonZeroU16::new(max_consecutive_failures).unwrap(),
             backoff: DeleteBackoff { base: ms(10), cap: ms(40) },
             dry_run: false,
+            deadline: None,
         }
     }
 
@@ -1318,6 +1403,80 @@ mod tests {
         assert_eq!(report.throttled_batches, 0);
         assert_eq!(report.peak_in_flight, 8);
         assert_eq!(am.list_chunks().await?.count().await, 0);
+        Ok(())
+    }
+
+    /// The first request is held past the deadline. It still counts, and no
+    /// request starts after the deadline.
+    #[tokio_test]
+    async fn deadline_drains_in_flight_and_spawns_nothing_more()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_loose_chunks(&backend, 15).await?;
+        let (am, flaky) = wrapped_asset_manager(&repo, &backend, None, FailMode::Gated);
+        let gate = Arc::clone(&flaky.gate);
+        let candidates: Vec<ListInfo<ChunkId>> =
+            am.list_chunks().await?.try_collect().await?;
+
+        let deadline = tokio::time::Instant::now() + ms(200);
+        let config = DeleteConfig { deadline: Some(deadline), ..delete_config(50, 8) };
+        let am2 = Arc::clone(&am);
+        let run = tokio::spawn(async move {
+            delete_listed(
+                am2.as_ref(),
+                config,
+                CHUNKS_FILE_PATH,
+                NonZeroUsize::MIN,
+                stream::iter(candidates.into_iter().map(Ok)),
+                |_| true,
+            )
+            .await
+        });
+
+        wait_for("1 delete in flight", || flaky.running_deletes() == 1).await?;
+        tokio::time::sleep_until(deadline).await;
+        gate.add_permits(100);
+
+        let report = tokio::time::timeout(Duration::from_secs(5), run).await???;
+        assert!(report.timed_out);
+        assert_eq!(report.deleted_objects, 1);
+        assert_eq!(flaky.peak_deletes(), 1);
+        assert_eq!(am.list_chunks().await?.count().await, 14);
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn deadline_that_passes_after_the_last_delete_is_not_a_timeout()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let backend: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo = repo_with_loose_chunks(&backend, 4).await?;
+        let (am, flaky) = wrapped_asset_manager(&repo, &backend, None, FailMode::Gated);
+        let gate = Arc::clone(&flaky.gate);
+        let candidates: Vec<ListInfo<ChunkId>> =
+            am.list_chunks().await?.try_collect().await?;
+
+        let deadline = tokio::time::Instant::now() + ms(200);
+        let config = DeleteConfig { deadline: Some(deadline), ..delete_config(50, 8) };
+        let am2 = Arc::clone(&am);
+        let run = tokio::spawn(async move {
+            delete_listed(
+                am2.as_ref(),
+                config,
+                CHUNKS_FILE_PATH,
+                DELETE_BATCH_SIZE,
+                stream::iter(candidates.into_iter().map(Ok)),
+                |_| true,
+            )
+            .await
+        });
+
+        wait_for("1 delete in flight", || flaky.running_deletes() == 1).await?;
+        tokio::time::sleep_until(deadline).await;
+        gate.add_permits(1);
+
+        let report = tokio::time::timeout(Duration::from_secs(5), run).await???;
+        assert!(!report.timed_out);
+        assert_eq!(report.deleted_objects, 4);
         Ok(())
     }
 }

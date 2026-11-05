@@ -499,6 +499,8 @@ pub(crate) struct PyGCSummary {
     pub skipped_phases: Vec<String>,
     #[pyo3(get)]
     pub storage_leftovers_deleted: u64,
+    #[pyo3(get)]
+    pub timed_out_phase: Option<String>,
 }
 
 impl From<GCSummary> for PyGCSummary {
@@ -515,6 +517,9 @@ impl From<GCSummary> for PyGCSummary {
             delete_errors: value.delete_errors,
             skipped_phases: value.skipped_phases,
             storage_leftovers_deleted: value.storage_leftovers_deleted,
+            timed_out_phase: value
+                .timed_out_phase
+                .map(|phase| phase.as_str().to_string()),
         }
     }
 }
@@ -537,6 +542,12 @@ impl PyRepr for PyGCSummary {
             ("delete_errors", format!("{:?}", self.delete_errors)),
             ("skipped_phases", format!("{:?}", self.skipped_phases)),
             ("storage_leftovers_deleted", self.storage_leftovers_deleted.to_string()),
+            (
+                "timed_out_phase",
+                self.timed_out_phase
+                    .as_ref()
+                    .map_or("None".to_string(), |phase| format!("{phase:?}")),
+            ),
         ]
     }
 }
@@ -2898,6 +2909,7 @@ impl PyRepository {
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
         max_concurrent_listings: Option<NonZeroU16>,
+        timeout: Option<std::time::Duration>,
     ) -> PyResult<PyGCSummary> {
         // This function calls block_on, so we need to allow other thread python to make progress
         py.detach(move || {
@@ -2915,7 +2927,8 @@ impl PyRepository {
                         max_consecutive_delete_failures,
                         max_concurrent_listings,
                         dry_run,
-                    );
+                    )
+                    .with_timeout(timeout);
                     let (asset_manager, num_updates) = {
                         let lock = self.0.read().await;
                         let num_updates = lock.config().num_updates_per_repo_info_file();
@@ -2945,6 +2958,7 @@ impl PyRepository {
         max_concurrent_deletes: NonZeroU16,
         max_consecutive_delete_failures: NonZeroU16,
         max_concurrent_listings: Option<NonZeroU16>,
+        timeout: Option<std::time::Duration>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let repository = Arc::clone(&self.0);
         pyo3_async_runtimes::tokio::future_into_py::<_, PyGCSummary>(py, async move {
@@ -2960,7 +2974,8 @@ impl PyRepository {
                 max_consecutive_delete_failures,
                 max_concurrent_listings,
                 dry_run,
-            );
+            )
+            .with_timeout(timeout);
             let (asset_manager, num_updates) = {
                 let lock = repository.read().await;
                 let num_updates = lock.config().num_updates_per_repo_info_file();

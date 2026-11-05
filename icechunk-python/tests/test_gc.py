@@ -1,5 +1,5 @@
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import uuid4
 
@@ -339,3 +339,44 @@ async def test_gc_deletes_only_unreferenced_expired_tx_logs(use_async: bool) -> 
 
     # initial + root group + /a + /b + /c remain
     assert transaction_count() == 5
+
+
+@pytest.mark.parametrize("use_async", [True, False])
+async def test_gc_timeout_reports_where_it_stopped(use_async: bool) -> None:
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    zarr.group(store=session.store, overwrite=True)
+    session.commit("root group")
+    cutoff = datetime.now(UTC) + timedelta(hours=1)
+
+    async def gc(timeout: timedelta | None) -> ic.GCSummary:
+        if use_async:
+            return await repo.garbage_collect_async(cutoff, timeout=timeout)
+        return repo.garbage_collect(cutoff, timeout=timeout)
+
+    stopped = await gc(timedelta(0))
+    assert stopped.timed_out_phase == "find_retained"
+    assert stopped.bytes_deleted == 0
+
+    finished = await gc(None)
+    assert finished.timed_out_phase is None
+
+
+def test_gc_timeout_before_the_repo_info_write_changes_nothing() -> None:
+    # With a zero timeout, the mark phase can still finish in one poll. GC must then
+    # stop before it writes the repo info. The loop repeats because the poll is a race.
+    for _ in range(20):
+        repo = ic.Repository.create(storage=ic.in_memory_storage())
+        session = repo.writable_session("main")
+        zarr.group(store=session.store, overwrite=True)
+        kept = session.commit("kept")
+        session = repo.writable_session("main")
+        zarr.group(store=session.store, overwrite=True).attrs["x"] = 1
+        dangling = session.commit("dangling")
+        repo.reset_branch("main", kept)
+        cutoff = datetime.now(UTC) + timedelta(hours=1)
+
+        stopped = repo.garbage_collect(cutoff, timeout=timedelta(0))
+
+        assert stopped.timed_out_phase == "find_retained", stopped
+        assert repo.lookup_snapshot(dangling).id == dangling
