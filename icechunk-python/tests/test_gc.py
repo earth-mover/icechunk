@@ -362,3 +362,32 @@ async def test_gc_timeout_reports_where_it_stopped(use_async: bool) -> None:
 
     finished = await gc(None)
     assert finished.timed_out_phase is None
+
+
+def test_gc_timeout_reports_a_repo_info_change() -> None:
+    # A zero timeout often fires just after GC drops snapshots from the repo info.
+    # Each try must then report a change: the summary cannot be all zeros.
+    for _ in range(20):
+        repo = ic.Repository.create(storage=ic.in_memory_storage())
+        session = repo.writable_session("main")
+        zarr.group(store=session.store, overwrite=True)
+        kept = session.commit("kept")
+        session = repo.writable_session("main")
+        zarr.group(store=session.store, overwrite=True).attrs["x"] = 1
+        dangling = session.commit("dangling")
+        repo.reset_branch("main", kept)
+        cutoff = datetime.now(UTC) + timedelta(hours=1)
+
+        stopped = repo.garbage_collect(cutoff, timeout=timedelta(0))
+
+        try:
+            repo.lookup_snapshot(dangling)
+            dropped = False
+        except ic.IcechunkError:
+            dropped = True
+        reported_nothing = (
+            stopped.bytes_deleted == 0
+            and stopped.snapshots_deleted == 0
+            and stopped.storage_leftovers_deleted == 0
+        )
+        assert not (dropped and reported_nothing), stopped
