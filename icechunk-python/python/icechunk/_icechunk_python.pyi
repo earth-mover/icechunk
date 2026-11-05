@@ -2115,10 +2115,12 @@ class GCSummary:
     ):
         """
         The phase running, or next to start, when the `timeout` passed. None
-        when the run finished. "find_retained" means nothing was deleted, and a
-        rerun with the same timeout repeats the same work. Any later phase
-        means the deleted counts are real progress, and a rerun continues
-        from there.
+        when the run finished. "find_retained" means that GC changed nothing.
+        A rerun with the same timeout repeats the same work. A later phase
+        means that GC removed the expired snapshots from the repository's
+        snapshot list. This is true when all deleted counts are zero too. The
+        deleted counts show what GC deleted. A rerun starts from the objects
+        that remain.
         """
     def _repr_html_(self) -> str: ...
 

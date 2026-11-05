@@ -323,8 +323,10 @@ pub struct GCSummary {
     /// Leftovers of crashed or abandoned writes the storage backend swept
     /// (see `Storage::sweep_leftovers`); their bytes are in `bytes_deleted`.
     pub storage_leftovers_deleted: u64,
-    /// The phase running or next to start when the timeout passed. `FindRetained` means
-    /// nothing was deleted; a later phase means the counts above are progress a rerun continues.
+    /// The phase that ran, or was next, when the timeout passed. `FindRetained` means that GC
+    /// changed nothing. A later phase means that GC removed the expired snapshots from the
+    /// repo info. This is true when all counts are zero too. The counts show what GC deleted.
+    /// A rerun starts from the objects that remain.
     pub timed_out_phase: Option<GCRunPhase>,
 }
 
@@ -588,6 +590,10 @@ async fn garbage_collect_one_attempt(
         };
         (GcPlan { repo_info, ..Default::default() }, HashSet::new())
     };
+    // Stop before the first write if the deadline passed. Then `FindRetained` means no change.
+    if deadline_passed(deadline) {
+        return Ok(None);
+    }
 
     let layout = FeatureName::from(WriterFeature::FilesystemLayoutV1);
     let lists_layout = match &plan.repo_info {

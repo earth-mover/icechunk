@@ -354,19 +354,17 @@ async def test_gc_timeout_reports_where_it_stopped(use_async: bool) -> None:
             return await repo.garbage_collect_async(cutoff, timeout=timeout)
         return repo.garbage_collect(cutoff, timeout=timeout)
 
-    # the in-memory store can finish finding retained objects in one poll, so
-    # a zero timeout may first fire before the storage leftovers sweep
     stopped = await gc(timedelta(0))
-    assert stopped.timed_out_phase in ("find_retained", "storage_leftovers")
+    assert stopped.timed_out_phase == "find_retained"
     assert stopped.bytes_deleted == 0
 
     finished = await gc(None)
     assert finished.timed_out_phase is None
 
 
-def test_gc_timeout_reports_a_repo_info_change() -> None:
-    # A zero timeout often fires just after GC drops snapshots from the repo info.
-    # Each try must then report a change: the summary cannot be all zeros.
+def test_gc_timeout_before_the_repo_info_write_changes_nothing() -> None:
+    # With a zero timeout, the mark phase can still finish in one poll. GC must then
+    # stop before it writes the repo info. The loop repeats because the poll is a race.
     for _ in range(20):
         repo = ic.Repository.create(storage=ic.in_memory_storage())
         session = repo.writable_session("main")
@@ -380,14 +378,5 @@ def test_gc_timeout_reports_a_repo_info_change() -> None:
 
         stopped = repo.garbage_collect(cutoff, timeout=timedelta(0))
 
-        try:
-            repo.lookup_snapshot(dangling)
-            dropped = False
-        except ic.IcechunkError:
-            dropped = True
-        reported_nothing = (
-            stopped.bytes_deleted == 0
-            and stopped.snapshots_deleted == 0
-            and stopped.storage_leftovers_deleted == 0
-        )
-        assert not (dropped and reported_nothing), stopped
+        assert stopped.timed_out_phase == "find_retained", stopped
+        assert repo.lookup_snapshot(dangling).id == dangling
