@@ -2532,6 +2532,7 @@ dependencies = [
  "icechunk-macros",
  "icechunk-storage",
  "icechunk-types",
+ "rustls",
  "serde",
  "serde_json",
  "test-log",
@@ -2540,6 +2541,7 @@ dependencies = [
  "tracing",
  "typed-path",
  "typetag",
+ "url",
  "uuid",
 ]
 
@@ -2554,6 +2556,7 @@ dependencies = [
  "icechunk-types",
  "itertools 0.15.0",
  "percent-encoding",
+ "rustls",
  "rustls-pki-types",
  "rustls-webpki",
  "serde",
