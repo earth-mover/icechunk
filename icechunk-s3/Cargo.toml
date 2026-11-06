@@ -42,6 +42,8 @@ uuid.workspace = true
 [dev-dependencies]
 icechunk-macros.workspace = true
 
+aws-smithy-http-client = { workspace = true, features = ["test-util"] }
+http.workspace = true
 serde_json.workspace = true
 test-log.workspace = true
 
