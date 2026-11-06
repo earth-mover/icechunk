@@ -231,10 +231,12 @@ fn general(code: &'static str) -> Classified {
     Classified::Class { class: None, code, ca_hint_in_message: false }
 }
 
-fn unreachable(failure: &NetworkFailure) -> Classified {
+/// A network-level failure, reported with `code`. The TLS wording of an
+/// unreachable-host message already covers `ICECHUNK_TLS_CA_FILE`.
+fn unreachable(failure: &NetworkFailure, code: &'static str) -> Classified {
     Classified::Class {
         class: Some("StorageError"),
-        code: codes::STORAGE_UNREACHABLE,
+        code,
         ca_hint_in_message: *failure == NetworkFailure::Tls,
     }
 }
@@ -421,7 +423,9 @@ fn classify_storage(kind: &StorageErrorKind) -> Classified {
         K::CannotParseUrl { .. } => class("StorageError", codes::CANNOT_PARSE_URL),
         K::BadRedirect(_) => class("StorageError", codes::BAD_REDIRECT),
         K::Throttled { .. } => class("StorageError", codes::THROTTLED),
-        K::Unreachable { failure, .. } => unreachable(failure),
+        K::Unreachable { failure, .. } => {
+            unreachable(failure, codes::STORAGE_UNREACHABLE)
+        }
         K::Other(_) => class("StorageError", codes::STORAGE_OTHER),
     }
 }
@@ -534,7 +538,11 @@ fn classify_virtual_ref(kind: &VirtualReferenceErrorKind) -> Classified {
         | K::UnsupportedObjectKeyForBackend(_)
         | K::Decoding(_) => class("InvalidInputError", codes::INVALID_VIRTUAL_REF),
         K::FetchError(_) => class("StorageError", codes::VIRTUAL_CHUNK_FETCH),
-        K::Unreachable { failure, .. } => unreachable(failure),
+        // Keeps the virtual-chunk kind, which callers match on to handle
+        // missing chunks; the message carries the unreachable-host wording.
+        K::Unreachable { failure, .. } => {
+            unreachable(failure, codes::VIRTUAL_CHUNK_FETCH)
+        }
         K::ObjectModified(_) => class("StorageError", codes::VIRTUAL_CHUNK_MODIFIED),
         K::InvalidObjectSize { .. } => class("StorageError", codes::INVALID_OBJECT_SIZE),
         K::AzureConfigurationMustIncludeAccount => {

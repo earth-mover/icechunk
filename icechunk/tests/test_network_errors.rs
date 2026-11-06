@@ -167,6 +167,42 @@ async fn head_407_is_unexpected_response() {
 }
 
 #[tokio_test]
+async fn delete_html_503_is_unexpected_response_not_throttle() {
+    let server =
+        html_server(503, "POST", Some("text/html"), "<html>Blocked</html>").await;
+    let storage = s3_at(&server.uri(), Some("p"));
+    let settings = fast_settings();
+    let ctx = StorageContext::unattributed(&settings);
+    let err = storage
+        .delete_batch(&ctx, "chunks", vec![("abc".to_string(), 1)])
+        .await
+        .expect_err("expected the delete to fail");
+    assert!(!err.kind.is_throttled(), "got {err}");
+    let (host, failure) = expect_unreachable(&err);
+    assert_eq!(host, host_of(&server));
+    assert!(
+        matches!(failure, NetworkFailure::UnexpectedResponse { status: 503, .. }),
+        "got {failure:?}"
+    );
+}
+
+#[tokio_test]
+async fn s3_error_code_with_non_xml_content_type_is_not_unreachable() {
+    // Some S3-compatible services label XML error bodies with another type;
+    // a parsed S3 error code shows the storage service answered.
+    let server = html_server(
+        403,
+        "GET",
+        Some("text/plain"),
+        "<Error><Code>AccessDenied</Code><Message>nope</Message></Error>",
+    )
+    .await;
+    let storage = s3_at(&server.uri(), Some("p"));
+    let err = read_error(&storage).await;
+    assert!(!err.kind.is_unreachable(), "got {err}");
+}
+
+#[tokio_test]
 async fn head_403_without_body_is_not_unreachable() {
     let server = html_server(403, "HEAD", None, "").await;
     let storage = s3_at(&server.uri(), None);

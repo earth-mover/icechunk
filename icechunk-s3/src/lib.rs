@@ -28,10 +28,7 @@ use aws_sdk_s3::{
         },
     },
     error::{BoxError, ProvideErrorMetadata, SdkError},
-    operation::{
-        copy_object::CopyObjectError, delete_objects::DeleteObjectsError,
-        put_object::PutObjectError,
-    },
+    operation::{copy_object::CopyObjectError, put_object::PutObjectError},
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
 };
@@ -333,6 +330,9 @@ pub fn classify_s3_error<E: ProvideErrorMetadata + std::error::Error + 'static>(
             }
         }
         SdkError::TimeoutError(_) => Some(NetworkFailure::Timeout),
+        // An S3 error code means the storage service answered, whatever the
+        // Content-Type says. Only a response the SDK could not parse is checked.
+        SdkError::ServiceError(e) if e.err().code().is_some() => None,
         SdkError::ServiceError(e) => classify_s3_response(e.raw()),
         SdkError::ResponseError(e) => classify_s3_response(e.raw()),
         _ => None,
@@ -1483,15 +1483,23 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
+        let res = req.customize().config_override(attribution_override(ctx)).send().await;
+        // Network failures first, for every error shape: a proxy block page
+        // must not look like a throttle (which GC would back off and retry)
+        // or like a plain failure that does not name the host.
+        let res = match res {
+            Err(err) => match classify_s3_error(&err) {
+                Some(failure) => {
+                    return Err(unreachable_error(self.host(), failure, err));
+                }
+                None => Err(err),
+            },
+            ok => ok,
+        };
         // A throttle gets its own kind, so the caller can back off instead of
         // counting it as a failure. The SDK has already retried it `max_tries`
         // times with its own backoff by then.
-        let res = match req
-            .customize()
-            .config_override(attribution_override(ctx))
-            .send()
-            .await
-        {
+        let res = match res {
             Ok(res) => res,
             Err(SdkError::ServiceError(err)) => {
                 use aws_sdk_s3::operation::RequestId as _;
@@ -1511,15 +1519,11 @@ impl Storage for S3Storage {
             }
             Err(SdkError::ResponseError(err)) => {
                 let status = err.raw().status().as_u16();
-                let sdk_err = SdkError::<DeleteObjectsError, _>::ResponseError(err);
-                if let Some(failure) = classify_s3_error(&sdk_err) {
-                    return Err(unreachable_error(self.host(), failure, sdk_err));
-                }
                 return Err(other_error(format!(
                     "DeleteObjects failed: unparsable response, status {status}"
                 )));
             }
-            Err(err) => return Err(s3_error(err, &self.host())),
+            Err(err) => return Err(obj_store_error(err)),
         };
 
         if let Some(errors) = res.errors.as_deref().filter(|e| !e.is_empty()) {
@@ -2239,6 +2243,21 @@ mod tests {
                 classify_s3_error(&service_error(403, Some("application/xml"), body))
                     .is_none()
             );
+        }
+
+        #[test]
+        fn parsed_s3_code_is_not_classified_whatever_the_content_type() {
+            let meta = GetObjectError::generic(
+                aws_sdk_s3::error::ErrorMetadata::builder()
+                    .code("AccessDenied")
+                    .message("nope")
+                    .build(),
+            );
+            let err = SdkError::service_error(
+                meta,
+                raw(403, Some("application/json"), r#"{"error":"denied"}"#),
+            );
+            assert!(classify_s3_error(&err).is_none());
         }
 
         #[test]

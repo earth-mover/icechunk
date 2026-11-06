@@ -111,7 +111,9 @@ def test_rejects_unknown_ca(
         assert exc.kind == ic.ErrorKind.STORAGE_UNREACHABLE
         assert f"localhost:{https_port}" in msg
         assert "TLS-inspecting proxy" in msg
-        # the unreachable message already names the env var; no second hint
+        assert "macOS sandbox" in msg
+        assert "firewall" not in msg
+        # the unreachable message already gives the trust-store advice; no second hint
         assert "\n\nhint: " not in msg
 
 

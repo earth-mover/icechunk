@@ -1059,9 +1059,11 @@ mod network_failure_tests {
             failure: NetworkFailure::Tls.into(),
             cause: "x".into(),
         };
-        assert!(e.to_string().ends_with(
-            "its CA certificate may need to be trusted, for example by setting ICECHUNK_TLS_CA_FILE to a PEM bundle that includes it."
+        let s = e.to_string();
+        assert!(s.starts_with(
+            "could not establish a TLS connection to storage at h.invalid."
         ));
+        assert!(s.contains("ICECHUNK_TLS_CA_FILE"));
     }
 
     #[test]
