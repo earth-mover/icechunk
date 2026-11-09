@@ -34,7 +34,7 @@ title: Filesystem layout, version 1
 
 ## Overview
 
-This page defines the files that hold a repository's repo info on a filesystem, and the rules that implementations MUST follow to read and change those files. The rules ensure that a change lands only if its base is still the current version. Only the repo info is stored differently. Everything else is as in the [specification](./spec-v2-2.md): snapshots, manifests, chunks, transaction logs, the `overwritten/` backups, expiration and garbage collection.
+This page defines the files that hold a repository's repo info on a filesystem, and the rules that implementations MUST follow to read and change those files. The rules ensure that a change lands only if its base is still the current version. This gives the filesystem layout the same [optimistic concurrency](./spec-v2-2.md#consistency-and-optimistic-concurrency) that a conditional update gives the object store layout. Only the repo info is stored differently. Everything else is as in the [specification](./spec-v2-2.md): snapshots, manifests, chunks, transaction logs, the `overwritten/` backups, expiration and garbage collection.
 
 The [object store layout](./spec-v2-2.md#storage-operations) keeps the repo info in a single file, `$ROOT/repo`, and changes it with a conditional update. Filesystems in general do not provide a conditional update.
 
