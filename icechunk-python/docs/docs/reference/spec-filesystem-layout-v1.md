@@ -93,15 +93,41 @@ Implementations that do not implement this layout read the mirror. The mirror ca
 
 ## Operations
 
-**Change.** The writer writes the new version to `repo.d/stage.<id>`, hard-links it as `repo.d/<N+1>.<h'>`, then renames the marker `latest.<N>.<h>` to `latest.<N+1>.<h'>`. The rename fails if another change moved the marker first: that is a conflict. Exactly one marker exists at any time, and the version it names is complete and durable before the rename. Before writing the new version, the writer backs up the version `<N>.<h>` it read to `overwritten/`, as every update does (see the [specification](./spec-v2-2.md#updates-to-the-repo-info-file)). A writer that knows its attempt did not land, because another change moved the marker past `N` first, MAY delete that attempt's backup: no version names it, and the version it holds was backed up by the change that replaced it. It MUST NOT delete the backup of an attempt whose outcome is unknown. A failure to delete is ignored.
+### Change
 
-**Publishing the mirror.** After every change, and before returning, the writer replaces `$ROOT/repo` with a byte-identical copy of the current version, through a staged `repo.d/mirror.<id>` renamed to `$ROOT/repo`. It publishes again, up to a fixed number of rounds, while a listing shows that the current version is no longer the one it published. A publication that fails or gives up can leave in `$ROOT/repo` an older version that was current, and does not undo the change. So the mirror can lag after crashes or under heavy write contention. Publishing the mirror explicitly (in Icechunk, `FilesystemStorage.publish_mirror()`) repairs this on a best-effort basis.
+In these steps, `N` and `h` are the number and hash of the base, and `B` is the bytes of the new version. Before the first step, the implementation MUST make the checks that [Modify a Repository](./spec-v2-2.md#modify-a-repository) requires, against the base. When a step says that the change is a conflict, the implementation MUST stop and report a conflict.
+
+1. **Back up the base.** The implementation MUST copy the base's version file to a new backup in `overwritten/`, as the [specification](./spec-v2-2.md#updates-to-the-repo-info-file) requires. If a listing of `repo.d` shows a marker with a number above `N`, or the base's version file cannot be read, the implementation MUST NOT write the backup, and the change is a conflict. If the SHA-256 of the file it read is not `h`, the implementation MUST stop with an error.
+2. **Check the new bytes.** `B` MUST decode as a repo info, and MUST list `filesystem-layout-v1`. Otherwise the implementation MUST stop with an error.
+3. **Make the names of data files durable.** The implementation MUST fsync `$ROOT` and each of its directories `snapshots/`, `manifests/`, `transactions/`, `chunks/` and `overwritten/` that exists. This makes the names of the files that the new version references durable before any marker names it.
+4. **Stage the new version.** The implementation MUST write `B` to `repo.d/stage.<id>`, with a new `id`, and fsync the file. If `repo.d` does not exist, the change is a conflict. On any other error, the implementation MUST stop with an error.
+5. **Link the new version.** The implementation MUST create `repo.d/<N+1>.<h'>`, where `h'` is the SHA-256 of `B`, as a hard link to `repo.d/stage.<id>`.
+    - If `repo.d/<N+1>.<h'>` already exists, the implementation MUST continue. The name contains the hash of `B`, so the existing file holds `B`.
+    - If `repo.d/stage.<id>` no longer exists, the change is a conflict.
+    - On any other error, the implementation MUST stop with an error.
+6. **Make the link durable.** The implementation MUST fsync `repo.d`. If the fsync fails, it MUST stop with an error.
+7. **Delete the staged file.** The implementation SHOULD delete `repo.d/stage.<id>`. It SHOULD also delete it when it stops at step 5 or 6.
+8. **Rename the marker.** The implementation MUST rename `repo.d/latest.<N>.<h>` to `repo.d/latest.<N+1>.<h'>`. The source MUST be the base's marker, whatever a listing of `repo.d` shows.
+    - If the rename succeeds, the change landed. The implementation MUST fsync `repo.d`. If that fsync fails, it MUST report an error: the change landed, but may not be durable. After the fsync, it MAY delete the version files that [Deleting old versions](#deleting-old-versions) allows.
+    - If the rename fails because `repo.d/latest.<N>.<h>` does not exist, the implementation MUST follow [Resolving a failed rename](#resolving-a-failed-rename). The change may have landed: if the reply to a rename that succeeded is lost, a retry of the rename fails this way.
+    - On any other error, the implementation MUST stop with an error. It MUST NOT delete `repo.d/<N+1>.<h'>` except as [Deleting old versions](#deleting-old-versions) allows, because the rename may have landed.
+9. **Publish the mirror**, as [Publishing the mirror](#publishing-the-mirror) describes.
+
+### Resolving a failed rename
+
+A writer that knows its attempt did not land, because another change moved the marker past `N` first, MAY delete that attempt's backup: no version names it, and the version it holds was backed up by the change that replaced it. It MUST NOT delete the backup of an attempt whose outcome is unknown. A failure to delete is ignored.
+
+### Publishing the mirror
+
+After every change, and before returning, the writer replaces `$ROOT/repo` with a byte-identical copy of the current version, through a staged `repo.d/mirror.<id>` renamed to `$ROOT/repo`. It publishes again, up to a fixed number of rounds, while a listing shows that the current version is no longer the one it published. A publication that fails or gives up can leave in `$ROOT/repo` an older version that was current, and does not undo the change. So the mirror can lag after crashes or under heavy write contention. Publishing the mirror explicitly (in Icechunk, `FilesystemStorage.publish_mirror()`) repairs this on a best-effort basis.
 
 **Garbage collection.** Before deleting anything, garbage collection makes a change, with a `GCRanUpdate` entry even if it removes no snapshot, and publishes the version that change made current. If that publication leaves `$ROOT/repo` holding neither that version nor a later one, garbage collection deletes nothing. After deleting, it publishes again. The mirror can still hold an older version for a while during and after the deletions.
 
 **Creation.** The writer builds the first version and its marker in `$ROOT/repo.d.tmp.<id>/`, puts a byte-identical copy of the first version at `$ROOT/repo` with an exclusive create (a staged `$ROOT/repo.staging.<id>`, linked as `repo`), renames the directory to `$ROOT/repo.d`, then publishes the mirror. Creation fails if `repo` or `repo.d` exists, except that it replaces an interrupted creation: a `$ROOT/repo` that lists `filesystem-layout-v1` and has only `RepoInitializedUpdate` in its ops log, while `repo.d` does not exist.
 
-**Deleting old versions.** Implementations MUST NOT delete a version file `<i>.<x>` in `repo.d` unless a listing of `repo.d` showed, or the implementation's own rename moved the marker to, a marker `(N, h)` with `i < N`, or with `i = N` and `x ≠ h`. Garbage collection also deletes the staged files in `$ROOT` and `repo.d/`, including `$ROOT/repo.staging.<id>`, and the `repo.d.tmp.<id>/` directories older than its cutoff. A conversion to the object store layout deletes the whole directory as described below.
+### Deleting old versions
+
+Implementations MUST NOT delete a version file `<i>.<x>` in `repo.d` unless a listing of `repo.d` showed, or the implementation's own rename moved the marker to, a marker `(N, h)` with `i < N`, or with `i = N` and `x ≠ h`. Garbage collection also deletes the staged files in `$ROOT` and `repo.d/`, including `$ROOT/repo.staging.<id>`, and the `repo.d.tmp.<id>/` directories older than its cutoff. A conversion to the object store layout deletes the whole directory as described below.
 
 **Other objects** are written either to a staged `<name>.staging.<id>` renamed to `<name>`, or directly under their final name when no reader can know the name before a change makes the object reachable. No reader sees a partially written object under a name it can know.
 
