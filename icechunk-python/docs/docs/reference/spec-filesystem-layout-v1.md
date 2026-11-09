@@ -5,7 +5,7 @@ title: Filesystem layout, version 1
 
 !!! warning "Experimental"
 
-    The filesystem layout is experimental. A later minor release may supersede `filesystem-layout-v1` with a new version of the layout, under a new writer feature name; this version doesn't change. See [experimental writer features](./version-policy.md#experimental-writer-features) for what the Icechunk libraries keep supporting.
+    The filesystem layout is experimental. A later minor release may define a new version of the layout. That version will get a new writer feature name, such as `filesystem-layout-v2`. The rules on this page for `filesystem-layout-v1` will stay as they are. See [experimental writer features](./version-policy.md#experimental-writer-features) for what the Icechunk libraries keep supporting.
 
 !!! Note
 
@@ -19,13 +19,21 @@ The [object store layout](./spec-v2-2.md#storage-operations) keeps the repo info
 
 Everything else is as in the [specification](./spec-v2-2.md): snapshots, manifests, chunks, transaction logs, the `overwritten/` backups, expiration and garbage collection.
 
-`$ROOT/repo` holds a *mirror*: a byte-identical copy of a version in `repo.d/`, normally one that was current (see [Reading](#reading)), for implementations that do not implement this layout. Every version in `repo.d/`, and so the mirror, lists the `filesystem-layout-v1` writer feature, so those implementations see the repository as read-only. The only exception is the last version written by a [conversion to the object store layout](#conversions).
+`$ROOT/repo` holds a *mirror*: a byte-identical copy of a version in `repo.d/`, normally one that was current (see [Reading](#reading)), for implementations that do not implement this layout. Every version in `repo.d/` lists the `filesystem-layout-v1` writer feature and carries the [status gate](./spec-v2-2.md#repostatus), and so does the mirror. An implementation that knows about writer features, but does not implement this one, refuses to modify the repository. An older implementation, from before writer features existed, sees the status `ReadOnly` and also refuses. The only exception is the last version written by a [conversion to the object store layout](#conversions).
 
-Whether an implementation implements `filesystem-layout-v1` is decided per storage backend: a backend implements it only if it reads and writes the repo info as this document describes, on a filesystem. No implementation implements it on any other storage: there, implementations MUST NOT modify the repository, and read it through the mirror. Implementations MUST NOT write `$ROOT/repo` of a repository in this layout except to create the repository, to publish the mirror or to convert the repository.
+A storage backend implements `filesystem-layout-v1` if it reads and writes the repo info on a filesystem, as this page describes. Implementations MUST NOT modify a repository in this layout through any other backend. They read it through the mirror instead. Implementations MUST NOT write `$ROOT/repo` except to create the repository, to publish the mirror, or to convert the repository to the object store layout.
 
-This page describes the files of the layout and how the operations use them.
+This page describes the files of the layout, and the steps that implementations MUST follow to read and change them.
 
 ## Files
+
+In `$ROOT`:
+
+| Name | Meaning |
+| --- | --- |
+| `repo` | The mirror |
+| `repo.d/` | Directory for repo info for filesystems |
+| `repo.d.tmp.<id>/` | A `repo.d` being built by a creation or a conversion from the object store layout, or being deleted by a conversion to the object store layout |
 
 In `$ROOT/repo.d/`:
 
@@ -36,15 +44,6 @@ In `$ROOT/repo.d/`:
 | `stage.<id>` | Staged bytes of a new version |
 | `mirror.<id>` | Staged bytes of the mirror |
 
-In `$ROOT`:
-
-| Name | Meaning |
-| --- | --- |
-| `repo` | The mirror |
-| `repo.d.tmp.<id>/` | A `repo.d` being built by a creation or a conversion from the object store layout, or being deleted by a conversion to the object store layout |
-
-In every directory: `<name>.staging.<id>`, the staged bytes of the object `<name>`, such as `$ROOT/repo.staging.<id>`. Readers listing the object directories MUST ignore these names.
-
 Where:
 
 - `N` is a decimal integer below 10<sup>15</sup>, without leading zeros. The first version in a `repo.d` has `N` equal to the Unix time in milliseconds when it was created, and each change adds one.
@@ -52,9 +51,11 @@ Where:
 - `h` is the SHA-256 of the version's bytes, as 64 lowercase hexadecimal characters.
 - `id` is a random UUID in its hyphenated, lowercase form.
 
+A file outside `repo.d` can be written in two steps. The writer first writes its bytes to `<name>.staging.<id>` in the same directory. It then renames or links that file to `<name>`. For example, `$ROOT/repo` is staged as `$ROOT/repo.staging.<id>`. Readers that list a directory MUST ignore these names.
+
 Implementations SHOULD NOT create other names in `repo.d`. Readers MUST ignore names that do not parse exactly as above, and garbage collection MUST NOT delete them. The rest of this page writes `latest.<N>.<h>` for `latest.<K>.<N>.<h>`.
 
-Every version in `repo.d`, and the mirror, is a repo info file in the [binary file format](./spec-v2-2.md#binary-file-format). Those that list `filesystem-layout-v1` in `Repo.writer_features` carry the [status gate](./spec-v2-2.md#repostatus).
+Every version in `repo.d`, and the mirror, MUST be a repo info file in the [binary file format](./spec-v2-2.md#binary-file-format). Those that list `filesystem-layout-v1` in `Repo.writer_features` carry the [status gate](./spec-v2-2.md#repostatus).
 
 ## Reading
 
