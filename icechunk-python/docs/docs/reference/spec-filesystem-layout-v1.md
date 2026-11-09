@@ -148,7 +148,46 @@ The base is `repo.d/<N>.<h>`, and `B` is the bytes of the new version. To make a
 
 ### Resolving a failed rename
 
-A writer that knows its attempt did not land, because another change moved the marker past `N` first, MAY delete that attempt's backup: no version names it, and the version it holds was backed up by the change that replaced it. It MUST NOT delete the backup of an attempt whose outcome is unknown. A failure to delete is ignored.
+When the rename of [step 8](#change) fails because `repo.d/latest.<N>.<h>` does not exist, either another change moved the marker first, or the rename landed and its reply was lost. To find out which, an implementation MUST take the steps below in order. Steps 1 to 4 are REQUIRED, and step 5 is OPTIONAL. `N`, `h`, `h'`, `B`, *conflict* and *stop with an error* mean what they mean in [Change](#change). Unless they stop with an error, steps 1 to 3 find one of three outcomes: the change landed, the change is a conflict, or the outcome is unknown.
+
+1. **List `repo.d`.**
+
+    List `repo.d` until a listing shows a marker with a number above `N`. The implementation MUST bound the number of listings. A listing that finds no `repo.d` shows no marker. If a listing fails, stop with an error.
+
+    Take the marker with the highest number in that listing:
+
+    - If it is `latest.<N+1>.<h'>`, the change landed. Continue with step 8 of Change, as if the rename had succeeded.
+    - If it is `latest.<N+1>.<x>`, with `x ≠ h'`, the change is a conflict. The implementation MAY delete `repo.d/<N+1>.<h'>`. Go to step 4.
+    - If its number is `N+2` or higher, go to step 2. Whatever the later steps find, no marker will name `repo.d/<N+1>.<h'>`, so the implementation MAY delete it.
+
+    If no listing within the bound shows a marker above `N`, go to step 2. `repo.d/<N+1>.<h'>` MUST NOT be deleted in this case, except as [Deleting old versions](#deleting-old-versions) allows.
+
+2. **Read the current version.**
+
+    Read the current version as [Reading](#reading) describes. While its number is not above `N`, read it again, up to a bound. Call the last version read `C`. `C` is *fresh* if its number is above `N`.
+
+    - If `repo.d` does not exist, the outcome is unknown. Go to step 4.
+    - If a read fails in any other way, stop with an error.
+    - If `C` is `<N+1>.<h'>`, the change landed. Continue with step 8 of Change, as if the rename had succeeded.
+
+3. **Search the ops log of `C`.**
+
+    The search looks for the name of the change's backup in the [ops log](./spec-v2-2.md#update) of `C`. `B` records that name as the `backup_path` of its second-newest entry, or as its `repo_before_updates` when `B` has only one entry. If `B` records no such name, the outcome is unknown. Go to step 4.
+
+    Search `C` for the name. Look at the `backup_path` of each entry, newest first, then at `repo_before_updates`. If the name is not found and the file has a `repo_before_updates`, read `overwritten/<repo_before_updates>` and search it the same way. The implementation MAY stop after any number of files, at least one.
+
+    - If a file cannot be decoded, or a read fails for a reason other than a missing file, stop with an error.
+    - If the name is found, the change landed. Continue with step 9 of Change.
+    - If the name is not found, `C` is fresh, and the search either reached a file without `repo_before_updates` or passed the name of the base's backup, the change is a conflict. The name of the base's backup is the name that follows the change's backup name in `B`, in the order of the search.
+    - Otherwise, the outcome is unknown. This includes a search that stopped at a missing file or at the implementation's limit.
+
+4. **Report the outcome.**
+
+    If the change is a conflict, or the outcome is unknown, report a conflict. The implementation MUST NOT report that the change landed unless step 1, 2 or 3 found that it landed.
+
+5. **Delete the backup of a conflict.**
+
+    A writer that knows its change did not land, because another change moved the marker past `N` first, MAY delete that change's backup: no version names it, and the version it holds was backed up by the change that replaced it. It MUST NOT delete the backup of a change whose outcome is unknown. A failure to delete is ignored.
 
 ### Publishing the mirror
 
