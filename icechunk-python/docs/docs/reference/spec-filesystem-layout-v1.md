@@ -13,18 +13,6 @@ title: Filesystem layout, version 1
 
     The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119.html).
 
-## Overview
-
-The [object store layout](./spec-v2-2.md#storage-operations) keeps the repo info in a single `$ROOT/repo` file and requires a conditional update of it, which filesystems in general do not provide. In the filesystem layout, the repo info is not a single file. Each version is an immutable file in the `$ROOT/repo.d/` directory, and an empty marker file, whose name says which version is current, moves from one version to the next by `rename`. Every change except a conversion from the object store layout is a single `rename` of the marker, which the filesystem server decides.
-
-Everything else is as in the [specification](./spec-v2-2.md): snapshots, manifests, chunks, transaction logs, the `overwritten/` backups, expiration and garbage collection.
-
-`$ROOT/repo` holds a mirror: a byte-identical copy of a version in `repo.d/`, normally one that was current (see [Reading](#reading)), for implementations that do not implement this layout. Every version in `repo.d/` lists the `filesystem-layout-v1` writer feature and carries the [status gate](./spec-v2-2.md#repostatus), and so does the mirror. An implementation that knows about writer features, but does not implement this one, refuses to modify the repository. An older implementation, from before writer features existed, sees the status `ReadOnly` and also refuses. The only exception is the last version written by a [conversion to the object store layout](#conversions).
-
-A storage backend implements `filesystem-layout-v1` if it reads and writes the repo info on a filesystem, as this page describes. Implementations MUST NOT modify a repository in this layout through any other backend. They read it through the mirror instead. Implementations MUST NOT write `$ROOT/repo` except to create the repository, to publish the mirror, or to convert the repository to the object store layout.
-
-This page describes the files of the layout, and the steps that implementations MUST follow to read and change them.
-
 ## Terms
 
 - **Version**: one complete repo info, stored as the file `repo.d/<N>.<h>`. A version is never modified after it is written.
@@ -36,6 +24,18 @@ This page describes the files of the layout, and the steps that implementations 
 - **Conflict**: the marker no longer pointed at the base when the writer renamed it, so the change did not land. The writer reads the current version again and retries.
 - **Backup**: the copy of the base in `overwritten/` that a writer makes before every change, as the [specification](./spec-v2-2.md#updates-to-the-repo-info-file) requires.
 - **Mirror**: a byte-identical copy of a current version at `$ROOT/repo`, for implementations that do not implement this layout. *Publishing the mirror* means replacing `$ROOT/repo` with such a copy.
+
+## Overview
+
+The [object store layout](./spec-v2-2.md#storage-operations) keeps the repo info in a single `$ROOT/repo` file and requires a conditional update of it, which filesystems in general do not provide. In the filesystem layout, the repo info is not a single file. Each version is an immutable file in the `$ROOT/repo.d/` directory, and an empty marker file, whose name says which version is current, moves from one version to the next by `rename`. Every change except a conversion from the object store layout is a single `rename` of the marker, which the filesystem server decides.
+
+Everything else is as in the [specification](./spec-v2-2.md): snapshots, manifests, chunks, transaction logs, the `overwritten/` backups, expiration and garbage collection.
+
+`$ROOT/repo` holds a mirror: a byte-identical copy of a version in `repo.d/`, normally one that was current (see [Reading](#reading)), for implementations that do not implement this layout. Every version in `repo.d/` lists the `filesystem-layout-v1` writer feature and carries the [status gate](./spec-v2-2.md#repostatus), and so does the mirror. An implementation that knows about writer features, but does not implement this one, refuses to modify the repository. An older implementation, from before writer features existed, sees the status `ReadOnly` and also refuses. The only exception is the last version written by a [conversion to the object store layout](#conversions).
+
+An implementation implements `filesystem-layout-v1` only when it accesses the repository on a filesystem and reads and writes the repo info as this page describes. An implementation that accesses the repository any other way, for example through an object store API, MUST NOT modify it. It reads the repository through the mirror instead. Implementations MUST NOT write `$ROOT/repo` except to create the repository, to publish the mirror, or to convert the repository to the object store layout.
+
+This page describes the files of the layout, and the steps that implementations MUST follow to read and change them.
 
 ## Files
 
