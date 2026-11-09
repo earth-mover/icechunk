@@ -38,7 +38,7 @@ This page defines the files that hold a repository's repo info on a filesystem, 
 
 The [object store layout](./spec-v2-2.md#storage-operations) keeps the repo info in a single file, `$ROOT/repo`, and changes it with a conditional update. Filesystems in general do not provide a conditional update.
 
-In the filesystem layout, each version is a separate file in `$ROOT/repo.d/`. An empty [marker](#files) file names the current version. Every change except a conversion from the object store layout is a single `rename` of the marker, from the base to the new version, and the filesystem server decides that rename.
+To make consistent changes without a conditional update, the filesystem layout stores each version as a separate file in `$ROOT/repo.d/`. An empty [marker](#files) file names the current version. Every change except a conversion from the object store layout is a single `rename` of the marker, from the base to the new version, and the filesystem server decides that rename.
 
 `$ROOT/repo` is the [mirror](#the-mirror-and-the-writer-feature), a copy of a version for implementations that do not implement this layout.
 
@@ -52,7 +52,7 @@ In `$ROOT`:
 | `repo.d/` | Directory for repo info for filesystems |
 | `repo.d.tmp.<id>/` | A `repo.d` being built by a creation or a conversion from the object store layout, or being deleted by a conversion to the object store layout |
 
-In `$ROOT/repo.d/`:
+In `$ROOT/repo.d/`, and in a `$ROOT/repo.d.tmp.<id>/` while it is built:
 
 | Name | Meaning |
 | --- | --- |
@@ -68,17 +68,17 @@ Where:
 - `h` is the SHA-256 of the version's bytes, as 64 lowercase hexadecimal characters.
 - `id` is a random UUID in its hyphenated, lowercase form.
 
-In any directory of the repository, a file named `<name>.staging.<id>` holds the staged bytes of the object `<name>`, for example `$ROOT/repo.staging.<id>`. Readers listing the object directories MUST ignore these names.
+In any directory under `$ROOT`, a file whose name is `<name>.staging.<id>` holds the staged bytes of the file `<name>` in the same directory. For example, `$ROOT/repo.staging.<id>` holds the staged bytes of `$ROOT/repo`. Implementations that list a directory under `$ROOT` MUST ignore every name of the form `<name>.staging.<id>`.
 
 Implementations SHOULD NOT create other names in `repo.d`. Readers MUST ignore names that do not parse exactly as above, and garbage collection MUST NOT delete them. The rest of this page writes `latest.<N>.<h>` for `latest.<K>.<N>.<h>`.
 
-Every version in `repo.d`, and the mirror, MUST be a repo info file in the [binary file format](./spec-v2-2.md#binary-file-format). Those that list `filesystem-layout-v1` in `Repo.writer_features` carry the [status gate](./spec-v2-2.md#repostatus).
+Every version in `repo.d` MUST be a repo info file in the [binary file format](./spec-v2-2.md#binary-file-format).
 
 ## The mirror and the writer feature
 
 `$ROOT/repo` is the mirror. It is a byte-identical copy of a version in `repo.d/`, normally one that was current (see [Reading](#reading)).
 
-Every version in `repo.d/` MUST list the `filesystem-layout-v1` writer feature, except the last version written by a [conversion to the object store layout](#conversions). Listing a writer feature turns on the [status gate](./spec-v2-2.md#repostatus). Because the mirror is a copy of a version, it lists the feature and carries the gate as well. As a result:
+Every version in `repo.d/` MUST list the `filesystem-layout-v1` writer feature, except the last version written by a [conversion to the object store layout](#conversions). Listing a writer feature turns on the [status gate](./spec-v2-2.md#repostatus): the version's `status` is `ReadOnly`, and the repository's own status is in `status.underlying`. Because the mirror is a copy of a version, it lists the feature and carries the gate as well. As a result:
 
 - An implementation that knows about writer features, but does not implement `filesystem-layout-v1`, refuses to modify the repository, as [Modify a Repository](./spec-v2-2.md#modify-a-repository) requires.
 - An implementation from before writer features existed sees the status `ReadOnly`. It refuses every change except a status change, and a status change creates a [fork](#forks).
@@ -95,22 +95,55 @@ Implementations that do not implement this layout read the mirror. The mirror ca
 
 ### Change
 
-In these steps, `N` and `h` are the number and hash of the base, and `B` is the bytes of the new version. Before the first step, the implementation MUST make the checks that [Modify a Repository](./spec-v2-2.md#modify-a-repository) requires, against the base. When a step says that the change is a conflict, the implementation MUST stop and report a conflict.
+The base is `repo.d/<N>.<h>`, and `B` is the bytes of the new version. To make a change, an implementation MUST make the checks that [Modify a Repository](./spec-v2-2.md#modify-a-repository) requires against the base, then take the steps below in order. Every step is REQUIRED except step 7, which is RECOMMENDED. When a step says that the change is a conflict, the implementation MUST stop and report a conflict. When a step says to stop with an error, the implementation MUST stop and report that error.
 
-1. **Back up the base.** The implementation MUST copy the base's version file to a new backup in `overwritten/`, as the [specification](./spec-v2-2.md#updates-to-the-repo-info-file) requires. If a listing of `repo.d` shows a marker with a number above `N`, or the base's version file cannot be read, the implementation MUST NOT write the backup, and the change is a conflict. If the SHA-256 of the file it read is not `h`, the implementation MUST stop with an error.
-2. **Check the new bytes.** `B` MUST decode as a repo info, and MUST list `filesystem-layout-v1`. Otherwise the implementation MUST stop with an error.
-3. **Make the names of data files durable.** The implementation MUST fsync `$ROOT` and each of its directories `snapshots/`, `manifests/`, `transactions/`, `chunks/` and `overwritten/` that exists. This makes the names of the files that the new version references durable before any marker names it.
-4. **Stage the new version.** The implementation MUST write `B` to `repo.d/stage.<id>`, with a new `id`, and fsync the file. If `repo.d` does not exist, the change is a conflict. On any other error, the implementation MUST stop with an error.
-5. **Link the new version.** The implementation MUST create `repo.d/<N+1>.<h'>`, where `h'` is the SHA-256 of `B`, as a hard link to `repo.d/stage.<id>`.
-    - If `repo.d/<N+1>.<h'>` already exists, the implementation MUST continue. The name contains the hash of `B`, so the existing file holds `B`.
+1. **Back up the base.**
+
+    Copy the base's version file to a new backup in `overwritten/`, as the [specification](./spec-v2-2.md#updates-to-the-repo-info-file) requires.
+
+    - If a listing of `repo.d` shows a marker with a number above `N`, do not write the backup: the change is a conflict.
+    - If the base's version file cannot be read, do not write the backup: the change is a conflict.
+    - If the SHA-256 of the bytes read is not `h`, stop with an error.
+
+2. **Check the new bytes.**
+
+    `B` MUST decode as a repo info, and MUST list `filesystem-layout-v1`. Otherwise, stop with an error.
+
+3. **Make the names of data files durable.**
+
+    Fsync `$ROOT`, and each of its directories `snapshots/`, `manifests/`, `transactions/`, `chunks/` and `overwritten/` that exists. This makes the names of the files that `B` references durable before any marker names `B`.
+
+4. **Stage the new version.**
+
+    Write `B` to `repo.d/stage.<id>`, with a new `id`, and fsync the file.
+
+    - If `repo.d` does not exist, the change is a conflict.
+    - On any other error, stop with an error.
+
+5. **Link the new version.**
+
+    Create `repo.d/<N+1>.<h'>`, where `h'` is the SHA-256 of `B`, as a hard link to `repo.d/stage.<id>`.
+
+    - If `repo.d/<N+1>.<h'>` already exists, continue. Its name contains the hash of `B`, so it holds `B`.
     - If `repo.d/stage.<id>` no longer exists, the change is a conflict.
-    - On any other error, the implementation MUST stop with an error.
-6. **Make the link durable.** The implementation MUST fsync `repo.d`. If the fsync fails, it MUST stop with an error.
-7. **Delete the staged file.** The implementation SHOULD delete `repo.d/stage.<id>`. It SHOULD also delete it when it stops at step 5 or 6.
-8. **Rename the marker.** The implementation MUST rename `repo.d/latest.<N>.<h>` to `repo.d/latest.<N+1>.<h'>`. The source MUST be the base's marker, whatever a listing of `repo.d` shows.
-    - If the rename succeeds, the change landed. The implementation MUST fsync `repo.d`. If that fsync fails, it MUST report an error: the change landed, but may not be durable. After the fsync, it MAY delete the version files that [Deleting old versions](#deleting-old-versions) allows.
-    - If the rename fails because `repo.d/latest.<N>.<h>` does not exist, the implementation MUST follow [Resolving a failed rename](#resolving-a-failed-rename). The change may have landed: if the reply to a rename that succeeded is lost, a retry of the rename fails this way.
-    - On any other error, the implementation MUST stop with an error. It MUST NOT delete `repo.d/<N+1>.<h'>` except as [Deleting old versions](#deleting-old-versions) allows, because the rename may have landed.
+    - On any other error, stop with an error.
+
+6. **Make the link durable.**
+
+    Fsync `repo.d`. If the fsync fails, stop with an error.
+
+7. **Delete the staged file.**
+
+    Delete `repo.d/stage.<id>`. Also delete it when stopping at step 5 or 6. The implementation MAY ignore an error from the deletion.
+
+8. **Rename the marker.**
+
+    Rename `repo.d/latest.<N>.<h>` to `repo.d/latest.<N+1>.<h'>`. The source is the base's marker, whatever a listing of `repo.d` shows.
+
+    - If the rename succeeds, the change landed. Fsync `repo.d`. If that fsync fails, stop with an error: the change landed, but may not be durable. After the fsync, the implementation MAY delete the version files that [Deleting old versions](#deleting-old-versions) allows.
+    - If the rename fails because `repo.d/latest.<N>.<h>` does not exist, follow [Resolving a failed rename](#resolving-a-failed-rename). The change may have landed: if the reply to a rename that succeeded is lost, a retry of the rename fails this way.
+    - On any other error, stop with an error. The rename may have landed, so `repo.d/<N+1>.<h'>` MUST NOT be deleted except as [Deleting old versions](#deleting-old-versions) allows.
+
 9. **Publish the mirror**, as [Publishing the mirror](#publishing-the-mirror) describes.
 
 ### Resolving a failed rename
