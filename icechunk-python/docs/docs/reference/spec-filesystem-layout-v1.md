@@ -15,15 +15,27 @@ title: Filesystem layout, version 1
 
 ## Overview
 
-The [object store layout](./spec-v2-2.md#storage-operations) keeps the repo info in a single `$ROOT/repo` file and requires a conditional update of it, which filesystems in general do not provide. In the filesystem layout, the repo info is not a single file. Each version is an immutable file in the `$ROOT/repo.d/` directory, and an empty *marker* file, whose name says which version is current, moves from one version to the next by `rename`. On this page, a *change* is any update of the repo info: a commit, a branch, tag, status or configuration change, expiration, garbage collection or a conversion. Every change except a conversion from the object store layout is a single `rename` of the marker, which the filesystem server decides.
+The [object store layout](./spec-v2-2.md#storage-operations) keeps the repo info in a single `$ROOT/repo` file and requires a conditional update of it, which filesystems in general do not provide. In the filesystem layout, the repo info is not a single file. Each version is an immutable file in the `$ROOT/repo.d/` directory, and an empty marker file, whose name says which version is current, moves from one version to the next by `rename`. Every change except a conversion from the object store layout is a single `rename` of the marker, which the filesystem server decides.
 
 Everything else is as in the [specification](./spec-v2-2.md): snapshots, manifests, chunks, transaction logs, the `overwritten/` backups, expiration and garbage collection.
 
-`$ROOT/repo` holds a *mirror*: a byte-identical copy of a version in `repo.d/`, normally one that was current (see [Reading](#reading)), for implementations that do not implement this layout. Every version in `repo.d/` lists the `filesystem-layout-v1` writer feature and carries the [status gate](./spec-v2-2.md#repostatus), and so does the mirror. An implementation that knows about writer features, but does not implement this one, refuses to modify the repository. An older implementation, from before writer features existed, sees the status `ReadOnly` and also refuses. The only exception is the last version written by a [conversion to the object store layout](#conversions).
+`$ROOT/repo` holds a mirror: a byte-identical copy of a version in `repo.d/`, normally one that was current (see [Reading](#reading)), for implementations that do not implement this layout. Every version in `repo.d/` lists the `filesystem-layout-v1` writer feature and carries the [status gate](./spec-v2-2.md#repostatus), and so does the mirror. An implementation that knows about writer features, but does not implement this one, refuses to modify the repository. An older implementation, from before writer features existed, sees the status `ReadOnly` and also refuses. The only exception is the last version written by a [conversion to the object store layout](#conversions).
 
 A storage backend implements `filesystem-layout-v1` if it reads and writes the repo info on a filesystem, as this page describes. Implementations MUST NOT modify a repository in this layout through any other backend. They read it through the mirror instead. Implementations MUST NOT write `$ROOT/repo` except to create the repository, to publish the mirror, or to convert the repository to the object store layout.
 
 This page describes the files of the layout, and the steps that implementations MUST follow to read and change them.
+
+## Terms
+
+- **Version**: one complete repo info, stored as the file `repo.d/<N>.<h>`. A version is never modified after it is written.
+- **Marker**: the empty file `repo.d/latest.<K>.<N>.<h>`. Its name points at the version `<N>.<h>`.
+- **Current version**: the version that the marker points at. Reading the repository means reading the current version.
+- **Change**: any update of the repo info: a commit, a branch, tag, status or configuration change, expiration, garbage collection, or a conversion. Every change except a conversion from the object store layout writes a new version and then renames the marker to point at it.
+- **Base**: the version that a change was built from. A change can only land while its base is still the current version.
+- **Land**: a change lands when the server carries out its rename of the marker.
+- **Conflict**: the marker no longer pointed at the base when the writer renamed it, so the change did not land. The writer reads the current version again and retries.
+- **Backup**: the copy of the base in `overwritten/` that a writer makes before every change, as the [specification](./spec-v2-2.md#updates-to-the-repo-info-file) requires.
+- **Mirror**: a byte-identical copy of a current version at `$ROOT/repo`, for implementations that do not implement this layout. *Publishing the mirror* means replacing `$ROOT/repo` with such a copy.
 
 ## Files
 
