@@ -48,8 +48,8 @@ pub use icechunk_storage::s3_config::{
 use icechunk_storage::{
     DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
     Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    Timeout, VersionInfo, VersionedUpdateResult, obj_not_found_res, obj_store_error,
-    obj_store_error_res, other_error,
+    Timeout, VersionInfo, VersionedUpdateResult, filter_ids_by_id_prefix,
+    obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -685,6 +685,13 @@ impl S3Storage {
         self.key_for(layout, relpath.strip_prefix('/').unwrap_or(relpath))
     }
 
+    /// S3 Express One Zone directory bucket. AWS reserves this name suffix for directory
+    /// buckets, and the SDK uses the same check to select the S3 Express endpoint.
+    /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-bucket-naming-rules.html>
+    fn is_directory_bucket(&self) -> bool {
+        self.bucket.ends_with("--x-s3")
+    }
+
     /// Lists the keys that start with `key_prefix`. Ids are relative to `id_root`.
     async fn list_keys(
         &self,
@@ -1264,7 +1271,11 @@ impl Storage for S3Storage {
         prefix: &str,
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
         let layout = self.layout(ctx).await?;
-        let prefix = self.list_prefix(layout, prefix);
+        let mut prefix = self.list_prefix(layout, prefix);
+        // Directory buckets reject a list prefix that does not end in `/`.
+        if self.is_directory_bucket() && !prefix.is_empty() && !prefix.ends_with('/') {
+            prefix.push('/');
+        }
         Ok(self.list_keys(ctx, prefix.clone(), prefix).await)
     }
 
@@ -1275,6 +1286,11 @@ impl Storage for S3Storage {
         prefix: &str,
         id_prefixes: &[String],
     ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        if self.is_directory_bucket() {
+            // An id prefix is never a valid directory bucket list prefix.
+            let listing = self.list_objects(ctx, prefix).await?;
+            return Ok(filter_ids_by_id_prefix(listing, id_prefixes));
+        }
         let layout = self.layout(ctx).await?;
         let prefix = self.list_prefix(layout, prefix);
         let mut listings = Vec::with_capacity(id_prefixes.len());
@@ -1290,7 +1306,7 @@ impl Storage for S3Storage {
     }
 
     fn lists_id_prefixes_natively(&self) -> bool {
-        true
+        !self.is_directory_bucket()
     }
 
     #[instrument(skip(self, ctx, batch))]
@@ -2453,5 +2469,135 @@ mod tests {
         assert!(json.contains(r#""key_layout":"LegacyRoot""#), "got: {json}");
         let restored: S3Storage = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.key_layout.get().copied(), Some(KeyLayout::LegacyRoot));
+    }
+
+    /// Storage at prefix `repo` whose client records the `prefix` of each list
+    /// request and answers with the `keys` that start with it, as S3 does.
+    fn listing_storage(
+        bucket: &str,
+        keys: &'static [&'static str],
+    ) -> (S3Storage, Arc<std::sync::Mutex<Vec<String>>>) {
+        let storage = S3Storage::new(
+            S3Options::default(),
+            bucket.to_string(),
+            Some("repo".to_string()),
+            S3Credentials::FromEnv,
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+        )
+        .unwrap();
+        let prefixes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&prefixes);
+        let http = aws_smithy_http_client::test_util::infallible_client_fn(move |req| {
+            let prefix = req
+                .uri()
+                .query()
+                .unwrap_or_default()
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("prefix="))
+                .unwrap_or_default()
+                .replace("%2F", "/");
+            let contents: String = keys
+                .iter()
+                .filter(|k| k.starts_with(&prefix))
+                .map(|k| {
+                    format!(
+                        "<Contents><Key>{k}</Key><LastModified>2026-01-01T00:00:00.000Z\
+                         </LastModified><Size>1</Size></Contents>"
+                    )
+                })
+                .collect();
+            seen.lock().unwrap().push(prefix);
+            http::Response::builder()
+                .status(200)
+                .body(format!(
+                    "<ListBucketResult><IsTruncated>false</IsTruncated>{contents}\
+                     </ListBucketResult>"
+                ))
+                .unwrap()
+        });
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                "key", "secret", None, None, "test",
+            ))
+            .disable_s3_express_session_auth(true)
+            .http_client(http)
+            .build();
+        storage.client.set(Arc::new(Client::from_conf(config))).unwrap();
+        (storage, prefixes)
+    }
+
+    async fn sorted_ids(
+        listing: BoxStream<'_, StorageResult<ListInfo<String>>>,
+    ) -> Vec<String> {
+        let mut ids: Vec<String> =
+            listing.map_ok(|li| li.id).try_collect().await.unwrap();
+        ids.sort();
+        ids
+    }
+
+    const SNAPSHOT_KEYS: &[&str] =
+        &["repo/snapshots/0AAA", "repo/snapshots/1BBB", "repo/snapshots/2CCC"];
+
+    /// Directory buckets reject a list prefix that does not end in `/` (#2538).
+    #[tokio_test]
+    async fn directory_bucket_lists_directory_with_trailing_delimiter() {
+        let (s, prefixes) = listing_storage("b--use1-az4--x-s3", SNAPSHOT_KEYS);
+        let settings = Settings::default();
+        let ctx = StorageContext::unattributed(&settings);
+        let ids = sorted_ids(s.list_objects(&ctx, "snapshots").await.unwrap()).await;
+        assert_eq!(*prefixes.lock().unwrap(), ["repo/snapshots/"]);
+        assert_eq!(ids, ["0AAA", "1BBB", "2CCC"]);
+    }
+
+    /// `list_refs` passes `refs/`: the backend must not send `repo/refs//`.
+    #[tokio_test]
+    async fn directory_bucket_keeps_one_trailing_delimiter() {
+        let (s, prefixes) = listing_storage("b--use1-az4--x-s3", &["repo/refs/main"]);
+        let settings = Settings::default();
+        let ctx = StorageContext::unattributed(&settings);
+        let ids = sorted_ids(s.list_objects(&ctx, "refs/").await.unwrap()).await;
+        assert_eq!(*prefixes.lock().unwrap(), ["repo/refs/"]);
+        assert_eq!(ids, ["main"]);
+    }
+
+    /// An id prefix such as `repo/snapshots/0` is never a valid directory
+    /// bucket prefix, so the backend lists the directory and filters ids.
+    #[tokio_test]
+    async fn directory_bucket_filters_id_prefixes_from_one_directory_listing() {
+        let (s, prefixes) = listing_storage("b--use1-az4--x-s3", SNAPSHOT_KEYS);
+        let settings = Settings::default();
+        let ctx = StorageContext::unattributed(&settings);
+        assert!(!s.lists_id_prefixes_natively());
+        let listing = s
+            .list_objects_with_id_prefixes(&ctx, "snapshots", &["0".into(), "2".into()])
+            .await
+            .unwrap();
+        let ids = sorted_ids(listing).await;
+        assert_eq!(*prefixes.lock().unwrap(), ["repo/snapshots/"]);
+        assert_eq!(ids, ["0AAA", "2CCC"]);
+    }
+
+    #[tokio_test]
+    async fn general_purpose_bucket_lists_each_id_prefix() {
+        let (s, prefixes) = listing_storage("bucket", SNAPSHOT_KEYS);
+        let settings = Settings::default();
+        let ctx = StorageContext::unattributed(&settings);
+        assert!(s.lists_id_prefixes_natively());
+        let ids = sorted_ids(s.list_objects(&ctx, "snapshots").await.unwrap()).await;
+        assert_eq!(ids, ["0AAA", "1BBB", "2CCC"]);
+        let listing = s
+            .list_objects_with_id_prefixes(&ctx, "snapshots", &["0".into(), "2".into()])
+            .await
+            .unwrap();
+        let ids = sorted_ids(listing).await;
+        let mut sent = prefixes.lock().unwrap().clone();
+        sent.sort();
+        assert_eq!(sent, ["repo/snapshots", "repo/snapshots/0", "repo/snapshots/2"]);
+        assert_eq!(ids, ["0AAA", "2CCC"]);
     }
 }
