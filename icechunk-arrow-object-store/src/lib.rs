@@ -57,6 +57,7 @@ use object_store::{BackoffConfig, RetryConfig};
 use object_store::{ClientOptions, HeaderMap};
 #[cfg(any(feature = "gcs", feature = "azure"))]
 use object_store::{CredentialProvider, StaticCredentialProvider};
+use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -1867,13 +1868,21 @@ fn object_to_list_info(
     object: &ObjectMeta,
 ) -> StorageResult<ListInfo<String>> {
     let created_at = object.last_modified;
-    let id =
-        ObjectPath::from_iter(object.location.prefix_match(prefix).ok_or_else(|| {
-            StorageError::capture(StorageErrorKind::BadPrefix(
-                object.location.to_string().into(),
-            ))
-        })?)
-        .to_string();
+    let parts = object.location.prefix_match(prefix).ok_or_else(|| {
+        StorageError::capture(StorageErrorKind::BadPrefix(
+            object.location.to_string().into(),
+        ))
+    })?;
+    // `object_store` percent-encodes path parts, decode them so the id matches
+    // the path the object was written with. A part that doesn't decode to UTF-8
+    // wasn't written by us, keep it encoded so it doesn't fail the whole listing.
+    let id = parts
+        .map(|part| match percent_decode_str(part.as_ref()).decode_utf8() {
+            Ok(decoded) => decoded.into_owned(),
+            Err(_) => part.as_ref().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("/");
     let size_bytes = object.size;
     Ok(ListInfo { id, created_at, size_bytes })
 }
@@ -1882,6 +1891,7 @@ fn object_to_list_info(
 mod tests {
     use std::path::PathBuf;
 
+    use futures::{StreamExt as _, TryStreamExt as _, stream};
     use icechunk_macros::tokio_test;
     use tempfile::TempDir;
 
@@ -2112,6 +2122,85 @@ mod tests {
         let on_disk =
             std::fs::read(tmp_dir.path().join("chunks").join("on-disk")).unwrap();
         assert_eq!(on_disk, b"payload");
+    }
+
+    #[tokio_test]
+    async fn list_objects_returns_ids_as_they_were_written() {
+        // Listed ids are used as ref names and passed back as paths. `é` is the
+        // tag from #2521, `100%` has a literal `%`, and `%41` must not decode to `A`.
+        let tmp_dir = TempDir::new().unwrap();
+        let stores = [
+            ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap(),
+            ObjectStorage::new_in_memory().await.unwrap(),
+        ];
+        let ids = ["tag.é/ref.json", "tag.100%/ref.json", "tag.%41/ref.json"];
+        for store in stores {
+            let settings = store.default_settings().await.unwrap();
+            let ctx = StorageContext::unattributed(&settings);
+            for id in ids {
+                store
+                    .put_object(
+                        &ctx,
+                        &format!("refs/{id}"),
+                        Bytes::from_static(b"{}"),
+                        None,
+                        vec![],
+                        None,
+                    )
+                    .await
+                    .unwrap()
+                    .must_write()
+                    .unwrap();
+            }
+
+            let mut listed: Vec<String> = store
+                .list_objects(&ctx, "refs/")
+                .await
+                .unwrap()
+                .map_ok(|info| info.id)
+                .try_collect()
+                .await
+                .unwrap();
+            listed.sort();
+            let mut expected = ids.map(String::from);
+            expected.sort();
+            assert_eq!(listed, expected);
+
+            for id in &listed {
+                store.get_object(&ctx, &format!("refs/{id}"), None).await.unwrap();
+            }
+            let deleted = store
+                .delete_objects(
+                    &ctx,
+                    "refs",
+                    stream::iter(listed.into_iter().map(|id| (id, 2))).boxed(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(deleted.deleted_objects, 3);
+        }
+    }
+
+    #[tokio_test]
+    async fn list_objects_keeps_keys_that_are_not_utf8() {
+        // Objects written by other tools can have keys that don't decode to
+        // UTF-8. They must not fail the listing.
+        let tmp_dir = TempDir::new().unwrap();
+        let store = ObjectStorage::new_local_filesystem(tmp_dir.path()).await.unwrap();
+        let settings = store.default_settings().await.unwrap();
+        let ctx = StorageContext::unattributed(&settings);
+        std::fs::create_dir_all(tmp_dir.path().join("refs")).unwrap();
+        std::fs::write(tmp_dir.path().join("refs").join("stray%FF"), b"").unwrap();
+
+        let listed: Vec<String> = store
+            .list_objects(&ctx, "refs/")
+            .await
+            .unwrap()
+            .map_ok(|info| info.id)
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(listed, ["stray%FF"]);
     }
 
     #[tokio_test]
