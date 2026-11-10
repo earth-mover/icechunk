@@ -685,7 +685,9 @@ impl S3Storage {
         self.key_for(layout, relpath.strip_prefix('/').unwrap_or(relpath))
     }
 
-    /// S3 Express One Zone directory bucket. AWS requires this name suffix.
+    /// S3 Express One Zone directory bucket. AWS reserves this name suffix for directory
+    /// buckets, and the SDK uses the same check to select the S3 Express endpoint.
+    /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-bucket-naming-rules.html>
     fn is_directory_bucket(&self) -> bool {
         self.bucket.ends_with("--x-s3")
     }
@@ -2550,6 +2552,17 @@ mod tests {
         let ids = sorted_ids(s.list_objects(&ctx, "snapshots").await.unwrap()).await;
         assert_eq!(*prefixes.lock().unwrap(), ["repo/snapshots/"]);
         assert_eq!(ids, ["0AAA", "1BBB", "2CCC"]);
+    }
+
+    /// `list_refs` passes `refs/`: the backend must not send `repo/refs//`.
+    #[tokio_test]
+    async fn directory_bucket_keeps_one_trailing_delimiter() {
+        let (s, prefixes) = listing_storage("b--use1-az4--x-s3", &["repo/refs/main"]);
+        let settings = Settings::default();
+        let ctx = StorageContext::unattributed(&settings);
+        let ids = sorted_ids(s.list_objects(&ctx, "refs/").await.unwrap()).await;
+        assert_eq!(*prefixes.lock().unwrap(), ["repo/refs/"]);
+        assert_eq!(ids, ["main"]);
     }
 
     /// An id prefix such as `repo/snapshots/0` is never a valid directory
