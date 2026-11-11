@@ -331,7 +331,7 @@ pub async fn mk_client(
     };
 
     let mut aws_config =
-        aws_config::defaults(BehaviorVersion::v2026_01_12()).region(region);
+        aws_config::defaults(BehaviorVersion::v2026_11_10()).region(region);
 
     if let Some(endpoint) = endpoint {
         aws_config = aws_config.endpoint_url(endpoint);
