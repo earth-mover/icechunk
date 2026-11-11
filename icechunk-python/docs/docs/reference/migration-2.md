@@ -2,6 +2,14 @@
 
 Icechunk 2.0 uses a new storage format (spec version 2). Existing repositories created with Icechunk 1.x can be automatically upgraded to version 2.0 using the [`upgrade_icechunk_repository()`](./index.md#icechunk.upgrade_icechunk_repository) function. This migration only uses  repository metadata, and it will not read or write any chunks.
 
+For background on what is new in Icechunk 2 and the compatibility guarantees, see
+[Evolving our Tensor Storage Engine: A Preview of Icechunk 2](https://www.earthmover.io/blog/evolving-our-tensor-storage-engine-a-preview-of-icechunk-2)
+and [Announcing Icechunk 2](https://www.earthmover.io/blog/announcing-icechunk-2-better-consistency-performance-and-reliability-for-tensor-storage).
+
+!!! warning "Upgrade your pipelines first"
+    Once a repository is migrated to the version 2 format, it can no longer be opened by Icechunk 1.x.
+    Do not migrate an existing repository until every pipeline that reads or writes it uses the Icechunk 2 library.
+
 !!! warning
     This is an administrative operation. It **must be executed in isolation** — no other readers or writers should be accessing the repository during the migration. Any writes made during the migration may be lost.
 

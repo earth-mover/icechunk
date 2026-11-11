@@ -59,6 +59,12 @@ In this configuration, even if the upper layers of the stack (Dask and Zarr) iss
 ## Scalability
 
 Icechunk is designed to be cloud native, making it able to take advantage of the horizontal scaling of cloud providers. To learn more, check out [this blog post](https://earthmover.io/blog/exploring-icechunk-scalability) which explores just how well Icechunk can perform when matched with AWS S3.
+For read throughput as a function of chunk size, and how Icechunk compares with other Zarr stores, see
+[I/O-Maxing Tensors in the Cloud](https://www.earthmover.io/blog/i-o-maxing-tensors-in-the-cloud).
+For xarray and Zarr-Python 3 read performance, see [Accelerating Xarray with Zarr-Python 3](https://www.earthmover.io/blog/xarray-open-zarr-improvements).
+
+!!! note
+    Garbage collection and expiration only reclaim storage; they do not improve the latency or scalability of a repository.
 
 ## Cold buckets and repos
 

@@ -15,6 +15,12 @@ including those executed remotely in a multi-processing or any other remote exec
 
     Learn about Icechunk consistency with a clichéd but instructive example [in this blog post](https://earthmover.io/blog/learning-about-icechunk-consistency)
 
+!!! warning "Long-running write sessions and garbage collection"
+    Chunks written by a session that has not yet committed are not reachable from any snapshot, so
+    [garbage collection](expiration.md#running-expiration-and-garbage-collection-safely) can delete them if its
+    `delete_object_older_than` cutoff is more recent than the start of your session.
+    Never run garbage collection with a cutoff shorter than your longest write session.
+
 ## Example
 
 Here is how you can execute such writes with Icechunk, illustrate with a `ThreadPoolExecutor`.
