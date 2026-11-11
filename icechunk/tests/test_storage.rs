@@ -279,6 +279,16 @@ async fn with_storage_settings(
     Ok(storage.default_settings().await?.merge(retries))
 }
 
+/// A repository config with the [`with_storage_settings`] retries.
+async fn with_storage_repo_config(
+    storage: &Arc<dyn Storage + Send + Sync>,
+) -> StorageResult<RepositoryConfig> {
+    Ok(RepositoryConfig {
+        storage: Some(with_storage_settings(storage).await?),
+        ..Default::default()
+    })
+}
+
 async fn async_read_to_bytes(
     mut read: Pin<Box<dyn AsyncRead + Send>>,
 ) -> Result<Vec<u8>, std::io::Error> {
@@ -346,8 +356,12 @@ async fn test_tag_write_get(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo =
-            Repository::create(storage).spec_version(spec_version).execute().await?;
+        let config = with_storage_repo_config(&storage).await?;
+        let repo = Repository::create(storage)
+            .config(config)
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("mytag").await?;
         assert_eq!(Snapshot::INITIAL_SNAPSHOT_ID, back);
@@ -363,8 +377,12 @@ async fn test_fetch_non_existing_tag(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo =
-            Repository::create(storage).spec_version(spec_version).execute().await?;
+        let config = with_storage_repo_config(&storage).await?;
+        let repo = Repository::create(storage)
+            .config(config)
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let back = repo.lookup_tag("non-existing-tag").await;
         assert!(
@@ -386,8 +404,12 @@ async fn test_create_existing_tag(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo =
-            Repository::create(storage).spec_version(spec_version).execute().await?;
+        let config = with_storage_repo_config(&storage).await?;
+        let repo = Repository::create(storage)
+            .config(config)
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await?;
         let res  = repo.create_tag("mytag", &Snapshot::INITIAL_SNAPSHOT_ID).await;
         assert!(
@@ -405,11 +427,18 @@ async fn test_create_existing_tag(
 #[tokio_test]
 async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let _repo = Repository::create(Arc::clone(&storage)).execute().await?;
+        let config = with_storage_repo_config(&storage).await?;
+        let _repo = Repository::create(Arc::clone(&storage))
+            .config(config.clone())
+            .execute()
+            .await?;
 
         // creating repo with check_clean_repo = true
         // should fail because we wrote data above
-        let res = Repository::create(Arc::clone(&storage)).execute().await;
+        let res = Repository::create(Arc::clone(&storage))
+            .config(config.clone())
+            .execute()
+            .await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -418,7 +447,11 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
 
         // creating repo with check_clean_repo = false
         // fails because it tries to overwrite a repo info that is not up to date
-        let res = Repository::create(storage).check_clean_root(false).execute().await;
+        let res = Repository::create(storage)
+            .config(config)
+            .check_clean_root(false)
+            .execute()
+            .await;
         assert!(res.is_err());
         assert!(matches!(
             res,
@@ -1129,8 +1162,12 @@ async fn test_fetch_non_existing_branch(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
-        let repo =
-            Repository::create(storage).spec_version(spec_version).execute().await?;
+        let config = with_storage_repo_config(&storage).await?;
+        let repo = Repository::create(storage)
+            .config(config)
+            .spec_version(spec_version)
+            .execute()
+            .await?;
         let back = repo.lookup_branch("non-existing-branch").await;
         assert!(
             matches!(
@@ -1785,7 +1822,9 @@ async fn test_basic_repo_ops(
     #[case] spec_version: SpecVersionBin,
 ) -> Result<(), Box<dyn std::error::Error>> {
     with_storage(Permission::Modify, |_, storage| async move {
+        let config = with_storage_repo_config(&storage).await?;
         let repo = Repository::create(Arc::clone(&storage))
+            .config(config.clone())
             .spec_version(spec_version)
             .execute()
             .await?;
@@ -1801,7 +1840,7 @@ async fn test_basic_repo_ops(
         assert_eq!(session.list_nodes(&Path::root()).await?.count(), 0);
 
         // reopen from storage
-        let repo = Repository::open(storage).execute().await?;
+        let repo = Repository::open(storage).config(config).execute().await?;
 
         let branches = repo.list_branches().await?;
         assert!(branches.contains("main"));
