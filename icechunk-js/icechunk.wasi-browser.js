@@ -1381,7 +1381,7 @@ try {
     __isPreparingWasmEnvCleanup,
   )
   __emnapiContext.suppressDestroy()
-  
+
   ;({
     instance: __napiInstance,
     module: __wasiModule,

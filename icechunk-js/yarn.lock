@@ -417,8 +417,8 @@ __metadata:
   linkType: hard
 
 "@napi-rs/cli@npm:^3.2.0":
-  version: 3.10.11
-  resolution: "@napi-rs/cli@npm:3.10.11"
+  version: 3.10.9
+  resolution: "@napi-rs/cli@npm:3.10.9"
   dependencies:
     "@inquirer/prompts": "npm:^8.5.2"
     "@napi-rs/cross-toolchain": "npm:^1.0.3"
@@ -433,9 +433,9 @@ __metadata:
     typanion: "npm:^3.14.0"
     typescript: "npm:^6.0.3"
   peerDependencies:
-    "@emnapi/core": ^1.7.1 || ^2.0.0-beta.2
-    "@emnapi/runtime": ^1.7.1 || ^2.0.0-beta.2
-    emnapi: ^1.7.1 || ^2.0.0-beta.2
+    "@emnapi/core": ^1.7.1 || ^2.0.0-alpha.4
+    "@emnapi/runtime": ^1.7.1 || ^2.0.0-alpha.4
+    emnapi: ^1.7.1 || ^2.0.0-alpha.4
   peerDependenciesMeta:
     "@emnapi/core":
       optional: true
@@ -446,7 +446,7 @@ __metadata:
   bin:
     napi: dist/cli.js
     napi-raw: cli.mjs
-  checksum: 10c0/becb18edb144ce426c7184f31f8ba958ec0b24a94967b9971c7690ac8cb2e6f5d4f0063243f18de07c19ad4d784cc62248e0c587868a5a8cfeea8177801c364f
+  checksum: 10c0/cbd79d89bdd35c111a137a5251c25e5e2499a4283c4c3abb867ae8ad065b73a249443adea1abbbae6fbe6741879450fbc4fafff1733b32e8eed723d6dfe4242b
   languageName: node
   linkType: hard
 
