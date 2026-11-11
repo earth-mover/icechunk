@@ -1,6 +1,6 @@
 # Icechunk Version Policy
 
-The promises on this page are made for the reference implementation of the Icechunk Spec: the [Icechunk library](https://github.com/earth-mover/icechunk), written in Rust with Python and JavaScript bindings, which share version numbers.
+The promises on this page are made for the reference implementation of the Icechunk Spec, the [Icechunk library](https://github.com/earth-mover/icechunk).
 
 ## On-Disk Format
 
