@@ -112,6 +112,7 @@ def test_rejects_unknown_ca(
         assert f"localhost:{https_port}" in msg
         assert "TLS-inspecting proxy" in msg
         assert "macOS sandbox" in msg
+        assert "create the storage again" in msg
         assert "firewall" not in msg
         # the unreachable message already gives the trust-store advice; no second hint
         assert "\n\nhint: " not in msg

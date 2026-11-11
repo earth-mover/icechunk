@@ -53,7 +53,7 @@ pub fn unreachable_message(host: &str, failure: &NetworkFailure) -> String {
             "request to storage at {host} timed out. On a slow connection, large transfers can exceed the per-attempt timeout (operation_attempt_timeout_ms in the storage settings). If no request to {host} ever succeeds, a firewall or proxy may be silently dropping the traffic."
         ),
         NetworkFailure::Tls => format!(
-            "could not establish a TLS connection to storage at {host}. If the server certificate is not trusted, either because this process cannot use the system trust store (for example, in a macOS sandbox) or because a TLS-inspecting proxy intercepts the traffic, set ICECHUNK_TLS_CA_FILE to a PEM CA bundle that includes the right CA certificate (for example, the path from certifi.where(), plus the proxy's CA if there is one)."
+            "could not establish a TLS connection to storage at {host}. If the server certificate is not trusted, either because this process cannot use the system trust store (for example, in a macOS sandbox) or because a TLS-inspecting proxy intercepts the traffic, set ICECHUNK_TLS_CA_FILE to a PEM CA bundle that includes the right CA certificate (for example, the path from certifi.where(), plus the proxy's CA if there is one), then create the storage again."
         ),
         NetworkFailure::UnexpectedResponse { .. } => format!(
             "could not reach storage at {host}: {failure}. This can happen when a firewall or proxy blocks or intercepts traffic to {host}. If you are on a corporate or institutional network, ask your network administrator to allow access to this host."
@@ -71,6 +71,7 @@ mod tests {
         assert!(msg.contains("ICECHUNK_TLS_CA_FILE"));
         assert!(msg.contains("macOS sandbox"));
         assert!(msg.contains("TLS-inspecting proxy"));
+        assert!(msg.contains("create the storage again"));
         assert!(!msg.contains("firewall"));
     }
 
