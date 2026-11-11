@@ -19,7 +19,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{IcechunkFormatError, IcechunkFormatErrorKind};
-use icechunk_types::{ETag, error::ICError};
+use icechunk_types::{
+    ETag,
+    error::ICError,
+    network::{NetworkFailure, unreachable_message},
+};
 
 /// Resolved configuration for virtual chunk location compression within a manifest.
 #[derive(Debug, Clone, Copy)]
@@ -244,6 +248,20 @@ pub enum VirtualReferenceErrorKind {
     UnsupportedObjectKeyForBackend(String),
     #[error("error fetching virtual reference")]
     FetchError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    /// The storage host could not be reached, or something other than the storage
+    /// service answered (typically a firewall or proxy).
+    #[error(
+        "could not fetch virtual chunk {location}: {}",
+        unreachable_message(host, failure)
+    )]
+    Unreachable {
+        location: String,
+        // Boxed to keep `VirtualReferenceError` under clippy's `result_large_err` threshold.
+        host: Box<str>,
+        failure: Box<NetworkFailure>,
+        #[source]
+        cause: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("the checksum of the object owning the virtual chunk has changed ({0})")]
     ObjectModified(String),
     #[error(

@@ -37,11 +37,13 @@ tokio-util.workspace = true
 tracing.workspace = true
 typed-path.workspace = true
 typetag.workspace = true
+url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 icechunk-macros.workspace = true
 
+rustls.workspace = true
 serde_json.workspace = true
 test-log.workspace = true
 

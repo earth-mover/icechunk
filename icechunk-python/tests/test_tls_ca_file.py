@@ -86,10 +86,14 @@ def redirect_repo_storage(port: int) -> ic.Storage:
 STORAGES = [http_repo_storage, s3_repo_storage, redirect_repo_storage]
 
 
-def open_error(storage: ic.Storage) -> str:
+def open_exception(storage: ic.Storage) -> ic.IcechunkError:
     with pytest.raises(ic.IcechunkError) as exc_info:
         ic.Repository.open(storage, config=CONFIG)
-    return str(exc_info.value)
+    return exc_info.value
+
+
+def open_error(storage: ic.Storage) -> str:
+    return str(open_exception(storage))
 
 
 @pytest.mark.parametrize("make_storage", STORAGES)
@@ -99,9 +103,19 @@ def test_rejects_unknown_ca(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv(ENV, raising=False)
-    msg = open_error(make_storage(https_port))
+    exc = open_exception(make_storage(https_port))
+    msg = str(exc)
     assert "invalid peer certificate" in msg
     assert ENV in msg
+    if make_storage is s3_repo_storage:
+        assert exc.kind == ic.ErrorKind.STORAGE_UNREACHABLE
+        assert f"localhost:{https_port}" in msg
+        assert "TLS-inspecting proxy" in msg
+        assert "macOS sandbox" in msg
+        assert "create the storage again" in msg
+        assert "firewall" not in msg
+        # the unreachable message already gives the trust-store advice; no second hint
+        assert "\n\nhint: " not in msg
 
 
 @pytest.mark.parametrize("make_storage", STORAGES)

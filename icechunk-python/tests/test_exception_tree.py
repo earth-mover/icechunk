@@ -267,3 +267,30 @@ def test_default_messages_preserved() -> None:
     )
     r = ic.RebaseFailedError("SNAP1", [])
     assert str(r) == "Rebase failed on snapshot SNAP1: 0 conflicts found"
+
+
+def test_storage_unreachable_closed_port() -> None:
+    import socket
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    storage = ic.s3_storage(
+        bucket="b",
+        prefix="p",
+        endpoint_url=f"http://127.0.0.1:{port}",
+        allow_http=True,
+        region="us-east-1",
+        access_key_id="k",
+        secret_access_key="s",
+    )
+    # a single attempt keeps the test fast
+    config = ic.RepositoryConfig(
+        storage=ic.StorageSettings(retries=ic.StorageRetriesSettings(max_tries=1))
+    )
+    with pytest.raises(ic.StorageError) as exc:
+        ic.Repository.open(storage, config=config)
+    assert exc.value.kind == ic.ErrorKind.STORAGE_UNREACHABLE
+    assert f"127.0.0.1:{port}" in str(exc.value)
+    assert "firewall or proxy" in str(exc.value)

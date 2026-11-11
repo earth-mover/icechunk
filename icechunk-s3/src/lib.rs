@@ -21,12 +21,13 @@ use aws_sdk_s3::{
     config::{
         Builder, ConfigBag, IdentityCache, Intercept, ProvideCredentials, Region,
         RuntimeComponents, StalledStreamProtectionConfig,
+        http::HttpResponse,
         interceptors::{
             BeforeDeserializationInterceptorContextMut,
             BeforeTransmitInterceptorContextMut,
         },
     },
-    error::{BoxError, SdkError},
+    error::{BoxError, ProvideErrorMetadata, SdkError},
     operation::{copy_object::CopyObjectError, put_object::PutObjectError},
     primitives::ByteStream,
     types::{CompletedMultipartUpload, CompletedPart, Delete, Object, ObjectIdentifier},
@@ -46,15 +47,17 @@ pub use icechunk_storage::s3_config::{
     S3StaticCredentials,
 };
 use icechunk_storage::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    Timeout, VersionInfo, VersionedUpdateResult, obj_not_found_res, obj_store_error,
-    obj_store_error_res, other_error,
+    DeleteObjectsResult, ExpectedBody, GetModifiedResult, ListInfo, NetworkFailure,
+    RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageErrorKind, StorageInfo, StorageResult, Timeout, VersionInfo,
+    VersionedUpdateResult, error_chain_has_tls_failure, is_non_storage_content_type,
+    obj_not_found_res, obj_store_error, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
     },
-    sealed, split_in_multiple_equal_requests, strip_quotes, throttled_error,
+    sanitize_content_type, sanitize_snippet, sealed, split_in_multiple_equal_requests,
+    strip_quotes, throttled_error, unreachable_error,
 };
 use icechunk_types::ICResultExt as _;
 use serde::{Deserialize, Serialize};
@@ -303,6 +306,122 @@ fn https_client_with_roots(pem: Option<Vec<u8>>) -> aws_sdk_s3::config::SharedHt
         conn.set_proxy_config(Some(ProxyConfig::from_env()));
         conn.build()
     })
+}
+
+/// Classifies an SDK error as a network-level failure (nothing reachable, or
+/// something other than S3 answered), using only typed errors and responses.
+pub fn classify_s3_error<E: ProvideErrorMetadata + std::error::Error + 'static>(
+    err: &SdkError<E, HttpResponse>,
+) -> Option<NetworkFailure> {
+    match err {
+        SdkError::DispatchFailure(failure) => {
+            if error_chain_has_tls_failure(err) {
+                Some(NetworkFailure::Tls)
+            } else if let Some(connector) = failure.as_connector_error() {
+                if connector.is_timeout() {
+                    Some(NetworkFailure::Timeout)
+                } else if connector.is_io() {
+                    Some(NetworkFailure::Connect)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        SdkError::TimeoutError(_) => Some(NetworkFailure::Timeout),
+        // An S3 error code means the storage service answered, whatever the
+        // Content-Type says. Only a response the SDK could not parse is checked.
+        SdkError::ServiceError(e) if e.err().code().is_some() => None,
+        SdkError::ServiceError(e) => classify_s3_response(e.raw()),
+        SdkError::ResponseError(e) => classify_s3_response(e.raw()),
+        _ => None,
+    }
+}
+
+fn classify_s3_response(raw: &HttpResponse) -> Option<NetworkFailure> {
+    let status = raw.status().as_u16();
+    let content_type = raw.headers().get("content-type");
+    let body = raw.body().bytes().unwrap_or_default();
+    if status == 407
+        || (!body.is_empty()
+            && is_non_storage_content_type(content_type, ExpectedBody::Xml))
+    {
+        let prefix = &body[..body.len().min(1024)];
+        Some(NetworkFailure::UnexpectedResponse {
+            status,
+            content_type: content_type.and_then(sanitize_content_type),
+            snippet: sanitize_snippet(prefix),
+        })
+    } else {
+        None
+    }
+}
+
+/// The host (with explicit port, if any) that requests for `bucket` go to.
+///
+/// This approximates the AWS SDK's endpoint resolution, for wording errors
+/// only. Requests are virtual-hosted (`{bucket}.{host}`) unless
+/// `force_path_style` is set, the endpoint host is an IP literal, or the
+/// bucket is not a valid DNS name (dotted names are allowed only over plain
+/// http); otherwise they go to the bare host. With no region configured the
+/// SDK may still resolve one from the environment or an AWS profile; we report
+/// the host as far as the options tell us.
+pub fn s3_endpoint_host(opts: &S3Options, bucket: &str) -> String {
+    if let Some(endpoint) = &opts.endpoint_url
+        && let Ok(url) = url::Url::parse(endpoint)
+        && let Some(host) = url.host_str()
+    {
+        let host = match url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        };
+        let is_ip = !matches!(url.host(), Some(url::Host::Domain(_)));
+        let allow_dots = url.scheme() == "http";
+        return if !opts.force_path_style
+            && !is_ip
+            && is_virtual_hostable_bucket(bucket, allow_dots)
+        {
+            format!("{bucket}.{host}")
+        } else {
+            host
+        };
+    }
+    let virtual_hosted =
+        !opts.force_path_style && is_virtual_hostable_bucket(bucket, false);
+    match (&opts.region, virtual_hosted) {
+        (Some(region), false) => format!("s3.{region}.amazonaws.com"),
+        (None, false) => "s3.amazonaws.com".to_string(),
+        (Some(region), true) => format!("{bucket}.s3.{region}.amazonaws.com"),
+        (None, true) => format!("{bucket}.s3.amazonaws.com"),
+    }
+}
+
+/// Whether the SDK puts `bucket` in the host name: each dot-separated label
+/// (a single label unless `allow_dots`) is 3 to 63 lowercase letters, digits
+/// or `-`, and starts and ends with a letter or digit.
+fn is_virtual_hostable_bucket(bucket: &str, allow_dots: bool) -> bool {
+    let label_ok = |label: &str| {
+        let alnum = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+        let b = label.as_bytes();
+        (3..=63).contains(&b.len())
+            && b.first().is_some_and(alnum)
+            && b.last().is_some_and(alnum)
+            && b.iter().all(|c| alnum(c) || *c == b'-')
+    };
+    if allow_dots { bucket.split('.').all(label_ok) } else { label_ok(bucket) }
+}
+
+/// Converts an SDK error into a [`StorageError`], with the actionable
+/// "storage unreachable" shape when it classifies as a network failure.
+pub fn s3_error<E>(err: SdkError<E, HttpResponse>, host: &str) -> StorageError
+where
+    E: ProvideErrorMetadata + std::error::Error + Send + Sync + 'static,
+{
+    match classify_s3_error(&err) {
+        Some(failure) => unreachable_error(host, failure, err),
+        None => obj_store_error(err),
+    }
 }
 
 #[instrument(skip(credentials))]
@@ -582,6 +701,11 @@ fn transient_per_key_code(errors: &[aws_sdk_s3::types::Error]) -> Option<&str> {
 }
 
 impl S3Storage {
+    /// The host that requests go to, used to word network-failure errors.
+    fn host(&self) -> String {
+        s3_endpoint_host(&self.config, &self.bucket)
+    }
+
     /// Build an [`S3Storage`].
     ///
     /// `extra_read_headers`/`extra_write_headers` are extra HTTP headers injected
@@ -705,10 +829,11 @@ impl S3Storage {
 
         // FIXME: The SDK paginator drops per-request config, so listings carry no
         // attribution fragment.
+        let host = self.host();
         req.into_paginator()
             .send()
             .into_stream_03x()
-            .map_err(obj_store_error)
+            .map_err(move |e| s3_error(e, &host))
             .try_filter_map(|page| {
                 let contents = page.contents.map(|cont| stream::iter(cont).map(Ok));
                 ready(Ok(contents))
@@ -784,7 +909,7 @@ impl S3Storage {
                     || sdk_err
                         .raw_response()
                         .is_some_and(|r| matches!(r.status().as_u16(), 404 | 400));
-                if absent { Ok(None) } else { obj_store_error_res(sdk_err) }
+                if absent { Ok(None) } else { Err(s3_error(sdk_err, &self.host())) }
             }
         }
     }
@@ -859,7 +984,10 @@ impl S3Storage {
                 if is_precondition_code(code) {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ServiceError(err))
+                    Err(s3_error(
+                        SdkError::<PutObjectError>::ServiceError(err),
+                        &self.host(),
+                    ))
                 }
             }
             // S3 API documents this
@@ -869,10 +997,13 @@ impl S3Storage {
                 if status == 409 || status == 412 {
                     self.recover_precondition(ctx, key, write_id.as_deref()).await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    Err(s3_error(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                        &self.host(),
+                    ))
                 }
             }
-            Err(err) => obj_store_error_res(err),
+            Err(err) => Err(s3_error(err, &self.host())),
         }
     }
 
@@ -925,7 +1056,7 @@ impl S3Storage {
             .config_override(attribution_override(ctx))
             .send()
             .await
-            .capture_box()?;
+            .map_err(|e| s3_error(e, &self.host()))?;
         let upload_id = create_res.upload_id().ok_or(other_error(
             "No upload_id in create multipart upload result".to_string(),
         ))?;
@@ -977,7 +1108,7 @@ impl S3Storage {
             })
             .try_collect::<Vec<_>>()
             .await
-            .capture_box()?;
+            .map_err(|e| s3_error(e, &self.host()))?;
 
         let completed_parts =
             CompletedMultipartUpload::builder().set_parts(Some(completed_parts)).build();
@@ -1018,11 +1149,11 @@ impl S3Storage {
                         ctx,
                         key,
                         write_id.as_deref(),
-                        obj_store_error(SdkError::ServiceError(err)),
+                        s3_error(SdkError::ServiceError(err), &self.host()),
                     )
                     .await
                 } else {
-                    obj_store_error_res(SdkError::ServiceError(err))
+                    Err(s3_error(SdkError::ServiceError(err), &self.host()))
                 }
             }
             Err(SdkError::ResponseError(err)) => {
@@ -1035,14 +1166,20 @@ impl S3Storage {
                         ctx,
                         key,
                         write_id.as_deref(),
-                        obj_store_error(SdkError::<PutObjectError>::ResponseError(err)),
+                        s3_error(
+                            SdkError::<PutObjectError>::ResponseError(err),
+                            &self.host(),
+                        ),
                     )
                     .await
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    Err(s3_error(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                        &self.host(),
+                    ))
                 }
             }
-            Err(err) => obj_store_error_res(err),
+            Err(err) => Err(s3_error(err, &self.host())),
         }
     }
 
@@ -1112,7 +1249,7 @@ impl S3Storage {
             }
             Err(sdk_err) => {
                 warn!(key, error = %sdk_err, "readback HEAD failed; propagating the HEAD error");
-                return obj_store_error_res(sdk_err);
+                return Err(s3_error(sdk_err, &self.host()));
             }
         };
         Ok(ReadbackOutcome::classify(write_id, stored_write_id.as_deref(), &version))
@@ -1227,7 +1364,10 @@ impl Storage for S3Storage {
                 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    obj_store_error_res(SdkError::<CopyObjectError>::ServiceError(err))
+                    Err(s3_error(
+                        SdkError::<CopyObjectError>::ServiceError(err),
+                        &self.host(),
+                    ))
                 }
             }
             // S3 API documents this
@@ -1237,7 +1377,10 @@ impl Storage for S3Storage {
                 if status == 409 || status == 412 {
                     Ok(VersionedUpdateResult::NotOnLatestVersion)
                 } else {
-                    obj_store_error_res(SdkError::<PutObjectError>::ResponseError(err))
+                    Err(s3_error(
+                        SdkError::<PutObjectError>::ResponseError(err),
+                        &self.host(),
+                    ))
                 }
             }
             Err(sdk_err) => match sdk_err.as_service_error() {
@@ -1252,7 +1395,7 @@ impl Storage for S3Storage {
                     // the status code.
                     obj_not_found_res()
                 }
-                _ => obj_store_error_res(sdk_err),
+                _ => Err(s3_error(sdk_err, &self.host())),
             },
         }
     }
@@ -1340,15 +1483,23 @@ impl Storage for S3Storage {
             req = req.request_payer(aws_sdk_s3::types::RequestPayer::Requester);
         }
 
+        let res = req.customize().config_override(attribution_override(ctx)).send().await;
+        // Network failures first, for every error shape: a proxy block page
+        // must not look like a throttle (which GC would back off and retry)
+        // or like a plain failure that does not name the host.
+        let res = match res {
+            Err(err) => match classify_s3_error(&err) {
+                Some(failure) => {
+                    return Err(unreachable_error(self.host(), failure, err));
+                }
+                None => Err(err),
+            },
+            ok => ok,
+        };
         // A throttle gets its own kind, so the caller can back off instead of
         // counting it as a failure. The SDK has already retried it `max_tries`
         // times with its own backoff by then.
-        let res = match req
-            .customize()
-            .config_override(attribution_override(ctx))
-            .send()
-            .await
-        {
+        let res = match res {
             Ok(res) => res,
             Err(SdkError::ServiceError(err)) => {
                 use aws_sdk_s3::operation::RequestId as _;
@@ -1367,9 +1518,9 @@ impl Storage for S3Storage {
                 });
             }
             Err(SdkError::ResponseError(err)) => {
+                let status = err.raw().status().as_u16();
                 return Err(other_error(format!(
-                    "DeleteObjects failed: unparsable response, status {}",
-                    err.raw().status().as_u16()
+                    "DeleteObjects failed: unparsable response, status {status}"
                 )));
             }
             Err(err) => return Err(obj_store_error(err)),
@@ -1430,7 +1581,7 @@ impl Storage for S3Storage {
             .config_override(attribution_override(ctx))
             .send()
             .await
-            .capture_box()?;
+            .map_err(|e| s3_error(e, &self.host()))?;
 
         let res = res
             .last_modified
@@ -1550,7 +1701,7 @@ impl S3Storage {
                         trace!("Received 304 (Not Modified). Treating requested object as up-to-date.");
                         Ok(None)
                     }
-                    _ => obj_store_error_res(sdk_err),
+                    _ => Err(s3_error(sdk_err, &self.host())),
                 }
             }
         }
@@ -2008,6 +2159,240 @@ mod tests {
     use icechunk_storage::TimeoutSettings;
 
     use super::*;
+
+    mod classify {
+        use aws_sdk_s3::{
+            config::http::HttpResponse, error::ConnectorError,
+            operation::get_object::GetObjectError, primitives::SdkBody,
+        };
+        use icechunk_storage::NetworkFailure;
+
+        use super::super::*;
+
+        fn raw(status: u16, content_type: Option<&str>, body: &str) -> HttpResponse {
+            let mut r = HttpResponse::new(
+                status.try_into().unwrap(),
+                SdkBody::from(body.to_string()),
+            );
+            if let Some(ct) = content_type {
+                r.headers_mut().insert("content-type", ct.to_string());
+            }
+            r
+        }
+
+        fn service_error(
+            status: u16,
+            content_type: Option<&str>,
+            body: &str,
+        ) -> SdkError<GetObjectError, HttpResponse> {
+            let meta = GetObjectError::generic(Default::default());
+            SdkError::service_error(meta, raw(status, content_type, body))
+        }
+
+        fn io_err() -> ConnectorError {
+            ConnectorError::io(Box::new(std::io::Error::other("refused")))
+        }
+
+        #[test]
+        fn html_403_get_is_unexpected_response() {
+            let err =
+                service_error(403, Some("text/html"), "<html>Blocked by policy</html>");
+            let Some(NetworkFailure::UnexpectedResponse {
+                status,
+                content_type,
+                snippet,
+            }) = classify_s3_error(&err)
+            else {
+                panic!("expected UnexpectedResponse");
+            };
+            assert_eq!(status, 403);
+            assert_eq!(content_type.as_deref(), Some("text/html"));
+            assert!(snippet.unwrap().starts_with("<html>Blocked by policy"));
+        }
+
+        #[test]
+        fn content_type_is_sanitized_and_capped() {
+            let ct = format!("text/html;\tcharset=utf-8; x={}", "a".repeat(500));
+            let Some(NetworkFailure::UnexpectedResponse { content_type, .. }) =
+                classify_s3_error(&service_error(403, Some(&ct), "<html>no</html>"))
+            else {
+                panic!("expected UnexpectedResponse");
+            };
+            let content_type = content_type.unwrap();
+            assert_eq!(content_type.chars().count(), 100);
+            assert!(content_type.starts_with("text/html; charset=utf-8; x=aaa"));
+        }
+
+        #[test]
+        fn empty_403_is_not_classified() {
+            assert!(classify_s3_error(&service_error(403, None, "")).is_none());
+        }
+
+        #[test]
+        fn proxy_auth_407_is_unexpected_even_without_body() {
+            assert!(matches!(
+                classify_s3_error(&service_error(407, None, "")),
+                Some(NetworkFailure::UnexpectedResponse { status: 407, .. })
+            ));
+        }
+
+        #[test]
+        fn xml_service_error_with_code_is_not_classified() {
+            let body = "<Error><Code>AccessDenied</Code><Message>nope</Message></Error>";
+            assert!(
+                classify_s3_error(&service_error(403, Some("application/xml"), body))
+                    .is_none()
+            );
+        }
+
+        #[test]
+        fn parsed_s3_code_is_not_classified_whatever_the_content_type() {
+            let meta = GetObjectError::generic(
+                aws_sdk_s3::error::ErrorMetadata::builder()
+                    .code("AccessDenied")
+                    .message("nope")
+                    .build(),
+            );
+            let err = SdkError::service_error(
+                meta,
+                raw(403, Some("application/json"), r#"{"error":"denied"}"#),
+            );
+            assert!(classify_s3_error(&err).is_none());
+        }
+
+        #[test]
+        fn xml_content_type_with_params_is_xml() {
+            assert!(
+                classify_s3_error(&service_error(
+                    503,
+                    Some("application/xml; charset=utf-8"),
+                    "<Error><Code>SlowDown</Code></Error>"
+                ))
+                .is_none()
+            );
+        }
+
+        #[test]
+        fn html_502_is_unexpected_response() {
+            assert!(matches!(
+                classify_s3_error(&service_error(
+                    502,
+                    Some("text/html"),
+                    "<h1>Bad Gateway</h1>"
+                )),
+                Some(NetworkFailure::UnexpectedResponse { status: 502, .. })
+            ));
+        }
+
+        #[test]
+        fn io_dispatch_failure_is_connect() {
+            let err =
+                SdkError::<GetObjectError, HttpResponse>::dispatch_failure(io_err());
+            assert!(matches!(classify_s3_error(&err), Some(NetworkFailure::Connect)));
+        }
+
+        #[test]
+        fn connector_timeout_is_timeout() {
+            let err = SdkError::<GetObjectError, HttpResponse>::dispatch_failure(
+                ConnectorError::timeout(Box::new(std::io::Error::other("slow"))),
+            );
+            assert!(matches!(classify_s3_error(&err), Some(NetworkFailure::Timeout)));
+        }
+
+        #[test]
+        fn sdk_timeout_is_timeout() {
+            let err = SdkError::<GetObjectError, HttpResponse>::timeout_error(
+                std::io::Error::other("slow"),
+            );
+            assert!(matches!(classify_s3_error(&err), Some(NetworkFailure::Timeout)));
+        }
+
+        #[test]
+        fn tls_dispatch_failure_is_tls() {
+            let tls = std::io::Error::other(rustls::Error::General("bad cert".into()));
+            let err = SdkError::<GetObjectError, HttpResponse>::dispatch_failure(
+                ConnectorError::io(Box::new(tls)),
+            );
+            assert!(matches!(classify_s3_error(&err), Some(NetworkFailure::Tls)));
+        }
+
+        #[test]
+        fn s3_error_wraps_classified_failures_and_keeps_source() {
+            let err = service_error(502, Some("text/html"), "<h1>Bad Gateway</h1>");
+            let out = s3_error(err, "abc123.r2.cloudflarestorage.com");
+            assert!(out.kind.is_unreachable());
+            assert!(out.to_string().contains("abc123.r2.cloudflarestorage.com"));
+        }
+
+        #[test]
+        fn s3_endpoint_host_aws_defaults() {
+            let opts = S3Options::default().with_region("us-west-2");
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "my-bucket.s3.us-west-2.amazonaws.com"
+            );
+            let opts = S3Options::default();
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "my-bucket.s3.amazonaws.com"
+            );
+            let opts =
+                S3Options::default().with_region("us-west-2").with_force_path_style(true);
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "s3.us-west-2.amazonaws.com"
+            );
+            // dotted buckets are not virtual-hosted over https
+            let opts = S3Options::default().with_region("us-west-2");
+            assert_eq!(
+                s3_endpoint_host(&opts, "my.bucket"),
+                "s3.us-west-2.amazonaws.com"
+            );
+        }
+
+        #[test]
+        fn s3_endpoint_host_custom_endpoints() {
+            let https = "https://abc123.r2.cloudflarestorage.com";
+            // virtual-hosted: the bucket becomes a subdomain of the endpoint
+            let opts = S3Options::default().with_endpoint_url(https);
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "my-bucket.abc123.r2.cloudflarestorage.com"
+            );
+            // force_path_style keeps the bare endpoint host
+            let opts =
+                S3Options::default().with_endpoint_url(https).with_force_path_style(true);
+            assert_eq!(
+                s3_endpoint_host(&opts, "my-bucket"),
+                "abc123.r2.cloudflarestorage.com"
+            );
+            // a dotted bucket can't be a single https host label
+            let opts = S3Options::default().with_endpoint_url(https);
+            assert_eq!(
+                s3_endpoint_host(&opts, "my.bucket"),
+                "abc123.r2.cloudflarestorage.com"
+            );
+            // ... but can be over plain http, when every label is long enough
+            let opts =
+                S3Options::default().with_endpoint_url("http://minio.invalid:9000");
+            assert_eq!(
+                s3_endpoint_host(&opts, "abc.bucket"),
+                "abc.bucket.minio.invalid:9000"
+            );
+            assert_eq!(s3_endpoint_host(&opts, "my.bucket"), "minio.invalid:9000");
+            // not DNS-compatible
+            let opts = S3Options::default().with_endpoint_url(https);
+            assert_eq!(
+                s3_endpoint_host(&opts, "My_Bucket"),
+                "abc123.r2.cloudflarestorage.com"
+            );
+            // IP endpoints are never virtual-hosted
+            let opts = S3Options::default().with_endpoint_url("http://127.0.0.1:9000");
+            assert_eq!(s3_endpoint_host(&opts, "my-bucket"), "127.0.0.1:9000");
+            let opts = S3Options::default().with_endpoint_url("http://[::1]:9000");
+            assert_eq!(s3_endpoint_host(&opts, "my-bucket"), "[::1]:9000");
+        }
+    }
 
     // Readback classification is unit-tested in `icechunk_storage::readback`.
 
