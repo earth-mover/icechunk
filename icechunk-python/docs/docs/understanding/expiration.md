@@ -223,10 +223,8 @@ Typical situations where old versions cost real storage:
 
 - **A bug in array data**: you rewrote a large array with corrected values, but the chunks of the buggy
   version are still stored so that you can time travel to it.
-- **A deleted array**: deleting an array on `main` creates a new snapshot, but the array's chunks must be
-  kept for the older snapshots.
-- **Rolling windows of arrays**: dropping old arrays to keep, say, three years of data does not free any space
-  until the versions that contain them are expired.
+- **Deleted arrays**: deleting an array creates a new snapshot without it, but does not free any space.
+  Its chunks must be kept for the older snapshots that still contain the array, until those are expired.
 - **Chunk-unaligned writes**: for example, daily appends to an array chunked by month rewrite the whole
   monthly chunk each day, leaving roughly 30 near-identical copies of every chunk.
 
