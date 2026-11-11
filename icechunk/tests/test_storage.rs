@@ -233,8 +233,10 @@ where
         let s = common::make_r2_integration_storage(prefix.clone())?;
         storages.push(("R2_slash", s));
     }
+    // HF_BUCKET is a repo variable, so Dependabot runs set it without the secret keys.
     if let Ok(e) = env::var("HF_BUCKET")
         && !e.is_empty()
+        && env::var("HF_ACCESS_KEY_ID").is_ok_and(|k| !k.is_empty())
     {
         let prefix = common::get_random_prefix("with_storage");
         let s = common::make_hf_integration_storage(prefix.clone())?;
