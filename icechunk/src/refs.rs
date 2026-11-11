@@ -4,7 +4,6 @@
 
 use std::{collections::BTreeSet, future::ready, pin::Pin};
 
-use async_recursion::async_recursion;
 use bytes::Bytes;
 use futures::{
     FutureExt as _, StreamExt as _, TryStreamExt as _,
@@ -50,6 +49,11 @@ pub enum RefErrorKind {
 
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
+
+    #[error(
+        "could not update branch `{branch}` after {attempts} attempts: storage kept rejecting the conditional write while the branch tip was unchanged"
+    )]
+    UpdateBranchRetriesExhausted { branch: String, attempts: usize },
 }
 
 pub type RefError = ICError<RefErrorKind>;
@@ -183,7 +187,15 @@ pub async fn create_tag(
     }
 }
 
-#[async_recursion]
+/// How many times [`update_branch`] tries the conditional write before giving up.
+///
+/// When the write is rejected because the ref changed, the next attempt re-reads the
+/// branch: a real concurrent update moves the tip and is reported as a
+/// [`RefErrorKind::Conflict`] right away. Running out of attempts therefore means the
+/// storage keeps rejecting the write while the tip stays the same, for example because
+/// it doesn't handle the conditional request correctly (#1091).
+const UPDATE_BRANCH_MAX_ATTEMPTS: usize = 10;
+
 #[instrument(skip(storage, ctx))]
 pub async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
@@ -192,48 +204,54 @@ pub async fn update_branch(
     new_snapshot: SnapshotId,
     current_snapshot: Option<&SnapshotId>,
 ) -> RefResult<VersionInfo> {
-    let (ref_data, version) = match fetch_branch(storage, ctx, name).await {
-        Ok((ref_data, version)) => (Some(ref_data), version),
-        Err(RefError { kind: RefErrorKind::RefNotFound(..), .. }) => {
-            (None, VersionInfo::for_creation())
-        }
-        Err(err) => {
-            return Err(err);
-        }
-    };
-
-    if ref_data.as_ref().map(|rd| &rd.snapshot) != current_snapshot {
-        return Err(RefErrorKind::Conflict {
-            expected_parent: current_snapshot.cloned(),
-            actual_parent: ref_data.map(|rd| rd.snapshot),
-        })
-        .capture();
-    }
-
     let key = branch_key(name)?;
     let path = format!("{V1_REFS_FILE_PATH}/{key}");
     let data = RefData { snapshot: new_snapshot };
-    let content = serde_json::to_vec(&data).capture()?;
-    match storage
-        .put_object(
-            ctx,
-            path.as_str(),
-            Bytes::from_owner(content),
-            Some("application/json"),
-            Default::default(),
-            Some(&version),
-        )
-        .await
-    {
-        Ok(VersionedUpdateResult::Updated { new_version }) => Ok(new_version),
-        Ok(VersionedUpdateResult::NotOnLatestVersion) => {
-            // If the already exists, an update happened since we checked
-            // we can just try again and the conflict will be reported
-            update_branch(storage, ctx, name, data.snapshot, current_snapshot).await
+    let content = Bytes::from(serde_json::to_vec(&data).capture()?);
+
+    for _ in 0..UPDATE_BRANCH_MAX_ATTEMPTS {
+        let (ref_data, version) = match fetch_branch(storage, ctx, name).await {
+            Ok((ref_data, version)) => (Some(ref_data), version),
+            Err(RefError { kind: RefErrorKind::RefNotFound(..), .. }) => {
+                (None, VersionInfo::for_creation())
+            }
+            Err(err) => {
+                return Err(err);
+            }
+        };
+
+        if ref_data.as_ref().map(|rd| &rd.snapshot) != current_snapshot {
+            return Err(RefErrorKind::Conflict {
+                expected_parent: current_snapshot.cloned(),
+                actual_parent: ref_data.map(|rd| rd.snapshot),
+            })
+            .capture();
         }
 
-        Err(err) => Err(err.inject()),
+        match storage
+            .put_object(
+                ctx,
+                path.as_str(),
+                content.clone(),
+                Some("application/json"),
+                Default::default(),
+                Some(&version),
+            )
+            .await
+        {
+            Ok(VersionedUpdateResult::Updated { new_version }) => return Ok(new_version),
+            // The ref changed since we read it: read it again, and a real update
+            // will be reported as a conflict on the next attempt
+            Ok(VersionedUpdateResult::NotOnLatestVersion) => {}
+            Err(err) => return Err(err.inject()),
+        }
     }
+
+    Err(RefErrorKind::UpdateBranchRetriesExhausted {
+        branch: name.to_string(),
+        attempts: UPDATE_BRANCH_MAX_ATTEMPTS,
+    })
+    .capture()
 }
 
 fn ref_name_from_object_name(key: &str) -> Option<String> {
@@ -482,8 +500,20 @@ mod tests {
     use pretty_assertions::assert_eq;
     use tempfile::{TempDir, tempdir};
 
+    use std::{
+        ops::Range,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use chrono::{DateTime, Utc};
+    use futures::{Stream, stream::BoxStream};
+    use icechunk_storage::sealed::Sealed;
+
     use super::*;
-    use crate::storage::{new_in_memory_storage, new_local_filesystem_storage};
+    use crate::storage::{
+        DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
+        StorageInfo, StorageResult, new_in_memory_storage, new_local_filesystem_storage,
+    };
     use crate::strategies::ref_data;
     use icechunk_format::roundtrip_serialization_tests;
     use proptest::prelude::*;
@@ -700,6 +730,192 @@ mod tests {
         .await;
         res1?;
         res2?;
+        Ok(())
+    }
+
+    /// Delegates everything, but reports the first `reject_ref_writes` writes under
+    /// the refs prefix as `NotOnLatestVersion` without writing anything: what a
+    /// storage that mishandles conditional writes looks like to `update_branch`.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct RejectingRefWrites {
+        backend: Arc<dyn Storage + Send + Sync>,
+        reject_ref_writes: usize,
+        #[serde(skip)]
+        ref_writes: AtomicUsize,
+    }
+
+    impl RejectingRefWrites {
+        fn new(
+            backend: Arc<dyn Storage + Send + Sync>,
+            reject_ref_writes: usize,
+        ) -> Self {
+            Self { backend, reject_ref_writes, ref_writes: AtomicUsize::new(0) }
+        }
+
+        fn ref_writes(&self) -> usize {
+            self.ref_writes.load(Ordering::SeqCst)
+        }
+    }
+
+    impl std::fmt::Display for RejectingRefWrites {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "RejectingRefWrites({})", self.backend)
+        }
+    }
+
+    impl Sealed for RejectingRefWrites {}
+
+    #[async_trait::async_trait]
+    #[typetag::serde]
+    impl Storage for RejectingRefWrites {
+        fn storage_info(&self) -> StorageInfo {
+            self.backend.storage_info()
+        }
+
+        async fn default_settings(&self) -> StorageResult<Settings> {
+            self.backend.default_settings().await
+        }
+
+        async fn can_write(&self) -> StorageResult<bool> {
+            self.backend.can_write().await
+        }
+
+        async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+            self.backend.can_create_repository().await
+        }
+
+        async fn put_object(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            bytes: Bytes,
+            content_type: Option<&str>,
+            metadata: Vec<(String, String)>,
+            previous_version: Option<&VersionInfo>,
+        ) -> StorageResult<VersionedUpdateResult> {
+            if path.starts_with(V1_REFS_FILE_PATH)
+                && self.ref_writes.fetch_add(1, Ordering::SeqCst) < self.reject_ref_writes
+            {
+                return Ok(VersionedUpdateResult::NotOnLatestVersion);
+            }
+            self.backend
+                .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+                .await
+        }
+
+        async fn copy_object(
+            &self,
+            ctx: &StorageContext<'_>,
+            from: &str,
+            to: &str,
+            content_type: Option<&str>,
+            version: &VersionInfo,
+        ) -> StorageResult<VersionedUpdateResult> {
+            self.backend.copy_object(ctx, from, to, content_type, version).await
+        }
+
+        async fn list_objects<'a>(
+            &'a self,
+            ctx: &StorageContext<'_>,
+            prefix: &str,
+        ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+            self.backend.list_objects(ctx, prefix).await
+        }
+
+        async fn list_objects_with_id_prefixes<'a>(
+            &'a self,
+            ctx: &StorageContext<'_>,
+            prefix: &str,
+            id_prefixes: &[String],
+        ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+            self.backend.list_objects_with_id_prefixes(ctx, prefix, id_prefixes).await
+        }
+
+        fn lists_id_prefixes_natively(&self) -> bool {
+            self.backend.lists_id_prefixes_natively()
+        }
+
+        async fn delete_batch(
+            &self,
+            ctx: &StorageContext<'_>,
+            prefix: &str,
+            batch: Vec<(String, u64)>,
+        ) -> StorageResult<DeleteObjectsResult> {
+            self.backend.delete_batch(ctx, prefix, batch).await
+        }
+
+        async fn get_object_last_modified(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+        ) -> StorageResult<DateTime<Utc>> {
+            self.backend.get_object_last_modified(ctx, path).await
+        }
+
+        async fn get_object_conditional(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            previous_version: Option<&VersionInfo>,
+        ) -> StorageResult<GetModifiedResult> {
+            self.backend.get_object_conditional(ctx, path, previous_version).await
+        }
+
+        async fn get_object_range(
+            &self,
+            ctx: &StorageContext<'_>,
+            path: &str,
+            range: Option<&Range<u64>>,
+        ) -> StorageResult<(
+            Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
+            VersionInfo,
+        )> {
+            self.backend.get_object_range(ctx, path, range).await
+        }
+    }
+
+    /// Before #1091 was fixed, a storage that kept rejecting the conditional write
+    /// made `update_branch` recurse until the stack overflowed.
+    #[tokio_test]
+    async fn test_update_branch_gives_up_when_storage_keeps_rejecting_writes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = RejectingRefWrites::new(new_in_memory_storage().await?, usize::MAX);
+        let storage_settings = storage.default_settings().await?;
+        let ctx = StorageContext::unattributed(&storage_settings);
+
+        let res = update_branch(&storage, &ctx, "main", SnapshotId::random(), None).await;
+
+        assert!(matches!(
+            res,
+            Err(RefError {
+                kind: RefErrorKind::UpdateBranchRetriesExhausted { branch, attempts },
+                ..
+            }) if branch == "main" && attempts == UPDATE_BRANCH_MAX_ATTEMPTS
+        ));
+        assert_eq!(storage.ref_writes(), UPDATE_BRANCH_MAX_ATTEMPTS);
+        assert!(matches!(
+            fetch_branch_tip_v1(&storage, &ctx, "main").await,
+            Err(RefError { kind: RefErrorKind::RefNotFound(_), .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio_test]
+    async fn test_update_branch_retries_rejected_writes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rejected = UPDATE_BRANCH_MAX_ATTEMPTS - 1;
+        let storage = RejectingRefWrites::new(new_in_memory_storage().await?, rejected);
+        let storage_settings = storage.default_settings().await?;
+        let ctx = StorageContext::unattributed(&storage_settings);
+        let snapshot = SnapshotId::random();
+
+        update_branch(&storage, &ctx, "main", snapshot.clone(), None).await?;
+
+        assert_eq!(storage.ref_writes(), rejected + 1);
+        assert_eq!(
+            fetch_branch_tip_v1(&storage, &ctx, "main").await?,
+            RefData { snapshot }
+        );
         Ok(())
     }
 }
