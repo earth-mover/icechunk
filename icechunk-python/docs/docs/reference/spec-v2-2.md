@@ -50,7 +50,7 @@ The spec is not designed to enable fine-grained access restrictions (e.g. only r
 
 Every storage system used by Icechunk MUST support:
 
-- **Complete reads** — once a write of a file completes, every read that finds the file returns the complete content. Files are not moved or altered once written.
+- **Complete reads** — once a write of a file completes, every read that finds the file returns the complete content. Files are not moved or altered once written, except as the [repo info layout](#repo-info-layouts) allows.
 
 The [object store layout](#object-store-layout) also requires that every read finds the file; the [filesystem layout](#filesystem-layout) does not.
 
@@ -60,11 +60,11 @@ A storage system SHOULD support:
 - **Deletes** — deleting files, required for garbage collection.
 - **Listing** — listing the files under a prefix together with their creation times, required for garbage collection.
 
-The storage system is not required to support random-access writes. Once written, all files are immutable until deleted, except for the repo info. How the repo info is created and updated depends on the repository's [layout](#layouts), and each layout adds its own requirements on the storage system.
+The storage system is not required to support random-access writes. Once written, all files are immutable until deleted, except as the [repo info layout](#repo-info-layouts) allows. How the repo info is created and updated depends on the layout, and each layout adds its own requirements on the storage system.
 
-### Layouts
+### Repo info layouts
 
-A repository's layout defines where its repo info is stored, how it is created, and how it is updated. An update lands only if no other update landed since the repo info it started from was read. Only the repo info is stored differently. A repository uses the filesystem layout if it lists the `filesystem-layout-v1` [writer feature](#writer-features), and the object store layout otherwise.
+A repository's *repo info layout*, or *layout*, defines where its repo info is stored, how it is created, and how it is updated. Every layout provides a **conditional update of the repo info**: an update that lands only if no other update landed since the repo info it started from was read. Every update of the repo info, other than a creation or a conversion between layouts, MUST be a conditional update of the repo info. Only the repo info is stored differently. A repository uses the filesystem layout if it lists the `filesystem-layout-v1` [writer feature](#writer-features), and the object store layout otherwise.
 
 #### Object store layout
 
@@ -77,18 +77,18 @@ The repo info MUST be stored in the single file `$ROOT/repo`. The storage system
 
 Object stores like S3 provide these operations.
 
-A repository is created with a conditional create of `$ROOT/repo`. Every update backs up the repo info with a conditional copy, as [Updates to the repo info file](#updates-to-the-repo-info-file) requires, then replaces `$ROOT/repo` with a conditional update. If another client updated `$ROOT/repo` since it was read, the conditional update fails, and so does the update.
+A repository is created with a conditional create of `$ROOT/repo`. A conditional update of the repo info backs it up with a conditional copy, as [Updates to the repo info file](#updates-to-the-repo-info-file) requires, then replaces `$ROOT/repo` with a conditional update of that file. If another client updated `$ROOT/repo` since it was read, the conditional update of the file fails, and so does the update.
 
 #### Filesystem layout
 
-Filesystems generally lack a conditional update. Repositories on them use the **[filesystem layout](./spec-filesystem-layout-v1.md)**, which keeps each version of the repo info as an immutable file in a directory and moves from one to the next with `rename`. Its [requirements](./spec-filesystem-layout-v1.md#requirements) replace the ones of the object store layout. They do not include read-after-write consistency: a client whose cache lags can fail to find a file that another client wrote. The filesystem layout is a writer feature: repositories in it list `filesystem-layout-v1`.
+Filesystems generally lack a conditional update of a file. Repositories on them use the **[filesystem layout](./spec-filesystem-layout-v1.md)**, which keeps each version of the repo info as an immutable file in a directory and moves from one to the next with `rename`. Its [requirements](./spec-filesystem-layout-v1.md#requirements) replace the ones of the object store layout. They do not include read-after-write consistency: a client whose cache lags can fail to find a file that another client wrote. The filesystem layout is a writer feature: repositories in it list `filesystem-layout-v1`.
 
-The current repo info is the version file `$ROOT/repo.d/<N>.<h>` that the layout's marker names, and updates are made as that layout describes. `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing. It can also briefly hold a first version that never became current, after concurrent creations, and it holds the original repo info while a conversion from the object store layout runs.
+The current repo info is the version file `$ROOT/repo.d/<N>.<h>` that the layout's marker names. A conditional update of the repo info is the layout's [Change](./spec-filesystem-layout-v1.md#change), which ends with a `rename` of the marker. `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing. It can also briefly hold a first version that never became current, after concurrent creations, and it holds the original repo info while a conversion from the object store layout runs.
 
 ### Consistency and Optimistic Concurrency
 
 Icechunk achieves transactional consistency using only the limited consistency guarantees offered by the storage system.
-Icechunk V2.x does this entirely via careful management of creation and updating of the repo info: a conditional update of `$ROOT/repo` in the [object store layout](#object-store-layout), and a `rename` of the marker in the [filesystem layout](#filesystem-layout).
+Icechunk V2.x does this entirely via careful management of creation and [conditional updates of the repo info](#repo-info-layouts): a conditional update of the file `$ROOT/repo` in the [object store layout](#object-store-layout), and a `rename` of the marker in the [filesystem layout](#filesystem-layout).
 (The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
@@ -96,7 +96,7 @@ The repo info object is small, so holding it in memory is inexpensive; the windo
 However, when updating the object in storage, the client MUST detect whether a _different session_ has updated the repo info in the interim, possibly retrying or failing the update if so.
 This is an "optimistic concurrency" strategy; retries may be needed, but conflicts are expected to be infrequent.
 
-Every [layout](#layouts) guards against the race condition which occurs when two sessions attempt to update the repo info at the same time. Only one of those will succeed.
+The conditional update of the repo info guards against the race condition which occurs when two sessions attempt to update the repo info at the same time. Only one of those will succeed.
 The other update fails, because another client updated the repo info since the session started. At this point the operation is retried.
 
 If at any point during the update attempt an incompatible change is detected, the update operation is flagged as failed, the repo is not modified, and an error is shown to the user.
@@ -124,6 +124,8 @@ Parent links can change: expiration and garbage collection re-parent snapshots w
 
 ### Overview
 
+This section is informative. The rules are in the sections that follow it.
+
 Icechunk uses a series of linked metadata files to describe the state of the repository.
 
 - **Repository info file**, also called repo info or repo object, is the entry point linking to other files, particularly to snapshot files. Every change to the repository modifies this file in some way.
@@ -133,7 +135,7 @@ Icechunk uses a series of linked metadata files to describe the state of the rep
 - **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
 
 !!! tip "For implementers: read path"
-    1. Read the repo info, as its [layout](#layouts) describes → parse repo info → look up branch → get snapshot id
+    1. Read the repo info, as its [layout](#repo-info-layouts) describes → parse repo info → look up branch → get snapshot id
     2. Read `$ROOT/snapshots/{id}` → parse snapshot → list nodes
     3. For each array node, inspect its `ManifestRef` list → get manifest ids and extents
     4. Read `$ROOT/manifests/{id}` → parse manifest → look up `ChunkRef` by coordinates
@@ -257,7 +259,7 @@ With the exception of chunk files, each type of file is encoded using [flatbuffe
 
 #### Repo Info File
 
-The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. Every read operation starts by fetching it, and every update to the repository (commits, tag creation, configuration changes) replaces it. Where it is stored and how it is replaced depends on the repository's [layout](#layouts).
+The repo info file is the single entry point for an Icechunk repository and the only mutable part of a V2.x repo. Every read operation starts by fetching it, and every update to the repository (commits, tag creation, configuration changes) replaces it. Where it is stored and how it is replaced depends on the repository's [repo info layout](#repo-info-layouts): it is `$ROOT/repo` in the [object store layout](#object-store-layout), and the version file in `$ROOT/repo.d/` that the marker names in the [filesystem layout](#filesystem-layout).
 
 The repo info file MUST use the [binary file format](#binary-file-format) with file type `RepoInfo`.
 
@@ -447,7 +449,7 @@ Implementations that do not recognize a flag id do not enforce its flag. Icechun
 
 ##### Updates to the repo info file
 
-The repo info object is the only mutable object in an Icechunk repo. Before a client attempts to overwrite it they MUST copy it to the `overwritten` prefix in the repo. The copy MUST hold the version of the repo info the client read. The new repo info records the copy's name as the `backup_path` of the entry that was newest before the update, see [`Update`](#update). The copy MUST be stored with a name composed of:
+The repo info is the only mutable part of an Icechunk repo. Before a client attempts to replace it they MUST copy it to the `overwritten` prefix in the repo. The copy MUST hold the version of the repo info the client read. The new repo info records the copy's name as the `backup_path` of the entry that was newest before the update, see [`Update`](#update). The copy MUST be stored with a name composed of:
 
 - The literal `repo.`
 - The number of milliseconds from the current time to `3000-01-01T00:00:00Z`, that is, 32503680000000 minus the current Unix time in milliseconds, in decimal, zero-padded to 14 digits. This gives a "last one first" ordering when listing the prefix, but readers MUST NOT depend on it.
@@ -648,7 +650,7 @@ The repo info of a migrated repository has spec version `2` in its header and in
 
 ## Algorithms
 
-In these algorithms, the repo info is created, read and updated as the repository's [layout](#layouts) describes. An update of the repo info fails if another update landed since the repo info was read. In the filesystem layout, it also fails when the implementation cannot tell whether its own update landed ([Resolving a failed rename](./spec-filesystem-layout-v1.md#resolving-a-failed-rename)).
+In these algorithms, the repo info is created and read as the repository's [repo info layout](#repo-info-layouts) describes, and updated with a conditional update of the repo info. That update fails if another update landed since the repo info was read. In the filesystem layout, it also fails when the implementation cannot tell whether its own update landed ([Resolving a failed rename](./spec-filesystem-layout-v1.md#resolving-a-failed-rename)).
 
 ### Modify a Repository
 
