@@ -50,7 +50,7 @@ The spec is not designed to enable fine-grained access restrictions (e.g. only r
 
 Every storage system used by Icechunk MUST support:
 
-- **Read-after-write consistent writes** — once a write of a file completes, every read of it returns the complete content. Files are not moved or altered once written.
+- **Read-after-write consistent writes** — once a write of a file completes, every read of it returns the complete content. Files are not moved or altered once written. The [filesystem layout](./spec-filesystem-layout-v1.md) relaxes this across clients: a client whose cache lags can fail to find a file that another client wrote, but once it finds the file, it reads the complete content.
 
 A storage system SHOULD support:
 
@@ -72,8 +72,8 @@ The storage system is not required to support random-access writes. Once written
 ### Consistency and Optimistic Concurrency
 
 Icechunk achieves transactional consistency using only the limited consistency guarantees offered by the storage system.
-Icechunk V2.x does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
-(The exact contents of the `RepoInfo` object are defined in the format specification section below.)
+Icechunk V2.x does this entirely via careful management of creation and updating of the repo info: a conditional update of `$ROOT/repo` in the object store layout, and a `rename` of the marker in the [filesystem layout](./spec-filesystem-layout-v1.md).
+(The exact contents of the repo info are defined in the format specification section below.)
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
 The repo info object is small, so holding it in memory is inexpensive; the window of potential conflict is also very small and unrelated to the duration of the write session.
@@ -249,7 +249,7 @@ With the exception of chunk files, each type of file is encoded using [flatbuffe
 The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. Every read operation starts by fetching it, and every update to the repository (commits, tag creation, configuration changes) replaces it. Where it is stored and how it is replaced depends on the repository's [layout](#storage-operations):
 
 - In the **object store layout**, the repo info MUST be stored at `$ROOT/repo`, and every update is a conditional write on that file.
-- In the **[filesystem layout](./spec-filesystem-layout-v1.md)**, used by repositories that list the `filesystem-layout-v1` [writer feature](#writer-features), the current repo info is a version file in `$ROOT/repo.d/`, and updates are made as that layout describes. `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing, and briefly holds other repo infos as the filesystem layout describes.
+- In the **[filesystem layout](./spec-filesystem-layout-v1.md)**, used by repositories that list the `filesystem-layout-v1` [writer feature](#writer-features), the current repo info is the version file `$ROOT/repo.d/<N>.<h>` that the layout's marker names, and updates are made as that layout describes. `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing. It can also briefly hold a first version that never became current, after concurrent creations, and it holds the original repo info while a conversion from the object store layout runs.
 
 The repo info file MUST use the [binary file format](#binary-file-format) with file type `RepoInfo`.
 
@@ -325,7 +325,7 @@ Every update of the repo info MUST add exactly one entry at the front of `latest
 
 Writers MUST maintain the ops log as follows:
 
-- Before replacing the repo info, an update MUST back it up to `overwritten/`, and MUST set the backup's name as the `backup_path` of the entry that was newest. The new entry has no `backup_path`. See [Updates to the repo info file](#updates-to-the-repo-info-file).
+- Before replacing the repo info, an update MUST [back it up](#updates-to-the-repo-info-file) to `overwritten/`, and MUST set the backup's name as the `backup_path` of the entry that was newest before the update. The new entry has no `backup_path`.
 - The new entry's `updated_at` MUST be strictly greater than that of the entry that was newest before the update.
 - `backup_path` and `repo_before_updates` MUST be bare names relative to `overwritten/`, such as `repo.30729294865234.S0CHS5WSF158RN937BP0`.
 - Writers choose the number of entries kept in each file, the _page size_. They SHOULD use the configured `num_updates_per_repo_info_file`, see [Configuration](#configuration), or 1,000 when it is not configured. Readers don't depend on the page size, so another size only changes how many files the ops log spans. When the list grows beyond the page size, a writer drops the older entries, starting at an entry that has a `backup_path`, and sets `repo_before_updates` to that `backup_path`. Otherwise it MUST copy `repo_before_updates` unchanged.
@@ -351,7 +351,7 @@ The status says which operations implementations may perform on the repository:
 
 In this section, `status` is the `Repo.status` field.
 
-When `Repo.writer_features` is non-empty, `status` is a **gate**. It marks the repository `ReadOnly` for implementations that predate writer features, so that they don't modify a repository whose features they don't know. The repository's own status is then in `status.underlying`. Writers MUST maintain the gate as follows:
+When `Repo.writer_features` is non-empty, `status` is a **gate** against changes by implementations that predate writer features. It marks the repository `ReadOnly` for them, so that they don't modify a repository whose features they don't know. The repository's own status is then in `status.underlying`. Writers MUST maintain the gate as follows:
 
 - `status.underlying` MUST be present when `Repo.writer_features` is non-empty, and absent when it is empty. It MUST NOT itself have an `underlying`.
 - `status.availability` MUST be `ReadOnly`, whatever the underlying availability.
@@ -693,7 +693,7 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 1. [optional] Write new chunk manifests.
 1. Write a new transaction log file summarizing all changes in the session.
 1. Write a new snapshot file with the new repository hierarchy and manifest links. Its `flushed_at` MUST be strictly greater than the parent snapshot's.
-1. Do conditional update to write the new repo info file that contains the new snapshot and the new pointer for the branch
+1. Update the repo info, as the repository's [layout](#storage-operations) requires, to a new repo info that contains the new snapshot and the new pointer for the branch
     1. If successful, the commit succeeded and the branch is updated.
     1. If unsuccessful because the branch was updated since the session started, attempt to reconcile and retry the commit.
     1. If unsuccessful because there was some other previous update to the repo info file, read the file again and retry
@@ -724,7 +724,7 @@ Garbage collection MUST NOT delete entries it does not recognize, in `$ROOT` or 
 A tag can be created from any snapshot.
 
 1. Open the repository at a specific snapshot.
-1. Do conditional update to write the new repo info file that contains the new tag
+1. Update the repo info, as the repository's [layout](#storage-operations) requires, to a new repo info that contains the new tag
     1. If successful, the update succeeded and the tag is created.
     1. If unsuccessful because there was some previous update, read the file again and retry
     1. If unsuccessful because the snapshot doesn't exist, fail the update

@@ -199,7 +199,14 @@ After every change, and before returning, the writer replaces `$ROOT/repo` with 
 
 ### Deleting old versions
 
-Implementations MUST NOT delete a version file `<i>.<x>` in `repo.d` unless a listing of `repo.d` showed, or the implementation's own rename moved the marker to, a marker `(N, h)` with `i < N`, or with `i = N` and `x ≠ h`. Garbage collection also deletes the staged files in `$ROOT` and `repo.d/`, including `$ROOT/repo.staging.<id>`, and the `repo.d.tmp.<id>/` directories older than its cutoff. A conversion to the object store layout deletes the whole directory as described below.
+Implementations MUST NOT delete a version file `<i>.<x>` in `repo.d` unless they have seen the marker name a version `<N>.<h>` with either:
+
+- `i < N`, or
+- `i = N` and `x ≠ h`, a version that lost the race for `N`.
+
+They see the marker in a listing of `repo.d`, or through their own rename of the marker to `<N>.<h>`.
+
+Garbage collection also deletes the staged files in `$ROOT` and `repo.d/`, including `$ROOT/repo.staging.<id>`, and the `repo.d.tmp.<id>/` directories older than its cutoff. A conversion to the object store layout deletes the whole directory as described below.
 
 **Other objects** are written either to a staged `<name>.staging.<id>` renamed to `<name>`, or directly under their final name when no reader can know the name before a change makes the object reachable. No reader sees a partially written object under a name it can know.
 
