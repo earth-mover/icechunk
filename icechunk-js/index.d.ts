@@ -134,13 +134,13 @@ export type JsStore = Store
 export type AzureCredentials =
   | { type: 'Anonymous' }
   | { type: 'FromEnv' }
-  | { type: 'Static'; field0: AzureStaticCredentials }
+  | { type: 'Static', field0: AzureStaticCredentials }
 
 /** Azure static credentials */
 export type AzureStaticCredentials =
-  | { type: 'AccessKey'; field0: string }
-  | { type: 'SasToken'; field0: string }
-  | { type: 'BearerToken'; field0: string }
+  | { type: 'AccessKey', field0: string }
+  | { type: 'SasToken', field0: string }
+  | { type: 'BearerToken', field0: string }
 
 /** Caching configuration */
 export interface CachingConfig {
@@ -165,9 +165,9 @@ export interface CompressionConfig {
 /** Credentials for virtual chunk access */
 export type Credentials =
   | { type: 'HttpAccess' }
-  | { type: 'S3'; field0: S3Credentials }
-  | { type: 'Gcs'; field0: GcsCredentials }
-  | { type: 'Azure'; field0: AzureCredentials }
+  | { type: 'S3', field0: S3Credentials }
+  | { type: 'Gcs', field0: GcsCredentials }
+  | { type: 'Azure', field0: AzureCredentials }
 
 export interface DiffOptions {
   fromBranch?: string
@@ -207,14 +207,14 @@ export interface GcsBearerCredential {
 export type GcsCredentials =
   | { type: 'Anonymous' }
   | { type: 'FromEnv' }
-  | { type: 'Static'; field0: GcsStaticCredentials }
+  | { type: 'Static', field0: GcsStaticCredentials }
 
 /** GCS static credentials */
 export type GcsStaticCredentials =
-  | { type: 'ServiceAccount'; field0: string }
-  | { type: 'ServiceAccountKey'; field0: string }
-  | { type: 'ApplicationCredentials'; field0: string }
-  | { type: 'BearerToken'; field0: string }
+  | { type: 'ServiceAccount', field0: string }
+  | { type: 'ServiceAccountKey', field0: string }
+  | { type: 'ApplicationCredentials', field0: string }
+  | { type: 'BearerToken', field0: string }
 
 /** HTTP object store configuration carrying transport options and static auth headers. */
 export interface HttpConfig {
@@ -263,13 +263,13 @@ export interface MovedNode {
 /** Object store configuration for virtual chunk containers */
 export type ObjectStoreConfig =
   | { type: 'InMemory' }
-  | { type: 'LocalFileSystem'; field0: string }
-  | { type: 'Http'; field0: HttpConfig }
-  | { type: 'S3Compatible'; field0: S3Options }
-  | { type: 'S3'; field0: S3Options }
-  | { type: 'Gcs'; field0: Record<string, string> }
-  | { type: 'Azure'; field0: Record<string, string> }
-  | { type: 'Tigris'; field0: S3Options }
+  | { type: 'LocalFileSystem', field0: string }
+  | { type: 'Http', field0: HttpConfig }
+  | { type: 'S3Compatible', field0: S3Options }
+  | { type: 'S3', field0: S3Options }
+  | { type: 'Gcs', field0: Record<string, string> }
+  | { type: 'Azure', field0: Record<string, string> }
+  | { type: 'Tigris', field0: S3Options }
 
 /**
  * Range query matching zarrita's RangeQuery type:
@@ -330,7 +330,7 @@ export interface RepositoryConfig {
 export type S3Credentials =
   | { type: 'FromEnv' }
   | { type: 'Anonymous' }
-  | { type: 'Static'; field0: S3StaticCredentials }
+  | { type: 'Static', field0: S3StaticCredentials }
 
 /** S3 options */
 export interface S3Options {
