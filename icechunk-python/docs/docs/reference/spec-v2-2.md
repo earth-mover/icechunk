@@ -48,12 +48,6 @@ The spec is not designed to enable fine-grained access restrictions (e.g. only r
 
 ### Storage Operations
 
-Every storage system used by Icechunk MUST support:
-
-- **Complete reads** — once a write of a file completes, every read that finds the file returns the complete content. Files are not moved or altered once written, except as the [repo info layout](#repo-info-layouts) allows.
-
-The [object store layout](#object-store-layout) also requires that every read finds the file; the [filesystem layout](#filesystem-layout) does not.
-
 A storage system SHOULD support:
 
 - **Range reads** — reading a byte range within a file, required for reading chunks stored at an offset within a larger file.
@@ -70,7 +64,7 @@ A repository's *repo info layout*, or *layout*, defines where its repo info is s
 
 The repo info MUST be stored in the single file `$ROOT/repo`. The storage system MUST support:
 
-- **Read-after-write consistent writes** — once a write of a file completes, every read of it finds the file.
+- **Read-after-write consistent writes** — once a write of a file completes, every read of it returns the complete content. Files are not moved or altered once written.
 - **Conditional create** — atomically creating a file only if it does not exist, required to initialize a repository.
 - **Conditional update** — atomically updating a file only if the current version is known to the writer.
 - **Conditional copy** — copying a file only if its current version is known to the writer, required to back up the repo info before each update.
