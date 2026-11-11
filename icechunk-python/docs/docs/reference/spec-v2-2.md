@@ -73,7 +73,7 @@ The storage system is not required to support random-access writes. Once written
 
 Icechunk achieves transactional consistency using only the limited consistency guarantees offered by the storage system.
 Icechunk V2.x does this entirely via careful management of creation and updating of the repo info: a conditional update of `$ROOT/repo` in the object store layout, and a `rename` of the marker in the [filesystem layout](./spec-filesystem-layout-v1.md).
-(The exact contents of the repo info are defined in the format specification section below.)
+(The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
 The repo info object is small, so holding it in memory is inexpensive; the window of potential conflict is also very small and unrelated to the duration of the write session.
