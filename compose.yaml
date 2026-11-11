@@ -109,7 +109,7 @@ services:
       - '9010:9010'
 
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    image: mcr.microsoft.com/azure-storage/azurite:3.37.0
     container_name: azurite
     hostname: azurite
     healthcheck:
@@ -130,7 +130,7 @@ services:
   # the box (gRPC on 4317, HTTP on 4318) and serves its UI on 16686.
   jaeger:
     container_name: icechunk_jaeger
-    image: jaegertracing/jaeger:2.19.0
+    image: jaegertracing/jaeger:2.22.0
     profiles: ["jaeger"]
     ports:
       - "16686:16686" # Jaeger UI
@@ -138,7 +138,7 @@ services:
       - "4318:4318" # OTLP HTTP
 
   azurite-init:
-    image: mcr.microsoft.com/azure-storage/azurite:3.33.0
+    image: mcr.microsoft.com/azure-storage/azurite:3.37.0
     container_name: azurite_init
     restart: "no"
     depends_on:
