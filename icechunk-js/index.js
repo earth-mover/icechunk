@@ -4,6 +4,15 @@
 
 const { readFileSync } = require('fs')
 let nativeBinding = null
+// Which artifact actually loaded. The WASI fallback chain overwrites it with
+// the flavor it resolved; the late native retry below leaves it alone because
+// it only runs while no WASI candidate has been loaded. The take-over check
+// after the load-failure block can also set it.
+let __napiLoadedBindingTarget = 'native'
+// What this loader's own `requireNative()` calls returned. The check after
+// the load-failure block compares it with `nativeBinding` to tell a binding
+// this loader loaded from one that code outside it put in its place.
+let __napiRequiredNativeBinding = null
 const loadErrors = []
 
 const isMusl = () => {
@@ -62,7 +71,16 @@ const isMuslFromChildProcess = () => {
 function requireNative() {
   if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
     try {
-      return require(process.env.NAPI_RS_NATIVE_LIBRARY_PATH)
+      const overrideBinding = require(process.env.NAPI_RS_NATIVE_LIBRARY_PATH)
+      // The override may be a generated WASI loader, which already reports its
+      // own flavor. Adopt it: `module.exports` aliases this object, so claiming
+      // 'native' would both misreport the artifact and overwrite the loader's
+      // marker through the alias.
+      __napiLoadedBindingTarget =
+        overrideBinding && typeof overrideBinding.__napiBindingTarget === 'string'
+          ? overrideBinding.__napiBindingTarget
+          : 'native'
+      return overrideBinding
     } catch (err) {
       loadErrors.push(err)
     }
@@ -249,6 +267,22 @@ function requireNative() {
       try {
         const binding = require('@earthmover/icechunk-freebsd-arm64')
         const bindingPackageVersion = require('@earthmover/icechunk-freebsd-arm64/package.json').version
+        if (bindingPackageVersion !== '2.3.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
+          throw new Error(`Native binding package version mismatch, expected 2.3.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
+        }
+        return binding
+      } catch (e) {
+        loadErrors.push(e)
+      }
+    } else if (process.arch === 'ppc64') {
+      try {
+        return require('./icechunk.freebsd-ppc64.node')
+      } catch (e) {
+        loadErrors.push(e)
+      }
+      try {
+        const binding = require('@earthmover/icechunk-freebsd-ppc64')
+        const bindingPackageVersion = require('@earthmover/icechunk-freebsd-ppc64/package.json').version
         if (bindingPackageVersion !== '2.3.1' && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0') {
           throw new Error(`Native binding package version mismatch, expected 2.3.1 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`)
         }
@@ -572,6 +606,7 @@ const forceWasi =
 
 if (!forceWasi) {
   nativeBinding = requireNative()
+  __napiRequiredNativeBinding = nativeBinding
 }
 
 if (!nativeBinding || forceWasi) {
@@ -627,6 +662,7 @@ if (!nativeBinding || forceWasi) {
       if (!candidateFailed) {
         wasiBinding = require('./icechunk.wasi.cjs')
         nativeBinding = wasiBinding
+        __napiLoadedBindingTarget = 'wasm32-wasi'
         wasiBindingLoaded = true
       }
     } catch (err) {
@@ -653,6 +689,7 @@ if (!nativeBinding || forceWasi) {
         }
         wasiBinding = require('@earthmover/icechunk-wasm32-wasi')
         nativeBinding = wasiBinding
+        __napiLoadedBindingTarget = 'wasm32-wasi'
         wasiBindingLoaded = true
       }
     } catch (err) {
@@ -671,6 +708,7 @@ if (!nativeBinding || forceWasi) {
     !__napiWasiFlavorRequested
   ) {
     nativeBinding = requireNative()
+    __napiRequiredNativeBinding = nativeBinding
   }
   if ((forceWasiError || __napiWasiFlavorRequested) && !wasiBindingLoaded) {
     const error = new Error(
@@ -698,6 +736,104 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
+// A package can patch its own fallback in front of the load-failure check
+// above, e.g. a WebContainer download through `napi-postinstall/fallback`.
+// That fallback swaps `nativeBinding` for a generated WASI loader, which has
+// already stamped its own flavor, while the target above still says 'native'.
+// Take that flavor over, or the CommonJS stamp throws a conflict and the ESM
+// export reports the wrong artifact. Three limits keep the conflict check:
+// - only a binding this loader did not load itself, so a native addon whose
+//   `#[napi(module_exports)]` hook claims the name is still rejected;
+// - only an own data property, read through its descriptor, so no addon
+//   getter runs here, and it must read back the same, as the stamp reads it;
+// - only a flavor in `__napiWasiFlavors`, the ones this loader's own WASI
+//   chain can report ('wasm32-wasi' for a package without a WASI target).
+// This is metadata and never fails a load: a throwing Proxy trap keeps 'native'.
+if (
+  __napiLoadedBindingTarget === 'native' &&
+  nativeBinding !== __napiRequiredNativeBinding
+) {
+  try {
+    const __napiBindingTargetDescriptor = Object.getOwnPropertyDescriptor(
+      nativeBinding,
+      '__napiBindingTarget',
+    )
+    if (
+      __napiBindingTargetDescriptor &&
+      __napiWasiFlavors.indexOf(__napiBindingTargetDescriptor.value) !== -1 &&
+      nativeBinding.__napiBindingTarget === __napiBindingTargetDescriptor.value
+    ) {
+      __napiLoadedBindingTarget = __napiBindingTargetDescriptor.value
+    }
+  } catch {
+    // keep 'native'
+  }
+}
+
+function __napiStampBindingTarget(exportsObject, target) {
+  if (
+    Object.prototype.hasOwnProperty.call(exportsObject, '__napiBindingTarget')
+  ) {
+    if (exportsObject.__napiBindingTarget === target) {
+      // Already ours: the root entry aliases the object it loaded, so a WASI
+      // fallback candidate — or a `NAPI_RS_NATIVE_LIBRARY_PATH` override that
+      // is a generated loader — arrives already stamped with this same value.
+      return target
+    }
+    const error = new Error(
+      '`__napiBindingTarget` is reserved by the generated binding loader, but the loaded binding already exports it. Rename the export, e.g. #[napi(js_name = "...")].',
+    )
+    error.code = 'ERR_NAPI_BINDING_TARGET_CONFLICT'
+    throw error
+  }
+  if (!Object.isExtensible(exportsObject)) {
+    // A `#[napi(module_exports)]` hook may seal or freeze this object
+    // (`Object::seal` / `Object::freeze`). Reporting the artifact is metadata,
+    // never a reason to fail an otherwise successful load, so the stamp is
+    // skipped. What a consumer still sees then follows the entry point: the
+    // browser and deferred loaders declare `__napiBindingTarget` at module
+    // level and go on reporting it, while the CommonJS entries hand back this
+    // very object as `module.exports`, so there the value is absent.
+    return target
+  }
+  try {
+    // [[Define]], not [[Set]]: an ordinary assignment walks the prototype
+    // chain, so an inherited accessor could swallow the value or throw and
+    // fail an otherwise successful load. The descriptor is what a successful
+    // assignment would have produced.
+    Object.defineProperty(exportsObject, '__napiBindingTarget', {
+      configurable: true,
+      enumerable: true,
+      value: target,
+      writable: true,
+    })
+  } catch {
+    // Same rule as the non-extensible skip above: reporting the artifact is
+    // metadata, never a reason to fail an otherwise successful load. An exotic
+    // object (a Proxy whose defineProperty trap refuses) is skipped, not
+    // thrown over.
+  }
+  // The CommonJS loaders assign this return value so `cjs-module-lexer` — and
+  // therefore Node's CJS -> ESM named export detection — can see
+  // `__napiBindingTarget` statically.
+  return target
+}
+// Stamp before the alias, not after. The guard only reads `nativeBinding`
+// (`hasOwnProperty` plus a comparison), which is safe against any addon
+// accessor; an assignment is not, because a `#[napi(module_exports)]` hook can
+// expose a getter reporting this very value and a setter that throws. So the
+// assignment lands on the loader's own `module.exports`, still the original
+// object here, and the alias below replaces it.
+//
+// The assignment is what keeps the marker a statically visible CommonJS export:
+// `cjs-module-lexer` is Node's CJS -> ESM named export detection, it cannot see
+// a bare call, and the later `module.exports = nativeBinding` does not undo the
+// detection. The assignment itself always succeeds — its target is this
+// loader's own, still extensible `module.exports` — and the alias below then
+// discards the value it wrote. What a consumer reads is whatever the guard put
+// on `nativeBinding`, so on a frozen binding, where the guard skips, the
+// linked import resolves to `undefined`.
+module.exports.__napiBindingTarget = __napiStampBindingTarget(nativeBinding, __napiLoadedBindingTarget)
 module.exports = nativeBinding
 module.exports.Repository = nativeBinding.Repository
 module.exports.JsRepository = nativeBinding.JsRepository
