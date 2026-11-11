@@ -5,7 +5,7 @@ volumes:
 services:
   rustfs:
     container_name: icechunk_rustfs
-    image: rustfs/rustfs:1.0.0-rc.6
+    image: rustfs/rustfs:1.0.5
     hostname: rustfs
     healthcheck:
       test: curl 127.0.0.1:9000/health
@@ -29,7 +29,7 @@ services:
 
   rustfs_init:
     container_name: icechunk_rustfs_init
-    image: rustfs/rc:v0.1.19
+    image: rustfs/rc:v0.1.37
     restart: "no"
     depends_on:
       rustfs:
@@ -40,6 +40,8 @@ services:
       - '-c'
       - |
         set -ex
+        # The rc image runs as a non-root user that cannot write to /.
+        cd /tmp
 
         rc alias set local http://rustfs:9000 test123 test123
         rc admin user add local readonly basicuser
