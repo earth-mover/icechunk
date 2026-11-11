@@ -1,5 +1,7 @@
 # Icechunk Version Policy
 
+The promises on this page are made for the reference implementation of the Icechunk Spec, the [Icechunk library](https://github.com/earth-mover/icechunk).
+
 ## On-Disk Format
 
 The Icechunk on-disk format is defined by the format specification ("Icechunk Spec"). A spec version is written as `<major>` with an optional `.<minor>` suffix (for example `1`, `2`, or `2.1`); an omitted minor is equivalent to `.0`.
@@ -10,8 +12,6 @@ Every metadata file records a single-byte on-disk format version in its header. 
 
 ### Spec versions
 
-The reference implementation of the spec is the [Icechunk library](https://github.com/earth-mover/icechunk), written in Rust with Python and JavaScript bindings, which share version numbers.
-
 | Spec | Implemented by | Also read by |
 |---|---|---|
 | [2.2](./spec-v2-2.md) (current) | Icechunk 2.4.0 and later | Icechunk 2.0.0 to 2.3.x |
@@ -20,7 +20,7 @@ The reference implementation of the spec is the [Icechunk library](https://githu
 | [2](./spec-v2.md) | Icechunk 2.0.0 and later | |
 | [1](./spec-v1.md) | Icechunk 1.x and 2.x | |
 
-Releases that "also read" a spec version can sometimes modify its repositories too; otherwise they refuse with an error. See [Compatibility across minor versions](#compatibility-across-minor-versions) and its [exceptions](./library-compatibility.md).
+Releases that "also read" a spec version may be able to modify its repositories too; otherwise they refuse with an error. See [Compatibility across minor versions](#compatibility-across-minor-versions) for when that is safe, and its [exceptions](./library-compatibility.md) for when it is not.
 
 ## Library Versions
 

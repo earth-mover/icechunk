@@ -48,31 +48,41 @@ The spec is not designed to enable fine-grained access restrictions (e.g. only r
 
 ### Storage Operations
 
-Every storage system used by Icechunk MUST support:
-
-- **Read-after-write consistent writes** — once a write of a file completes, every read of it returns the complete content. Files are not moved or altered once written.
-
 A storage system SHOULD support:
 
 - **Range reads** — reading a byte range within a file, required for reading chunks stored at an offset within a larger file.
 - **Deletes** — deleting files, required for garbage collection.
 - **Listing** — listing the files under a prefix together with their creation times, required for garbage collection.
 
-The storage system is not required to support random-access writes. Once written, all files are immutable until deleted, except for the repo info. How the repo info is created and updated depends on the repository's layout:
+The storage system is not required to support random-access writes. Once written, all files are immutable until deleted, except as the [repo info layout](#repo-info-layouts) allows. How the repo info is created and updated depends on the layout, and each layout adds its own requirements on the storage system.
 
-- In the **object store layout**, the repo info is the single file `$ROOT/repo`, and the storage system MUST also support:
-    - **Conditional create** — atomically creating a file only if it does not exist, required to initialize a repository.
-    - **Conditional update** — atomically updating a file only if the current version is known to the writer.
-    - **Conditional copy** — copying a file only if its current version is known to the writer, required to back up the repo info before each update.
+### Repo info layouts
 
-    Object stores like S3 provide these operations.
+A repository's *repo info layout*, or *layout*, defines where its repo info is stored, how it is created, and how it is updated. Every layout provides a **conditional update of the repo info**: an update that lands only if no other update landed since the repo info it started from was read. Every update of the repo info, other than a creation or a conversion between layouts, MUST be a conditional update of the repo info. Only the repo info is stored differently. A repository uses the filesystem layout if it lists the `filesystem-layout-v1` [writer feature](#writer-features), and the object store layout otherwise.
 
-- Filesystems generally lack a conditional update. Repositories on them use the **[filesystem layout](./spec-filesystem-layout-v1.md)**, which keeps each version of the repo info as an immutable file in a directory and moves from one to the next with `rename`. Its [requirements](./spec-filesystem-layout-v1.md#requirements) replace the ones of the object store layout. The filesystem layout is a [writer feature](#writer-features).
+#### Object store layout
+
+The repo info MUST be stored in the single file `$ROOT/repo`. The storage system MUST support:
+
+- **Read-after-write consistent writes** — once a write of a file completes, every read of it returns the complete content. Files are not moved or altered once written.
+- **Conditional create** — atomically creating a file only if it does not exist, required to initialize a repository.
+- **Conditional update** — atomically updating a file only if the current version is known to the writer.
+- **Conditional copy** — copying a file only if its current version is known to the writer, required to back up the repo info before each update.
+
+Object stores like S3 provide these operations.
+
+A repository is created with a conditional create of `$ROOT/repo`. A conditional update of the repo info backs it up with a conditional copy, as [Updates to the repo info file](#updates-to-the-repo-info-file) requires, then replaces `$ROOT/repo` with a conditional update of that file. If another client updated `$ROOT/repo` since it was read, the conditional update of the file fails, and so does the update.
+
+#### Filesystem layout
+
+Filesystems generally lack a conditional update of a file. Repositories on them use the **[filesystem layout](./spec-filesystem-layout-v1.md)**, which keeps each version of the repo info as an immutable file in a directory and moves from one to the next with `rename`. Its [requirements](./spec-filesystem-layout-v1.md#requirements) replace the ones of the object store layout. They do not include read-after-write consistency: a client whose cache lags can fail to find a file that another client wrote. The filesystem layout is a writer feature: repositories in it list `filesystem-layout-v1`.
+
+The current repo info is the version file `$ROOT/repo.d/<N>.<h>` that the layout's marker names. A conditional update of the repo info is the layout's [Change](./spec-filesystem-layout-v1.md#change), which ends with a `rename` of the marker. `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing. It can also briefly hold a first version that never became current, after concurrent creations, and it holds the original repo info while a conversion from the object store layout runs.
 
 ### Consistency and Optimistic Concurrency
 
 Icechunk achieves transactional consistency using only the limited consistency guarantees offered by the storage system.
-Icechunk V2.x does this entirely via careful management of creation and conditional updating of the `RepoInfo` object.
+Icechunk V2.x does this entirely via careful management of creation and [conditional updates of the repo info](#repo-info-layouts): a conditional update of the file `$ROOT/repo` in the [object store layout](#object-store-layout), and a `rename` of the marker in the [filesystem layout](#filesystem-layout).
 (The exact contents of the `RepoInfo` object are defined in the format specification section below.)
 
 When a client attempts to make a change to the repository, it fetches the latest version of the repo info object and applies its changes in memory first.
@@ -80,13 +90,8 @@ The repo info object is small, so holding it in memory is inexpensive; the windo
 However, when updating the object in storage, the client MUST detect whether a _different session_ has updated the repo info in the interim, possibly retrying or failing the update if so.
 This is an "optimistic concurrency" strategy; retries may be needed, but conflicts are expected to be infrequent.
 
-All major object stores support a "conditional update" operation.
-In other words, object stores can guard against the race condition which occurs when two sessions attempt to update the same file at the same time. Only one of those will succeed.
-
-This mechanism is used by Icechunk on all updates.
-When it tries to update the repo info object, it attempts to conditionally update this file in an atomic "all or nothing" operation.
-If this succeeds, the update is successful.
-If this fails (because another client updated that file since the session started), the update fails. At this point the operation is retried.
+The conditional update of the repo info guards against the race condition which occurs when two sessions attempt to update the repo info at the same time. Only one of those will succeed.
+The other update fails, because another client updated the repo info since the session started. At this point the operation is retried.
 
 If at any point during the update attempt an incompatible change is detected, the update operation is flagged as failed, the repo is not modified, and an error is shown to the user.
 Some examples of incompatible changes are:
@@ -113,16 +118,18 @@ Parent links can change: expiration and garbage collection re-parent snapshots w
 
 ### Overview
 
+This section is informative. The rules are in the sections that follow it.
+
 Icechunk uses a series of linked metadata files to describe the state of the repository.
 
-- **Repository info file**, also called repo info or repo object, is the entry point linking to other files, particularly to snapshot files. Every change to the repository modifies this file in some way, doing conditional updates.
+- **Repository info file**, also called repo info or repo object, is the entry point linking to other files, particularly to snapshot files. Every change to the repository modifies this file in some way.
 - **Snapshot files** record all of the different arrays and groups in a specific snapshot of the repository, plus their metadata. A single snapshot file describes a specific version of the repo, and every new commit creates a new snapshot file. The snapshot file contains pointers to zero or more chunk manifest files.
 - **Chunk manifests** store references to individual chunks. A single manifest may store references for multiple arrays or a subset of all the references for a single array. Anytime a commit is made which writes new chunks, a new manifest file is also written.
 - **Chunk files** store the actual compressed chunk data, potentially containing data for multiple chunks in a single file (i.e. a shard).
 - **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
 
 !!! tip "For implementers: read path"
-    1. Read `$ROOT/repo` → parse repo info → look up branch → get snapshot id
+    1. Read the repo info, as its [layout](#repo-info-layouts) describes → parse repo info → look up branch → get snapshot id
     2. Read `$ROOT/snapshots/{id}` → parse snapshot → list nodes
     3. For each array node, inspect its `ManifestRef` list → get manifest ids and extents
     4. Read `$ROOT/manifests/{id}` → parse manifest → look up `ChunkRef` by coordinates
@@ -133,7 +140,7 @@ The client then reads the snapshot file to determine the structure and hierarchy
 When fetching data from an array, the client first examines the chunk manifest file(s) for that array and finally fetches the chunks referenced therein.
 
 When writing a new repository snapshot, the client first writes a new set of chunks and chunk manifests, and then generates a new snapshot file.
-Finally, to commit the transaction, it updates the repo info file using an atomic conditional update operation.
+Finally, to commit the transaction, it updates the repo info.
 This operation may fail if a different client has already committed the next snapshot.
 In this case, the client may attempt to resolve the conflicts and retry the commit.
 
@@ -173,7 +180,7 @@ flowchart TD
 All data and metadata files MUST be stored within a root directory using the following directory structure.
 
 - `$ROOT` base URI (s3, gcs, local directory, etc.)
-- `$ROOT/repo` repo info file, entry point for all operations
+- `$ROOT/repo` repo info file in the [object store layout](#object-store-layout), entry point for all operations; in the [filesystem layout](#filesystem-layout), a copy of a version of the repo info
 - `$ROOT/snapshots/` snapshot files
 - `$ROOT/manifests/` chunk manifests
 - `$ROOT/transactions/` transaction log files
@@ -246,10 +253,7 @@ With the exception of chunk files, each type of file is encoded using [flatbuffe
 
 #### Repo Info File
 
-The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. Every read operation starts by fetching it, and every update to the repository (commits, tag creation, configuration changes) replaces it. Where it is stored and how it is replaced depends on the repository's [layout](#storage-operations):
-
-- In the **object store layout**, the repo info MUST be stored at `$ROOT/repo`, and every update is a conditional write on that file.
-- In the **[filesystem layout](./spec-filesystem-layout-v1.md)**, used by repositories that list the `filesystem-layout-v1` [writer feature](#writer-features), the current repo info is a version file in `$ROOT/repo.d/`, and updates are made as that layout describes. `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing, and briefly holds other repo infos as the filesystem layout describes.
+The repo info file is the single entry point for an Icechunk repository and the only mutable part of a V2.x repo. Every read operation starts by fetching it, and every update to the repository (commits, tag creation, configuration changes) replaces it. Where it is stored and how it is replaced depends on the repository's [repo info layout](#repo-info-layouts): it is `$ROOT/repo` in the [object store layout](#object-store-layout), and the version file in `$ROOT/repo.d/` that the marker names in the [filesystem layout](#filesystem-layout).
 
 The repo info file MUST use the [binary file format](#binary-file-format) with file type `RepoInfo`.
 
@@ -325,7 +329,8 @@ Every update of the repo info MUST add exactly one entry at the front of `latest
 
 Writers MUST maintain the ops log as follows:
 
-- Before replacing the repo info, an update MUST back it up to `overwritten/`, and MUST set the backup's name as the `backup_path` of the entry that was newest. The new entry has no `backup_path`. See [Updates to the repo info file](#updates-to-the-repo-info-file).
+- An entry's `backup_path` names the backup of the repo info that the entry's update produced.
+- Before replacing the repo info, an update MUST [back it up](#updates-to-the-repo-info-file) to `overwritten/`. In the new repo info, it MUST record the backup's name as the `backup_path` of the entry of the update that produced the replaced repo info, which was the newest entry before the update. The new entry has no `backup_path`.
 - The new entry's `updated_at` MUST be strictly greater than that of the entry that was newest before the update.
 - `backup_path` and `repo_before_updates` MUST be bare names relative to `overwritten/`, such as `repo.30729294865234.S0CHS5WSF158RN937BP0`.
 - Writers choose the number of entries kept in each file, the _page size_. They SHOULD use the configured `num_updates_per_repo_info_file`, see [Configuration](#configuration), or 1,000 when it is not configured. Readers don't depend on the page size, so another size only changes how many files the ops log spans. When the list grows beyond the page size, a writer drops the older entries, starting at an entry that has a `backup_path`, and sets `repo_before_updates` to that `backup_path`. Otherwise it MUST copy `repo_before_updates` unchanged.
@@ -351,7 +356,7 @@ The status says which operations implementations may perform on the repository:
 
 In this section, `status` is the `Repo.status` field.
 
-When `Repo.writer_features` is non-empty, `status` is a **gate**. It marks the repository `ReadOnly` for implementations that predate writer features, so that they don't modify a repository whose features they don't know. The repository's own status is then in `status.underlying`. Writers MUST maintain the gate as follows:
+When `Repo.writer_features` is non-empty, `status` is a **gate** against changes by implementations that predate writer features. It marks the repository `ReadOnly` for them, so that they don't modify a repository whose features they don't know. The repository's own status is then in `status.underlying`. Writers MUST maintain the gate as follows:
 
 - `status.underlying` MUST be present when `Repo.writer_features` is non-empty, and absent when it is empty. It MUST NOT itself have an `underlying`.
 - `status.availability` MUST be `ReadOnly`, whatever the underlying availability.
@@ -438,7 +443,7 @@ Implementations that do not recognize a flag id do not enforce its flag. Icechun
 
 ##### Updates to the repo info file
 
-The repo info object is the only mutable object in an Icechunk repo. Before a client attempts to overwrite it they MUST copy it to the `overwritten` prefix in the repo. The copy MUST hold the version of the repo info the client read. The new repo info records the copy's name as the `backup_path` of the entry that was newest before the update, see [`Update`](#update). The copy MUST be stored with a name composed of:
+The repo info is the only mutable part of an Icechunk repo. Before a client attempts to replace it they MUST copy it to the `overwritten` prefix in the repo. The copy MUST hold the version of the repo info the client read. The new repo info records the copy's name as the `backup_path` of the entry that was newest before the update, see [`Update`](#update). The copy MUST be stored with a name composed of:
 
 - The literal `repo.`
 - The number of milliseconds from the current time to `3000-01-01T00:00:00Z`, that is, 32503680000000 minus the current Unix time in milliseconds, in decimal, zero-padded to 14 digits. This gives a "last one first" ordering when listing the prefix, but readers MUST NOT depend on it.
@@ -639,6 +644,8 @@ The repo info of a migrated repository has spec version `2` in its header and in
 
 ## Algorithms
 
+In these algorithms, the repo info is created and read as the repository's [repo info layout](#repo-info-layouts) describes, and updated with a conditional update of the repo info. That update fails if another update landed since the repo info was read. In the filesystem layout, it also fails when the implementation cannot tell whether its own update landed ([Resolving a failed rename](./spec-filesystem-layout-v1.md#resolving-a-failed-rename)).
+
 ### Modify a Repository
 
 Before any modification, including commits, ref changes, configuration and metadata changes, expiration and garbage collection, an implementation MUST check, against the repo info it is about to replace:
@@ -674,14 +681,14 @@ If the specific snapshot ID is known, a client can open it directly in read only
 
 Usually, a client will want to read from the latest branch (e.g. `main`).
 
-1. Read the repo info object in `repo` path.
+1. Read the repo info.
 1. Find the snapshot ID currently pointed by the `main` branch by scanning the `branches` field.
 1. Use the snapshot ID to fetch the snapshot file.
 1. Fetch the relevant manifests and the desired chunks pointed by them.
 
 #### From Tag
 
-1. Read the repo info object in `repo` path.
+1. Read the repo info.
 1. Find the snapshot ID currently pointed by the tag by scanning the `tags` field.
 1. Use the snapshot ID to fetch the snapshot file.
 1. Fetch the relevant manifests and the desired chunks pointed by them.
@@ -693,10 +700,10 @@ Usually, a client will want to read from the latest branch (e.g. `main`).
 1. [optional] Write new chunk manifests.
 1. Write a new transaction log file summarizing all changes in the session.
 1. Write a new snapshot file with the new repository hierarchy and manifest links. Its `flushed_at` MUST be strictly greater than the parent snapshot's.
-1. Do conditional update to write the new repo info file that contains the new snapshot and the new pointer for the branch
+1. Update the repo info to a new repo info that contains the new snapshot and the new pointer for the branch
     1. If successful, the commit succeeded and the branch is updated.
     1. If unsuccessful because the branch was updated since the session started, attempt to reconcile and retry the commit.
-    1. If unsuccessful because there was some other previous update to the repo info file, read the file again and retry
+    1. If unsuccessful because there was some other previous update to the repo info, read the repo info again and retry
 
 ### Garbage Collection and Expiration
 
@@ -713,7 +720,7 @@ At every point during and after these operations, every object referenced from t
 
 Expiration and garbage collection MUST NOT remove the initial snapshot from `Repo.snapshots`.
 
-Both operations update the repo info with a conditional update, like any other update. If the repo info changed since the operation read it, the operation MUST either recompute its decisions from the new repo info, or fail with an error that says the repository changed during the operation.
+Both operations update the repo info like any other update. If the repo info changed since the operation read it, the operation MUST either recompute its decisions from the new repo info, or fail with an error that says the repository changed during the operation.
 
 Garbage collection decides by a cutoff time, which MUST be earlier than the start of every session that may still commit, so that the objects those sessions use are kept. It MAY remove a snapshot from `Repo.snapshots`, or delete a file in `snapshots/`, `manifests/`, `transactions/` or `chunks/`, only if the creation time the storage reports for the file is earlier than the cutoff.
 
@@ -723,10 +730,10 @@ Garbage collection MUST NOT delete entries it does not recognize, in `$ROOT` or 
 
 A tag can be created from any snapshot.
 
-1. Open the repository at a specific snapshot.
-1. Do conditional update to write the new repo info file that contains the new tag
+1. Read the repo info, and choose the snapshot to tag.
+1. Update the repo info to a new repo info that contains the new tag
     1. If successful, the update succeeded and the tag is created.
-    1. If unsuccessful because there was some previous update, read the file again and retry
+    1. If unsuccessful because there was some previous update, read the repo info again and retry
     1. If unsuccessful because the snapshot doesn't exist, fail the update
 
 ## Changes from spec version 2.1 to 2.2
