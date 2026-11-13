@@ -252,7 +252,7 @@ flatbuffers = ">=25.12.19,<26"
 
 [tool.pixi.feature.build.dependencies]
 compilers = ">=1.11.0,<2"
-openssl = ">=3.6.3,<4"
+openssl = ">=3.5.9,<3.6"
 pkgconfig = ">=1.5.5,<2"
 cargo-deny = ">=0.20.2,<0.21"
 prek = ">=0.5.10,<0.6"
