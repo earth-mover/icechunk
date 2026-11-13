@@ -785,7 +785,9 @@ js-build-wasi *args: js-install
   # napi-build 2.3.x derives the wasi sysroot from the RUSTC path. cargo passes a bare name.
   # napi-build then drops crt1-reactor.o. The module loses the _initialize export.
   # A module without _initialize hangs on require().
-  export RUSTC="$(command -v rustc)"
+  # Use the toolchain's real rustc, not `command -v rustc`: under rustup that is
+  # the ~/.cargo/bin proxy, whose parent directories hold no crt1-reactor.o.
+  export RUSTC="$(rustc --print sysroot)/bin/rustc"
   yarn build --target wasm32-wasip1-threads "$@"
 
 [group('js')]

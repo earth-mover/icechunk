@@ -3,7 +3,7 @@
  * The repository still requires explicit authorization for each URL prefix.
  */
 export function createHttpVirtualChunkFetcher(fetchImpl = globalThis.fetch) {
-  return async (_err, { url, rangeStart, rangeEnd, headers: configuredHeaders, options }) => {
+  return async (_err, { url, rangeStart, rangeEnd, etag, headers: configuredHeaders, options }) => {
     if (!Number.isSafeInteger(rangeStart) || !Number.isSafeInteger(rangeEnd) || rangeStart < 0 || rangeEnd <= rangeStart) {
       throw new Error('Invalid virtual chunk byte range')
     }
@@ -24,14 +24,25 @@ export function createHttpVirtualChunkFetcher(fetchImpl = globalThis.fetch) {
       await response.body?.cancel()
       throw new Error(`Virtual chunk read requires HTTP 206, received ${response.status}`)
     }
+    // Cross-origin servers often don't expose Content-Range (public S3 buckets
+    // commonly expose only ETag). When it is visible it must match exactly;
+    // when it isn't, a 206 of exactly the requested length is accepted.
     const contentRange = response.headers.get('Content-Range')
-    const match = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(contentRange ?? '')
-    if (!match || Number(match[1]) !== rangeStart || Number(match[2]) !== rangeEnd - 1) {
+    if (contentRange !== null) {
+      const match = /^bytes (\d+)-(\d+)\/(\d+|\*)$/.exec(contentRange)
+      if (!match || Number(match[1]) !== rangeStart || Number(match[2]) !== rangeEnd - 1) {
+        await response.body?.cancel()
+        throw new Error(`Incorrect Content-Range ${JSON.stringify(contentRange)} for bytes ${rangeStart}-${rangeEnd - 1}`)
+      }
+    }
+    if (etag != null && !response.headers.has('ETag')) {
       await response.body?.cancel()
-      throw new Error('Incorrect or missing Content-Range; cross-origin servers must expose this header via CORS')
+      throw new Error('The virtual chunk reference has an ETag checksum, but the response has no readable ETag; cross-origin servers must expose ETag via CORS')
     }
     const data = new Uint8Array(await response.arrayBuffer())
-    if (data.byteLength !== rangeEnd - rangeStart) throw new Error('Incorrect virtual chunk response length')
+    if (data.byteLength !== rangeEnd - rangeStart) {
+      throw new Error(`Incorrect virtual chunk response length: expected ${rangeEnd - rangeStart} bytes, received ${data.byteLength}`)
+    }
     const modified = response.headers.get('Last-Modified')
     const timestamp = modified == null ? undefined : Math.floor(Date.parse(modified) / 1000)
     return {
