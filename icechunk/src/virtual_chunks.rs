@@ -85,8 +85,8 @@ use crate::{
     },
     private,
     storage::{
-        self, AttributionLabels, RequestAttribution, split_in_multiple_requests,
-        strip_quotes,
+        self, AttributionLabels, RequestAttribution, Storage, StorageContext,
+        split_in_multiple_requests, strip_quotes,
     },
 };
 #[cfg(feature = "s3")]
@@ -334,6 +334,9 @@ type ChunkFetcherCache = Cache<CacheKey, Arc<dyn ChunkFetcher>>;
 /// a modification-time check, return the response's `last_modified` timestamp.
 /// The resolver rejects the read if the required value is missing or fails the
 /// check. Both fields are optional when the reference has no checksum.
+#[deprecated(
+    note = "register a `Storage` for the container instead, with `VirtualChunkResolver::with_container_storage` or `Repository::set_virtual_chunk_storage`"
+)]
 #[derive(Debug)]
 pub struct HttpVirtualChunkResponse {
     pub data: Bytes,
@@ -344,8 +347,17 @@ pub struct HttpVirtualChunkResponse {
 /// HTTP transport supplied by an embedding runtime, for example browser fetch.
 /// Implementations must return exactly the requested range from this URL and
 /// must not follow redirects outside the authorized container.
+///
+/// Registered with [`VirtualChunkResolver::with_http_fetcher`], it serves every
+/// HTTP container through [`VirtualChunkResolver::with_container_storage`].
+/// `checksum` is always `None`: the resolver verifies the returned `etag` or
+/// `last_modified` against the reference instead.
+#[deprecated(
+    note = "register a `Storage` for the container instead, with `VirtualChunkResolver::with_container_storage` or `Repository::set_virtual_chunk_storage`"
+)]
 #[async_trait]
 pub trait HttpVirtualChunkFetcher: std::fmt::Debug + Send + Sync {
+    #[expect(deprecated)]
     async fn fetch(
         &self,
         url: &str,
@@ -365,8 +377,11 @@ pub struct VirtualChunkResolver {
     settings: storage::Settings,
     #[serde(skip, default = "new_cache")]
     fetchers: ChunkFetcherCache,
+    /// Runtime-supplied fetchers per container url prefix, overriding the
+    /// container's configured backend; see
+    /// [`VirtualChunkResolver::with_container_storage`].
     #[serde(skip)]
-    http_fetcher: Option<Arc<dyn HttpVirtualChunkFetcher>>,
+    container_fetchers: HashMap<String, Arc<dyn ChunkFetcher>>,
     #[serde(default)]
     attribution_labels: AttributionLabels,
 }
@@ -416,7 +431,7 @@ impl VirtualChunkResolver {
             credentials,
             settings,
             fetchers: new_cache(),
-            http_fetcher: None,
+            container_fetchers: HashMap::new(),
             attribution_labels: AttributionLabels::default(),
         }
     }
@@ -430,15 +445,69 @@ impl VirtualChunkResolver {
         &self.attribution_labels
     }
 
-    /// Attach a runtime HTTP transport while preserving container authorization.
-    /// The returned resolver has a fresh fetcher cache; the callback is not serialized.
+    /// Serve every HTTP container through `fetcher`, in a single request per
+    /// chunk. Containers must still be authorized.
+    #[deprecated(
+        note = "register a `Storage` for the container instead, with `VirtualChunkResolver::with_container_storage` or `Repository::set_virtual_chunk_storage`"
+    )]
+    #[expect(deprecated)]
+    #[expect(clippy::needless_pass_by_value, reason = "signature kept from 2.3.1")]
     pub fn with_http_fetcher(&self, fetcher: Arc<dyn HttpVirtualChunkFetcher>) -> Self {
+        let mut container_fetchers = self.container_fetchers.clone();
+        for cont in &self.containers {
+            if let ObjectStoreConfig::Http(config) = &cont.store {
+                let http = HttpCallbackChunkFetcher {
+                    fetcher: Arc::clone(&fetcher),
+                    config: config.clone(),
+                };
+                container_fetchers.insert(cont.url_prefix.clone(), Arc::new(http));
+            }
+        }
+        self.with_container_fetchers(container_fetchers)
+    }
+
+    /// Read the virtual chunks of the container with this url prefix from
+    /// `storage`, a runtime-supplied [`Storage`] (for example a JavaScript
+    /// custom storage in the browser), instead of the container's configured
+    /// backend. A chunk at `{url_prefix}{path}` is read as `path` from the
+    /// storage, which brings its own transport and credentials. The container
+    /// must still be authorized when opening the repository (any credential
+    /// value). It is not persisted or serialized.
+    pub fn with_container_storage(
+        &self,
+        url_prefix: &str,
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> Result<Self, VirtualReferenceError> {
+        let url_prefix = if url_prefix.ends_with('/') {
+            url_prefix.to_string()
+        } else {
+            format!("{url_prefix}/")
+        };
+        if !self.containers.iter().any(|c| c.url_prefix == url_prefix) {
+            return Err(VirtualReferenceErrorKind::NoContainerForUrl(url_prefix))
+                .capture();
+        }
+        let fetcher = StorageChunkFetcher {
+            storage,
+            prefix_key: resolved_object_key(&url_prefix)?,
+            // the storage's reads, not the repository's: use generic defaults
+            settings: storage::Settings::default(),
+        };
+        let mut container_fetchers = self.container_fetchers.clone();
+        container_fetchers.insert(url_prefix, Arc::new(fetcher));
+        Ok(self.with_container_fetchers(container_fetchers))
+    }
+
+    fn with_container_fetchers(
+        &self,
+        container_fetchers: HashMap<String, Arc<dyn ChunkFetcher>>,
+    ) -> Self {
         Self {
             containers: self.containers.clone(),
             credentials: self.credentials.clone(),
             settings: self.settings.clone(),
             fetchers: new_cache(),
-            http_fetcher: Some(fetcher),
+            container_fetchers,
             attribution_labels: self.attribution_labels.clone(),
         }
     }
@@ -540,65 +609,6 @@ impl VirtualChunkResolver {
                 url: location.clone(),
             })
             .capture()?;
-        if let Some(fetcher) = &self.http_fetcher
-            && let Some(cont) = self.matching_container_by_url(url.as_str())
-            && let ObjectStoreConfig::Http(config) = &cont.store
-        {
-            match self.credentials.get(&cont.url_prefix) {
-                Some(None) | Some(Some(Credentials::HttpAccess)) => {}
-                Some(Some(_)) => {
-                    return Err(VirtualReferenceError::capture(
-                        VirtualReferenceErrorKind::InvalidCredentials("HTTP".to_string()),
-                    ));
-                }
-                None => {
-                    return Err(VirtualReferenceError::capture(
-                        VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
-                            url_prefix: cont.url_prefix.clone(),
-                            name: cont.name.clone(),
-                        },
-                    ));
-                }
-            }
-            let expected = range.end.checked_sub(range.start).ok_or_else(|| {
-                VirtualReferenceError::capture(VirtualReferenceErrorKind::OtherError(
-                    "invalid virtual chunk byte range".into(),
-                ))
-            })?;
-            let response = fetcher
-                .fetch(
-                    url.as_str(),
-                    range,
-                    checksum,
-                    config,
-                    &attribution.user_agent_fragment(),
-                )
-                .await?;
-            let valid = match checksum {
-                Some(Checksum::ETag(etag)) => response
-                    .etag
-                    .as_deref()
-                    .is_some_and(|value| strip_quotes(value) == strip_quotes(&etag.0)),
-                Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
-                    response.last_modified.is_some_and(|value| value <= *seconds)
-                }
-                None => true,
-            };
-            if !valid {
-                return Err(VirtualReferenceError::capture(
-                    VirtualReferenceErrorKind::ObjectModified(location),
-                ));
-            }
-            if response.data.len() as u64 != expected {
-                return Err(VirtualReferenceError::capture(
-                    VirtualReferenceErrorKind::InvalidObjectSize {
-                        expected,
-                        available: response.data.len() as u64,
-                    },
-                ));
-            }
-            return Ok(response.data);
-        }
         let key = resolved_object_key(&location)?;
         let fetcher = self.get_fetcher(&url).await?;
         fetcher.fetch_chunk(&url, &key, range, checksum, attribution).await
@@ -636,6 +646,20 @@ impl VirtualChunkResolver {
         cont: &VirtualChunkContainer,
         chunk_location: &Url,
     ) -> Result<Arc<dyn ChunkFetcher>, VirtualReferenceError> {
+        if let Some(fetcher) = self.container_fetchers.get(&cont.url_prefix) {
+            // runtime-supplied transport and credentials, but the container
+            // must still be authorized like any other
+            if !self.credentials.contains_key(&cont.url_prefix) {
+                return Err(
+                    VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer {
+                        url_prefix: cont.url_prefix.clone(),
+                        name: cont.name.clone(),
+                    },
+                )
+                .capture();
+            }
+            return Ok(Arc::clone(fetcher));
+        }
         #[expect(clippy::unimplemented)]
         match &cont.store {
             #[cfg(feature = "s3")]
@@ -1169,6 +1193,147 @@ impl ChunkFetcher for S3Fetcher {
 pub struct ObjectStoreFetcher {
     client: Arc<dyn ObjectStore>,
     settings: storage::Settings,
+}
+
+/// Serves an HTTP container through a deprecated [`HttpVirtualChunkFetcher`],
+/// with the 2.3.1 semantics: one request per chunk, checksum passed to the
+/// fetcher and verified against the same response.
+#[expect(deprecated)]
+#[derive(Debug)]
+struct HttpCallbackChunkFetcher {
+    fetcher: Arc<dyn HttpVirtualChunkFetcher>,
+    config: crate::config::HttpConfig,
+}
+
+impl private::Sealed for HttpCallbackChunkFetcher {}
+
+#[async_trait]
+#[expect(deprecated)]
+impl ChunkFetcher for HttpCallbackChunkFetcher {
+    fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
+        NonZeroU64::MAX
+    }
+    fn max_concurrent_requests_for_object(&self) -> NonZeroU16 {
+        NonZeroU16::MIN
+    }
+
+    async fn fetch_part(
+        &self,
+        chunk_location: &Url,
+        _key: &str,
+        range: Range<ChunkOffset>,
+        checksum: Option<&Checksum>,
+        attribution: RequestAttribution<'_>,
+    ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
+        let response = self
+            .fetcher
+            .fetch(
+                chunk_location.as_str(),
+                &range,
+                checksum,
+                &self.config,
+                &attribution.user_agent_fragment(),
+            )
+            .await?;
+        let valid = match checksum {
+            Some(Checksum::ETag(etag)) => response
+                .etag
+                .as_deref()
+                .is_some_and(|value| strip_quotes(value) == strip_quotes(&etag.0)),
+            Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
+                response.last_modified.is_some_and(|value| value <= *seconds)
+            }
+            None => true,
+        };
+        if !valid {
+            return Err(VirtualReferenceError::capture(
+                VirtualReferenceErrorKind::ObjectModified(chunk_location.to_string()),
+            ));
+        }
+        Ok(Box::new(response.data))
+    }
+}
+
+/// Reads virtual chunks from a runtime-supplied [`Storage`], registered with
+/// [`VirtualChunkResolver::with_container_storage`].
+#[derive(Debug)]
+struct StorageChunkFetcher {
+    storage: Arc<dyn Storage + Send + Sync>,
+    /// The container prefix's object key; chunk keys are read relative to it.
+    prefix_key: String,
+    settings: storage::Settings,
+}
+
+impl private::Sealed for StorageChunkFetcher {}
+
+#[async_trait]
+impl ChunkFetcher for StorageChunkFetcher {
+    fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
+        self.settings.concurrency().ideal_concurrent_request_size()
+    }
+    fn max_concurrent_requests_for_object(&self) -> NonZeroU16 {
+        self.settings.concurrency().max_concurrent_requests_for_object()
+    }
+
+    async fn fetch_part(
+        &self,
+        chunk_location: &Url,
+        key: &str,
+        range: Range<ChunkOffset>,
+        checksum: Option<&Checksum>,
+        attribution: RequestAttribution<'_>,
+    ) -> Result<Box<dyn Buf + Unpin + Send>, VirtualReferenceError> {
+        let fetch_error = |e: Box<dyn std::error::Error + Send + Sync>| {
+            VirtualReferenceError::capture(VirtualReferenceErrorKind::FetchError(e))
+        };
+        let path = key.strip_prefix(&self.prefix_key).ok_or_else(|| {
+            VirtualReferenceError::capture(VirtualReferenceErrorKind::NoContainerForUrl(
+                chunk_location.to_string(),
+            ))
+        })?;
+        let ctx = StorageContext::new(&self.settings, attribution);
+        let (stream, version) = self
+            .storage
+            .get_object_range(&ctx, path, Some(&range))
+            .await
+            .map_err(|e| fetch_error(Box::new(e)))?;
+        let modified = || {
+            VirtualReferenceError::capture(VirtualReferenceErrorKind::ObjectModified(
+                chunk_location.to_string(),
+            ))
+        };
+        match checksum {
+            Some(Checksum::ETag(expected)) => match &version.etag {
+                Some(actual) if strip_quotes(&actual.0) == strip_quotes(&expected.0) => {}
+                Some(_) => return Err(modified()),
+                None => {
+                    return Err(fetch_error(
+                        "the reference has an ETag checksum, but the storage returned no ETag to verify it"
+                            .into(),
+                    ));
+                }
+            },
+            Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
+                let last_modified = self
+                    .storage
+                    .get_object_last_modified(&ctx, path)
+                    .await
+                    .map_err(|e| fetch_error(Box::new(e)))?;
+                if last_modified.timestamp() > i64::from(*seconds) {
+                    return Err(modified());
+                }
+            }
+            None => {}
+        }
+        let mut parts: Vec<Bytes> =
+            stream.try_collect().await.map_err(|e| fetch_error(Box::new(e)))?;
+        let bytes = if parts.len() == 1 {
+            parts.swap_remove(0)
+        } else {
+            Bytes::from(parts.concat())
+        };
+        Ok(Box::new(bytes))
+    }
 }
 
 #[cfg(any(
@@ -1912,7 +2077,9 @@ mod tests {
     }
 }
 
+/// The HTTP fetcher tests from 2.3.1, unchanged: the deprecated shim must keep passing them.
 #[cfg(test)]
+#[expect(deprecated)]
 mod http_callback_tests {
     use super::*;
     use crate::config::HttpConfig;
@@ -2055,5 +2222,111 @@ mod http_callback_tests {
     fn http_config_deserializes_without_native_networking() {
         let config: ObjectStoreConfig = serde_json::from_str(r#"{"http":{}}"#).unwrap();
         assert!(matches!(config, ObjectStoreConfig::Http(_)));
+    }
+}
+
+#[cfg(test)]
+mod container_storage_tests {
+    use super::*;
+    use crate::storage::{
+        UNATTRIBUTED_LABELS, VersionedUpdateResult, new_in_memory_storage,
+    };
+
+    async fn setup(
+        authorized: bool,
+    ) -> (VirtualChunkResolver, Arc<dyn Storage + Send + Sync>, String) {
+        let storage = new_in_memory_storage().await.unwrap();
+        let settings = storage::Settings::default();
+        let ctx = StorageContext::unattributed(&settings);
+        let VersionedUpdateResult::Updated { new_version } = storage
+            .put_object(
+                &ctx,
+                "dir/f.nc",
+                Bytes::from((0u8..100).collect::<Vec<_>>()),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("put failed")
+        };
+        // an S3 container: the registered storage replaces the S3 backend
+        // entirely, so no S3 client or credentials are involved
+        let container = VirtualChunkContainer::new(
+            "s3://bucket/data/".into(),
+            ObjectStoreConfig::S3(S3Options::default()),
+        )
+        .unwrap();
+        // any credential value authorizes; the registered storage brings its own
+        let credentials = if authorized {
+            HashMap::from([("s3://bucket/data/".to_string(), None)])
+        } else {
+            HashMap::new()
+        };
+        let resolver = VirtualChunkResolver::new(
+            std::iter::once(container),
+            credentials,
+            storage::Settings::default(),
+        );
+        (resolver, storage, new_version.etag.unwrap().0)
+    }
+
+    async fn fetch(
+        r: &VirtualChunkResolver,
+        checksum: Option<Checksum>,
+    ) -> Result<Bytes, VirtualReferenceError> {
+        r.fetch_chunk(
+            "s3://bucket/data/dir/f.nc",
+            &(10..14),
+            checksum.as_ref(),
+            RequestAttribution::without_node(&UNATTRIBUTED_LABELS),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn reads_relative_to_prefix_and_checks_etag() {
+        let (r, storage, etag) = setup(true).await;
+        // a prefix without trailing slash is accepted
+        let r = r.with_container_storage("s3://bucket/data", storage).unwrap();
+        assert_eq!(fetch(&r, None).await.unwrap().as_ref(), &[10, 11, 12, 13]);
+        let ok = Checksum::ETag(storage::ETag(etag));
+        assert_eq!(fetch(&r, Some(ok)).await.unwrap().as_ref(), &[10, 11, 12, 13]);
+        let stale = Checksum::ETag(storage::ETag("other".into()));
+        let err = fetch(&r, Some(stale)).await.unwrap_err();
+        assert!(
+            matches!(err.kind, VirtualReferenceErrorKind::ObjectModified(_)),
+            "{err}"
+        );
+        let old = Checksum::LastModified(SecondsSinceEpoch(1));
+        let err = fetch(&r, Some(old)).await.unwrap_err();
+        assert!(
+            matches!(err.kind, VirtualReferenceErrorKind::ObjectModified(_)),
+            "{err}"
+        );
+        let future = Checksum::LastModified(SecondsSinceEpoch(u32::MAX));
+        assert!(fetch(&r, Some(future)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn registering_a_storage_does_not_authorize() {
+        let (r, storage, _) = setup(false).await;
+        let r = r.with_container_storage("s3://bucket/data/", storage).unwrap();
+        let err = fetch(&r, None).await.unwrap_err();
+        assert!(
+            matches!(
+                err.kind,
+                VirtualReferenceErrorKind::UnauthorizedVirtualChunkContainer { .. }
+            ),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_unknown_prefix() {
+        let (r, storage, _) = setup(true).await;
+        assert!(r.with_container_storage("s3://bucket/other/", storage).is_err());
     }
 }

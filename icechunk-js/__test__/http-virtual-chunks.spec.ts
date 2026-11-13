@@ -43,6 +43,26 @@ for (const contentRange of ['', 'bytes 0-3/100', 'bytes 4-8/100']) {
     )
   })
 }
+test('accepts an exact-length 206 when CORS hides Content-Range', async (t) => {
+  // e.g. public S3 buckets whose CORS rules expose only ETag
+  const hidden = (body: Uint8Array) => async () =>
+    new Response(body, { status: 206, headers: { ETag: '"v1"' } })
+  const result = await createHttpVirtualChunkFetcher(hidden(new Uint8Array([1, 2, 3, 4])))(null, request)
+  t.deepEqual([...result.data], [1, 2, 3, 4])
+  t.is(result.etag, '"v1"')
+  await t.throwsAsync(createHttpVirtualChunkFetcher(hidden(new Uint8Array([1, 2, 3])))(null, request), {
+    message: /response length/,
+  })
+})
+test('explains a hidden ETag when the reference has an ETag checksum', async (t) => {
+  const noEtag = async () => new Response(new Uint8Array([1, 2, 3, 4]), { status: 206 })
+  await t.throwsAsync(createHttpVirtualChunkFetcher(noEtag)(null, { ...request, etag: 'v1' }), {
+    message: /expose ETag/,
+  })
+  // without an ETag checksum the same response is fine
+  const result = await createHttpVirtualChunkFetcher(noEtag)(null, request)
+  t.deepEqual([...result.data], [1, 2, 3, 4])
+})
 test('rejects truncated bodies and unsafe offsets', async (t) => {
   await t.throwsAsync(
     createHttpVirtualChunkFetcher(

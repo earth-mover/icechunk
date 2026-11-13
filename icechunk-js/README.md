@@ -120,15 +120,45 @@ containers or authorize access. Pass the allowed prefixes in
 The resolver checks that authorization, the response length, and the stored
 `ETag`/`Last-Modified` checksums.
 
-The provided helper requires HTTP 206 responses with the exact `Content-Range`.
-Cross-origin sources must allow CORS and expose `Content-Range`, plus `ETag` or
-`Last-Modified` when referenced checksums require them. Checksums are verified against the metadata of the same response, without
-sending conditional headers. Redirects and ambient cookies are disabled.
+The provided helper requires HTTP 206 responses of exactly the requested length.
+If the response exposes `Content-Range`, it must match the requested range exactly.
+Cross-origin sources must allow CORS, and must expose `ETag` when references record
+ETag checksums. Browsers can always read `Last-Modified`. Checksums are verified against the metadata of the
+same response, without sending conditional headers, so range requests need no CORS preflight.
+Redirects and ambient cookies are disabled.
 Native HTTP transport options are rejected; use a custom callback when needed.
 TIFF compression/predictor codecs still need support in your Zarr reader.
-In WASM, virtual chunks can only be read from HTTP(S) URLs. References using
-`s3://`, `gs://`, or local file paths are not supported. Files hosted on S3 or
-GCS can still be read if their references use HTTP(S) URLs.
+
+##### Reading a container from any Storage
+
+To control how a container's chunks are fetched, register a `Storage` for its
+URL prefix. A chunk at `{prefix}{path}` is read as `path` with the storage's
+`getObjectRange`, so `Storage.newCustom(...)`, the fetch storage, or a native
+backend can serve virtual chunks. This works for any container type on native
+builds. WASM builds support HTTP and S3-style containers, but cannot load
+repositories that configure GCS or Azure containers. For example, this reads
+public `s3://` references in the browser over the bucket's HTTPS endpoint:
+
+```typescript
+const repo = await Repository.open(storage, undefined, {
+  's3://my-public-bucket/data/': null, // authorized; the registered storage brings its own access
+})
+await repo.setVirtualChunkStorage(
+  's3://my-public-bucket/data/',
+  createFetchStorage('https://my-public-bucket.s3.us-west-2.amazonaws.com/data'),
+)
+const session = await repo.readonlySession({ branch: 'main' })
+```
+
+The prefix must match a virtual chunk container in the repository's
+configuration, and the container must still be authorized when opening the
+repository; any credential value works, including `null`. Register the storage
+before creating sessions; it is not persisted. ETag checksums are verified against the version that
+`getObjectRange` returns. Last-modified checksums cost one extra
+`getObjectLastModified` call per chunk read. In the browser, the source must
+allow CORS from your origin and expose `ETag` when references record ETag checksums.
+`setHttpVirtualChunkFetcher` is a convenience built on the same mechanism: it
+registers the callback for every HTTP container in the repository.
 
 ## Using in the Browser (WASM)
 
@@ -194,17 +224,20 @@ yarn build
 yarn test
 ```
 
-For WASM, install the JavaScript development dependencies before building.
-
+To build and test the WASM target, run these from the repository root:
 
 ```bash
-# Requires brew install llvm and env vars (see docs/docs/contributing.md)
-yarn build --target wasm32-wasip1-threads
-NAPI_RS_FORCE_WASI=1 yarn test
+just js-build-wasi
+just js-test-wasi
 ```
 
+The WASM build needs a C compiler that targets WebAssembly. The `js` pixi environment provides one.
+On macOS without pixi, Apple's `clang` cannot target WebAssembly, so install Homebrew LLVM first.
+See [WASM Compiler Setup (macOS)](../icechunk-python/docs/docs/reference/contributing.md#wasm-compiler-setup-macos).
+Use the `just` recipes rather than calling `yarn build --target wasm32-wasip1-threads` directly.
+The recipes set `RUSTC` and clear `CFLAGS`. Without them the build fails with
+`Failed to copy artifact`, or produces a module that hangs on load.
+
 > [!IMPORTANT]
-> Building the WASM target requires Rust 1.94.1 or later.
-> Rust 1.94.0 has a bug where `std::thread::spawn` is unconditionally disabled on all WASI targets,
-> including `wasm32-wasip1-threads` which supports threading.
-> See [rust-lang/rust#151309](https://github.com/rust-lang/rust/pull/151309) for the fix.
+> Building requires the workspace's minimum Rust version (`rust-version` in the root `Cargo.toml`).
+> The `wasm32-wasip1-threads` target must be installed for that toolchain.
