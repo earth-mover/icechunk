@@ -35,7 +35,7 @@
       system: let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # ruff 0.16.4, matching `ruff==0.16.4` in icechunk-python/pyproject.toml.
+        # ruff 0.17.4, matching `ruff==0.17.4` in icechunk-python/pyproject.toml.
         ruff = pkgs.ruff;
 
         # Use Python 3.12 from nixpkgs
