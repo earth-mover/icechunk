@@ -422,7 +422,7 @@ pub async fn migrate_1_to_2(
     // Collect main branch ancestry (tip-to-root)
     let main_snap_id =
         branches.iter().find(|(name, _)| *name == Ref::DEFAULT_BRANCH).map(|(_, id)| id);
-    let main_ancestry = main_snap_id.map(&ancestry_from).unwrap_or_default();
+    let main_ancestry = main_snap_id.map(ancestry_from).unwrap_or_default();
 
     // Collect non-main branch ancestries
     let branch_ancestries: Vec<(&str, Vec<SnapshotInfo>)> = branches

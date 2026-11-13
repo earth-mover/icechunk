@@ -15,7 +15,9 @@ and produces an array that can no longer be read back:
 
 ```python
 arr = root.create_array(
-    name="a", shape=(3,), dtype="int32",
+    name="a",
+    shape=(3,),
+    dtype="int32",
     chunks=RectilinearChunkGrid(chunk_shapes=((1, 2),)),
 )
 arr[:] = [10, 20, 30]

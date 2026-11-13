@@ -46,7 +46,9 @@ try:
     commit_id = session.commit("yay")
 except ConflictError as e:
     # just an example of what we could pull for data, the message would be more informative
-    print(f"Commit failed: expected parent: {e.expected_parent}, actual parent: {e.actual_parent}")
+    print(
+        f"Commit failed: expected parent: {e.expected_parent}, actual parent: {e.actual_parent}"
+    )
 
 ...
 
@@ -63,9 +65,11 @@ except RebaseFailedError as e:
 2. Create a context manager workflow that will create a scoped session and automatically commit and rebase (if needed) when context is finished (see below).
 
 ```python
-with repo.open_writable_session("main", message="Update data", solver=BasicConflictSolver()) as session:
-	  store = session.store()
-	  # Do Stuff with the store
+with repo.open_writable_session(
+    "main", message="Update data", solver=BasicConflictSolver()
+) as session:
+    store = session.store()
+    # Do Stuff with the store
 
 # Session is finished, committed and rebased automatically
 ```
@@ -74,11 +78,12 @@ The context manager could handle the loop of trying to commit and rebase iterati
 as the normal `RebaseFailedError`, but with extra access to the session so the changes are recoverable if desired:
 
 ```python
-
 try:
-    with repo.open_writable_session("main", message="Update data", solver=BasicConflictSolver(), retries=5) as session:
-	    store = session.store()
-	    # Do Stuff with the store
+    with repo.open_writable_session(
+        "main", message="Update data", solver=BasicConflictSolver(), retries=5
+    ) as session:
+        store = session.store()
+        # Do Stuff with the store
 except AutomaticRebaseFailedError as e:
     print(f"Rebase failed at snapshot {e.snapshot_id}")
 
@@ -89,5 +94,4 @@ except AutomaticRebaseFailedError as e:
     print(f"Found conflicts:")
     for conflict in e.conflicts:
         print(f"{c.path}: {c.reason}")
-
 ```

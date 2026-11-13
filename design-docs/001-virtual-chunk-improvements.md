@@ -60,15 +60,15 @@ All that said, good defaults and usability are very important. The ideal situati
 In order to support requirement 4, we add an optional `checksum` argument to `set_virtual_ref`.
 
 ```python
- def set_virtual_ref(
-        self,
-        key: str,
-        location: str,
-        offset: int,
-        length: int,
-        validate_containers: bool = True,  # this new argument will be explained below
-        checksum: int | str | datetime.datetime | None = None,
-    ) -> None: ...
+def set_virtual_ref(
+    self,
+    key: str,
+    location: str,
+    offset: int,
+    length: int,
+    validate_containers: bool = True,  # this new argument will be explained below
+    checksum: int | str | datetime.datetime | None = None,
+) -> None: ...
 ```
 
 `checksum` can be set to:
