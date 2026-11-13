@@ -545,7 +545,7 @@ def test_zarr_hierarchy() -> None:
     def mk_test_instance_sync() -> ModifiedZarrHierarchyStateMachine:
         return ModifiedZarrHierarchyStateMachine(in_memory_storage())
 
-    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[no-untyped-call]
+    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[arg-type]
 
 
 def test_zarr_store() -> None:

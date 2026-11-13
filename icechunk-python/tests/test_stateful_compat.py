@@ -141,9 +141,7 @@ class CrossVersionVersionControlStateMachine(VersionControlStateMachine):
 
 
 def test_two_actors_cross_version() -> None:
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
-        CrossVersionVersionControlStateMachine
-    )
+    run_state_machine_as_test(CrossVersionVersionControlStateMachine)
 
 
 class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
@@ -360,7 +358,7 @@ class CrossVersionExpireGCStateMachine(VersionControlStateMachine):
 
 
 def test_two_repos_expire_gc_comparison() -> None:
-    run_state_machine_as_test(  # type: ignore[no-untyped-call]
+    run_state_machine_as_test(
         CrossVersionExpireGCStateMachine,
         settings=settings(report_multiple_bugs=False),
     )
@@ -451,4 +449,4 @@ def test_two_actors_zarr_cross_version() -> None:
     def mk_test_instance_sync() -> CrossVersionTwoActorZarrHierarchyStateMachine:
         return CrossVersionTwoActorZarrHierarchyStateMachine(tempfile.mkdtemp())
 
-    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[no-untyped-call]
+    run_state_machine_as_test(mk_test_instance_sync)  # type: ignore[arg-type]
