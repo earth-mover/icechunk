@@ -67,10 +67,10 @@ We'll write the two blocks to Icechunk in separate transactions later in the thi
 
 !!! note
 
-    Downloading xarray tutorial data requires pooch and netCDF4. These can be installed with
+    Downloading and reading xarray tutorial data requires pooch, scipy and cftime. These can be installed with
 
     ```shell
-    pip install pooch netCDF4
+    pip install pooch scipy cftime
     ```
 
 ```python exec="on" session="xarray" source="material-block"

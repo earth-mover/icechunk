@@ -109,7 +109,7 @@
 
                 # necessary for reqwest
                 pkgs.openssl
-                pkgs.pkg-config
+                pkgs.pkgconf
               ]
               ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [pkgs.mold];
 
@@ -124,6 +124,9 @@
                 UV_PYTHON_PREFERENCE = "system";
 
                 RUSTFLAGS = "-W unreachable-pub -W bare-trait-objects";
+
+                # pkgconf has no `pkg-config` alias; the pkg-config crate reads PKG_CONFIG.
+                PKG_CONFIG = "pkgconf";
 
                 # mold can't link cc-rs's LTO object for `alloca` (via criterion),
                 # which breaks `just compile-tests` and `just shuttle-test`.

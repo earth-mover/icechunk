@@ -224,9 +224,6 @@ platforms = [
 [tool.pixi.feature.dev.pypi-dependencies]
 zarr = "<3.2"
 
-[tool.pixi.feature.netcdf.dependencies]
-netcdf4 = ">=1.7.4,<2"
-
 [tool.pixi.feature.docs.dependencies]
 cairo = ">=1.18.6,<2"
 
@@ -253,7 +250,7 @@ flatbuffers = ">=25.12.19,<26"
 [tool.pixi.feature.build.dependencies]
 compilers = ">=1.11.0,<2"
 openssl = ">=3.5.9,<3.6"
-pkgconfig = ">=1.5.5,<2"
+pkgconf = ">=3.0.8,<4"
 cargo-deny = ">=0.20.2,<0.21"
 prek = ">=0.5.10,<0.6"
 cargo-nextest = ">=0.9.149,<0.10"
@@ -288,7 +285,6 @@ sysroot_linux-aarch64 = ">=2.34"
 [tool.pixi.environments]
 default = { features = [
   "py312",
-  "netcdf",
   "runner",
   "build",
   "dev",
