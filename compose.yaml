@@ -130,7 +130,7 @@ services:
   # the box (gRPC on 4317, HTTP on 4318) and serves its UI on 16686.
   jaeger:
     container_name: icechunk_jaeger
-    image: jaegertracing/jaeger:2.22.0
+    image: jaegertracing/jaeger:2.23.0
     profiles: ["jaeger"]
     ports:
       - "16686:16686" # Jaeger UI
