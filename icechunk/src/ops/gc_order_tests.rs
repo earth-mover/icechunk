@@ -1,15 +1,12 @@
-//! The order of GC's change, its storage hooks, the sweep and the deletes,
-//! through real repositories on in-memory storage and a wrapper that records
-//! those calls and can report the filesystem layout's writer feature.
+//! The order of GC's change, the sweep and the deletes, through real
+//! repositories on in-memory storage and a wrapper that records those calls
+//! and can report the filesystem layout's writer feature.
 //!
 //! Compiled only for tests, and not with the `shuttle` feature.
 
 use std::{
     num::{NonZeroU16, NonZeroUsize},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, Mutex},
 };
 
 use bytes::Bytes;
@@ -31,9 +28,8 @@ use crate::{
     },
     repository::RepositoryErrorKind,
     storage::{
-        DeleteObjectsResult, GcPhase, ListInfo, PutCondition, StorageContext,
-        StorageError, StorageErrorKind, StorageResult, StorageWriterFeatures,
-        VersionInfo, VersionedUpdateResult, WriteHint,
+        DeleteObjectsResult, ListInfo, PutCondition, StorageContext, StorageResult,
+        StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
         intercepting::{Intercept, InterceptingStorage},
         new_in_memory_storage,
     },
@@ -45,8 +41,6 @@ type TestResult<A = ()> = Result<A, Box<dyn std::error::Error>>;
 enum Event {
     /// A repo-info write that landed, with the version it wrote.
     RepoInfoWritten(VersionInfo),
-    BeforeDeletes(Option<VersionInfo>),
-    AfterDeletes(Option<VersionInfo>),
     Sweep,
     /// A `delete_batch` under this prefix.
     Delete(String),
@@ -63,16 +57,12 @@ impl std::fmt::Debug for OnFirstListing {
 }
 
 /// Records [`Event`]s of the storage [`GcTestStorage::wrapped`] makes.
-/// Implements and requires `filesystem-layout-v1` when `layout`. Its
-/// before-deletes hook can fail, and its repo-info writes can land and then
-/// report a fork.
+/// Implements and requires `filesystem-layout-v1` when `layout`.
 #[derive(Debug)]
 struct GcTestStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     layout: bool,
     events: Mutex<Vec<Event>>,
-    fail_before_deletes: AtomicBool,
-    fork_after_update: AtomicBool,
     on_first_listing: OnFirstListing,
 }
 
@@ -82,8 +72,6 @@ impl GcTestStorage {
             backend,
             layout,
             events: Mutex::new(Vec::new()),
-            fail_before_deletes: AtomicBool::new(false),
-            fork_after_update: AtomicBool::new(false),
             on_first_listing: OnFirstListing::default(),
         })
     }
@@ -127,28 +115,6 @@ impl Intercept for GcTestStorage {
         })
     }
 
-    async fn gc_hook(
-        &self,
-        backend: &(dyn Storage + Send + Sync),
-        ctx: &StorageContext<'_>,
-        phase: GcPhase<'_>,
-    ) -> StorageResult<()> {
-        match phase {
-            GcPhase::BeforeDeletes { changed } => {
-                self.record(Event::BeforeDeletes(changed.cloned()));
-                if self.fail_before_deletes.load(Ordering::SeqCst) {
-                    return Err(StorageError::capture(StorageErrorKind::Other(
-                        "injected hook failure".to_string(),
-                    )));
-                }
-            }
-            GcPhase::AfterDeletes { changed } => {
-                self.record(Event::AfterDeletes(changed.cloned()));
-            }
-        }
-        backend.gc_hook(ctx, phase).await
-    }
-
     async fn put_object_conditional(
         &self,
         backend: &(dyn Storage + Send + Sync),
@@ -167,16 +133,7 @@ impl Intercept for GcTestStorage {
                 if path == REPO_INFO_FILE_PATH =>
             {
                 self.record(Event::RepoInfoWritten(new_version.clone()));
-                if self.fork_after_update.load(Ordering::SeqCst) {
-                    Err(StorageError::capture(
-                        StorageErrorKind::RepositoryForkedAfterUpdate {
-                            new_version: Box::new(new_version),
-                            detail: "test fork".to_string(),
-                        },
-                    ))
-                } else {
-                    Ok(VersionedUpdateResult::Updated { new_version })
-                }
+                Ok(VersionedUpdateResult::Updated { new_version })
             }
             res => Ok(res),
         }
@@ -331,113 +288,63 @@ fn only_change(events: &[Event]) -> VersionInfo {
 
 const ALL_PREFIXES: [&str; 4] = ["snapshots", "transactions", "manifests", "chunks"];
 
-/// On a repository that lists the layout: the change, the hook before the
-/// deletes with the change's version, the sweep, the deletes, the hook after.
+/// In both layouts: the change, the sweep, then the deletes.
 #[tokio_test]
-async fn layout_gc_changes_then_hooks_then_sweeps_then_deletes() -> TestResult {
-    let storage = GcTestStorage::new(new_in_memory_storage().await?, true);
-    let repo = repo_with_garbage(Arc::clone(&storage)).await?;
-    storage.take_events();
-
-    let summary = gc(&repo, &clean_all(false)).await?;
-    assert_eq!(summary.snapshots_deleted, 1);
-    assert_eq!(summary.chunks_deleted, 4);
-
-    let events = storage.take_events();
-    let v = only_change(&events);
-    let mut expected = vec![
-        Event::RepoInfoWritten(v.clone()),
-        Event::BeforeDeletes(Some(v.clone())),
-        Event::Sweep,
-    ];
-    expected.extend(deletes(&ALL_PREFIXES));
-    expected.push(Event::AfterDeletes(Some(v)));
-    assert_eq!(events, expected);
-    assert_eq!(latest_update(&repo).await?, UpdateType::GCRanUpdate);
-    Ok(())
-}
-
-/// The change happens even when GC drops no snapshot, and when it deletes
-/// only chunks or only leftovers.
-#[tokio_test]
-async fn layout_gc_changes_even_when_it_drops_nothing() -> TestResult {
-    for (chunks, metadata) in [(true, false), (false, false), (true, true)] {
-        let storage = GcTestStorage::new(new_in_memory_storage().await?, true);
-        let repo = Repository::create(storage.wrapped()).execute().await?;
-        let mut session = repo.writable_session("main").await?;
-        session.add_group(Path::root(), Bytes::new()).await?;
-        session.commit("first").execute().await?;
+async fn gc_changes_then_sweeps_then_deletes() -> TestResult {
+    for layout in [true, false] {
+        let storage = GcTestStorage::new(new_in_memory_storage().await?, layout);
+        let repo = repo_with_garbage(Arc::clone(&storage)).await?;
         storage.take_events();
 
-        let summary = gc(&repo, &config(chunks, metadata, false)).await?;
-        assert_eq!(summary, GCSummary::default(), "{chunks} {metadata}");
+        let summary = gc(&repo, &clean_all(false)).await?;
+        assert_eq!(summary.snapshots_deleted, 1, "layout={layout}");
+        assert_eq!(summary.chunks_deleted, 4, "layout={layout}");
+
         let events = storage.take_events();
-        let v = only_change(&events);
-        assert_eq!(
-            events,
-            vec![
-                Event::RepoInfoWritten(v.clone()),
-                Event::BeforeDeletes(Some(v.clone())),
-                Event::Sweep,
-                Event::AfterDeletes(Some(v)),
-            ],
-            "{chunks} {metadata}"
-        );
+        let mut expected =
+            vec![Event::RepoInfoWritten(only_change(&events)), Event::Sweep];
+        expected.extend(deletes(&ALL_PREFIXES));
+        assert_eq!(events, expected, "layout={layout}");
         assert_eq!(latest_update(&repo).await?, UpdateType::GCRanUpdate);
     }
     Ok(())
 }
 
-/// A failing hook before the deletes stops GC: no sweep, nothing deleted.
+/// In both layouts, GC that keeps every snapshot makes no change, whether it
+/// deletes chunks and leftovers or only leftovers.
 #[tokio_test]
-async fn layout_gc_deletes_nothing_when_the_hook_fails() -> TestResult {
-    let storage = GcTestStorage::new(new_in_memory_storage().await?, true);
-    let repo = repo_with_garbage(Arc::clone(&storage)).await?;
-    let before = object_count(&repo).await?;
-    storage.fail_before_deletes.store(true, Ordering::SeqCst);
-    storage.take_events();
-
-    let err = gc(&repo, &clean_all(false)).await.err().ok_or("GC succeeded")?;
-    assert!(err.to_string().contains("injected hook failure"), "{err}");
-    let events = storage.take_events();
-    let v = only_change(&events);
-    assert_eq!(
-        events,
-        vec![Event::RepoInfoWritten(v.clone()), Event::BeforeDeletes(Some(v))]
-    );
-    assert_eq!(object_count(&repo).await?, before);
-    Ok(())
-}
-
-/// GC's change landed but found a fork: GC stops before the hook, deletes
-/// nothing, and says the change is durable.
-#[tokio_test]
-async fn layout_gc_stops_after_a_durable_forked_change() -> TestResult {
-    let storage = GcTestStorage::new(new_in_memory_storage().await?, true);
-    let repo = repo_with_garbage(Arc::clone(&storage)).await?;
-    let before = object_count(&repo).await?;
-    storage.fork_after_update.store(true, Ordering::SeqCst);
-    storage.take_events();
-
-    let err = gc(&repo, &clean_all(false)).await.err().ok_or("GC succeeded")?;
-    let msg = err.to_string();
-    assert!(
-        matches!(
-            &err,
-            GCError::Repository(e)
-                if matches!(
-                    e.kind,
-                    RepositoryErrorKind::StorageError(
-                        StorageErrorKind::RepositoryForkedAfterUpdate { .. }
-                    )
+async fn gc_that_keeps_snapshots_makes_no_change() -> TestResult {
+    for layout in [true, false] {
+        for chunks in [true, false] {
+            let storage = GcTestStorage::new(new_in_memory_storage().await?, layout);
+            let repo = repo_with_garbage(Arc::clone(&storage)).await?;
+            // the kept snapshots keep their chunks: give GC one to delete
+            storage
+                .backend
+                .put_object(
+                    &repo.storage_context(),
+                    &format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random()),
+                    Bytes::from_static(b"x"),
+                    None,
+                    Vec::new(),
+                    WriteHint::default(),
                 )
-        ),
-        "{msg}"
-    );
-    assert!(msg.contains("durable") && msg.contains("must not be retried"), "{msg}");
-    let events = storage.take_events();
-    assert!(matches!(&events[..], [Event::RepoInfoWritten(_)]), "{events:?}");
-    assert_eq!(object_count(&repo).await?, before);
+                .await?;
+            let (_, version_before) = repo.asset_manager().fetch_repo_info().await?;
+            storage.take_events();
+
+            let summary = gc(&repo, &config(chunks, false, false)).await?;
+            let case = format!("layout={layout} chunks={chunks}");
+            assert_eq!(summary.chunks_deleted, u64::from(chunks), "{case}");
+            let mut expected = vec![Event::Sweep];
+            if chunks {
+                expected.extend(deletes(&["chunks"]));
+            }
+            assert_eq!(storage.take_events(), expected, "{case}");
+            let (_, version_after) = repo.asset_manager().fetch_repo_info().await?;
+            assert_eq!(version_after, version_before, "{case}");
+        }
+    }
     Ok(())
 }
 
@@ -492,51 +399,9 @@ async fn read_only_status_refuses_gc() -> TestResult {
     Ok(())
 }
 
-/// A repository in the object store layout: no change beyond dropping
-/// snapshots, and both hooks without a version, the first before the sweep.
+/// A dry run changes nothing and deletes nothing.
 #[tokio_test]
-async fn gc_in_the_object_store_layout_calls_the_hooks_without_a_version() -> TestResult {
-    let storage = GcTestStorage::new(new_in_memory_storage().await?, false);
-    let repo = repo_with_garbage(Arc::clone(&storage)).await?;
-    storage.take_events();
-
-    gc(&repo, &clean_all(false)).await?;
-    let events = storage.take_events();
-    let v = only_change(&events);
-    let mut expected =
-        vec![Event::RepoInfoWritten(v), Event::BeforeDeletes(None), Event::Sweep];
-    expected.extend(deletes(&ALL_PREFIXES));
-    expected.push(Event::AfterDeletes(None));
-    assert_eq!(events, expected);
-
-    // keeping snapshots, GC in the object store layout changes nothing
-    let storage = GcTestStorage::new(new_in_memory_storage().await?, false);
-    let repo = repo_with_garbage(Arc::clone(&storage)).await?;
-    // the kept snapshots keep their chunks: give GC one to delete
-    let path = format!("{CHUNKS_FILE_PATH}/{}", ChunkId::random());
-    storage
-        .backend
-        .put_object(
-            &repo.storage_context(),
-            &path,
-            Bytes::from_static(b"x"),
-            None,
-            Vec::new(),
-            WriteHint::default(),
-        )
-        .await?;
-    storage.take_events();
-    gc(&repo, &config(true, false, false)).await?;
-    let mut expected = vec![Event::BeforeDeletes(None), Event::Sweep];
-    expected.extend(deletes(&["chunks"]));
-    expected.push(Event::AfterDeletes(None));
-    assert_eq!(storage.take_events(), expected);
-    Ok(())
-}
-
-/// A dry run changes nothing, calls no hook and deletes nothing.
-#[tokio_test]
-async fn dry_runs_change_nothing_and_call_no_hook() -> TestResult {
+async fn dry_runs_change_nothing() -> TestResult {
     for layout in [true, false] {
         let storage = GcTestStorage::new(new_in_memory_storage().await?, layout);
         let repo = repo_with_garbage(Arc::clone(&storage)).await?;

@@ -73,6 +73,8 @@ Within a single major version N, the Icechunk libraries promise the following. K
 - **Any N.x library can read any spec N.y repository.** For example, Icechunk 2.0.6 can read a spec 2.2 repository. A library ignores the features it does not know when reading, and behaves as it did before they existed.
 - **Any N.x library either writes a spec N.y repository safely or refuses to write it**, with an error that says what it is missing. A library never silently drops information that a newer library wrote.
 
+Both promises cover the layouts a library implements. A repository in the experimental filesystem layout can only be opened by Icechunk 2.4.0 and later with `filesystem_storage` (see [Storage layouts](#storage-layouts)).
+
 Each major version documents below how it keeps these promises.
 
 ### Major version 2
@@ -81,12 +83,10 @@ Each major version documents below how it keeps these promises.
 
 From spec 2.2, a repository lists its [writer features](./spec-v2-2.md#writer-features): format features that a library must implement to modify the repository without damaging it. Modifying includes commits, branch and tag changes, expiration and garbage collection. A library refuses to modify a repository that lists a writer feature it does not implement. Most repositories list none, and any 2.x library can write them.
 
-Libraries older than 2.4.0 do not know about writer features, so a repository that lists any writer feature is read-only for them. Change attempts fail with a message that explains the features and the library version required. These libraries can still read the repository.
-
 #### Experimental writer features
 
-A writer feature that the specification marks experimental, such as `filesystem-layout-v1`, may be superseded in a minor release by a new version under a new name. Every 2.x library keeps reading repositories that list an experimental feature. A later 2.x library may stop writing a superseded version: before such a library can modify the repository, it must be converted, to the newer version or to the object store layout. For the filesystem layout, every 2.x release that can write a version of the layout can also convert it back to the object store layout.
+A writer feature that the specification marks experimental, such as `filesystem-layout-v1`, may be superseded in a minor release by a new version under a new name. Once a 2.x release reads repositories that list an experimental feature, every later 2.x release keeps reading them. A later 2.x library may stop writing a superseded version: before such a library can modify the repository, it must be converted, to the newer version or to the object store layout. For the filesystem layout, every 2.x release that can write a version of the layout can also convert it back to the object store layout.
 
 #### Storage layouts
 
-A repository stored on a filesystem through `filesystem_storage` uses the experimental [filesystem layout](./spec-filesystem-layout-v1.md), which lists the `filesystem-layout-v1` [writer feature](./spec-v2-2.md#writer-features). From Icechunk 2.4.0, only filesystem storage can modify such a repository. Every 2.x library can read it, through a read-only copy of the repository info that may lag behind the latest change. The [storage guide](../guides/storage.md#filesystem-storage) explains that copy, how to copy or move such a repository, and the conversions between layouts.
+A repository stored on a filesystem through `filesystem_storage` uses the experimental [filesystem layout](./spec-filesystem-layout-v1.md), which lists the `filesystem-layout-v1` [writer feature](./spec-v2-2.md#writer-features). Only filesystem storage, from Icechunk 2.4.0, can open such a repository. To use it elsewhere, convert it to the object store layout. The [storage guide](../guides/storage.md#filesystem-storage) explains how to copy or move such a repository, and the conversions between layouts.

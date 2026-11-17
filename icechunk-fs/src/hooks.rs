@@ -24,20 +24,6 @@ pub enum Point {
     Renamed,
     /// Committed; the next step deletes the base's version file.
     BeforeTidyUp,
-    /// A publication of the mirror starts: a version it proved current isn't
-    /// mirrored yet.
-    BeforePublish,
-    /// Our `repo.d/mirror.<id>` is written, before the fork check.
-    MirrorStaged,
-    /// The next step of a fork check reads `$ROOT/repo`. Reached before each
-    /// of its reads, holding this process's lock around reads of and renames
-    /// onto `$ROOT/repo`.
-    BeforeMirrorRead,
-    /// The fork check passed; the next step renames our `mirror.<id>` over
-    /// `$ROOT/repo`.
-    BeforeMirrorRename,
-    /// Our mirror rename succeeded; the next step lists `repo.d` to verify.
-    MirrorRenamed,
     /// A step of a creation.
     Creation(CreationStep),
     /// A step of a conversion.
@@ -51,14 +37,10 @@ pub enum Point {
     expect(unreachable_pub, reason = "exported with the fault-injection feature")
 )]
 pub enum CreationStep {
-    /// Our first version is written in our `repo.d.tmp.<id>`; the next step
-    /// writes `$ROOT/repo.staging.<id>`.
+    /// Our `repo.d.tmp.<id>` holds our first version and its marker; the
+    /// next step renames it to `repo.d`.
     Built,
-    /// `$ROOT/repo` holds our first version; the next step writes the marker.
-    Placed,
-    /// The next step renames our `repo.d.tmp.<id>` to `repo.d`.
-    BeforeDirRename,
-    /// Our directory rename succeeded; the next step publishes the mirror.
+    /// Our directory rename succeeded: the repository exists.
     DirRenamed,
 }
 
@@ -89,10 +71,10 @@ pub enum FromObjectStoreStep {
     /// Our `repo.d.tmp.<id>` holds the first version and its marker; the next
     /// step renames it to `repo.d`.
     Build,
-    /// Our directory rename succeeded; the next step publishes the mirror.
+    /// Our directory rename succeeded; the next step unlinks `$ROOT/repo`.
     RenameDir,
-    /// The mirror is published; the next step deletes every `repo.d.tmp.*`.
-    Publish,
+    /// `$ROOT/repo` is unlinked; the next step deletes every `repo.d.tmp.*`.
+    RepoUnlinked,
 }
 
 /// The steps of the conversion to the object store layout at which
@@ -103,15 +85,16 @@ pub enum FromObjectStoreStep {
     expect(unreachable_pub, reason = "exported with the fault-injection feature")
 )]
 pub enum ToObjectStoreStep {
-    /// The current version is read and lists the feature; the next step is
-    /// the fork check. Reached again after every relisting.
-    ForkCheck,
+    /// The current version is read and lists the feature; the next step
+    /// checks that `$ROOT/repo` doesn't exist, then makes the change. Reached
+    /// again after every conflict.
+    BeforeChange,
     /// Our change landed: the current version doesn't list the feature; the
-    /// next step publishes it.
+    /// next step writes it to `$ROOT/repo`.
     Change,
     /// `$ROOT/repo` holds the version without the feature; the next step
     /// renames `repo.d` aside.
-    Publish,
+    RepoWritten,
     /// `repo.d` is renamed to a `repo.d.tmp.<id>`; the next step deletes
     /// every `repo.d.tmp.*`.
     RenameDir,
@@ -149,35 +132,19 @@ pub enum Sabotage {
     LinkAfterRename,
     /// On a lost race, delete the winner's `<N+1>.<x>` instead of ours.
     DeleteWinnerFile,
-    /// Publish the mirror without reading `$ROOT/repo`: a fork is overwritten
-    /// without a report.
-    PublishWithoutForkCheck,
-    /// Publish the version file with the highest `N` in a listing of `repo.d`
-    /// instead of the proved version, which can be one that was never
-    /// current.
-    PublishNonCurrent,
     /// A rerun of the conversion from the object store layout that finds
-    /// `repo.d` next to a `$ROOT/repo` without the feature publishes without the
+    /// `repo.d` next to `$ROOT/repo` unlinks `$ROOT/repo` without the
     /// provenance check: an object-store-layout write made after the
-    /// conversion's directory rename is overwritten.
+    /// conversion's directory rename is lost.
     FromObjectStoreWithoutProvenance,
-    /// A change returns without publishing the mirror.
-    CommitWithoutPublish,
-    /// The conversion to the object store layout publishes the version its
+    /// The conversion to the object store layout writes the version its
     /// listing showed, converted, without making its change: under a stale
     /// listing a change acknowledged after that version is lost.
     ToObjectStoreWithoutChange,
     /// The conversion to the object store layout renames `repo.d` aside and
-    /// deletes it before publishing its change: a crash after the deletion
-    /// leaves the older mirror with the feature and no `repo.d`.
-    DeleteDirBeforePublish,
-    /// GC's hook before its deletes neither checks for a fork nor publishes:
-    /// GC deletes while a fork is in `$ROOT/repo`.
-    GcWithoutForkCheck,
-    /// GC's hook before its deletes publishes the version its listing shows
-    /// instead of the one GC's change made, which a lagging listing makes an
-    /// older one.
-    GcPublishesListed,
+    /// deletes it before writing `$ROOT/repo`: a crash after the deletion
+    /// loses the repository.
+    DeleteDirBeforeRepoWrite,
 }
 
 /// How a commit resolved a name operation whose outcome was in doubt, for
@@ -207,10 +174,9 @@ pub enum Observed {
 }
 
 /// The operation hooks are used only for the protocol's name operations: the
-/// content link, the marker rename, deletions of version files, the mirror
-/// rename onto `$ROOT/repo`, the deletion of a mirror stage, a creation's
-/// link or rename onto `$ROOT/repo` and its directory rename, and the
-/// directory renames of both conversions.
+/// content link, the marker rename, deletions of version files, a creation's
+/// directory rename, the directory renames of both conversions, and the link
+/// and unlinks of `$ROOT/repo` by the conversions.
 #[cfg_attr(
     not(feature = "fault-injection"),
     expect(unreachable_pub, reason = "exported with the fault-injection feature")
@@ -267,15 +233,10 @@ mod tests {
             Sabotage::UnlinkBaseBeforeRename,
             Sabotage::LinkAfterRename,
             Sabotage::DeleteWinnerFile,
-            Sabotage::PublishWithoutForkCheck,
-            Sabotage::PublishNonCurrent,
             Sabotage::FromObjectStoreWithoutProvenance,
             Sabotage::AckSupersededWithoutProof,
-            Sabotage::CommitWithoutPublish,
             Sabotage::ToObjectStoreWithoutChange,
-            Sabotage::DeleteDirBeforePublish,
-            Sabotage::GcWithoutForkCheck,
-            Sabotage::GcPublishesListed,
+            Sabotage::DeleteDirBeforeRepoWrite,
         ] {
             assert!(!NoHooks.sabotaged(sabotage), "{sabotage:?}");
         }
@@ -285,14 +246,7 @@ mod tests {
             Point::BeforeRename,
             Point::Renamed,
             Point::BeforeTidyUp,
-            Point::BeforePublish,
-            Point::MirrorStaged,
-            Point::BeforeMirrorRead,
-            Point::BeforeMirrorRename,
-            Point::MirrorRenamed,
             Point::Creation(CreationStep::Built),
-            Point::Creation(CreationStep::Placed),
-            Point::Creation(CreationStep::BeforeDirRename),
             Point::Creation(CreationStep::DirRenamed),
             Point::Conversion(ConversionStep::FromObjectStore(
                 FromObjectStoreStep::Backup,
@@ -304,13 +258,15 @@ mod tests {
                 FromObjectStoreStep::RenameDir,
             )),
             Point::Conversion(ConversionStep::FromObjectStore(
-                FromObjectStoreStep::Publish,
+                FromObjectStoreStep::RepoUnlinked,
             )),
             Point::Conversion(ConversionStep::ToObjectStore(
-                ToObjectStoreStep::ForkCheck,
+                ToObjectStoreStep::BeforeChange,
             )),
             Point::Conversion(ConversionStep::ToObjectStore(ToObjectStoreStep::Change)),
-            Point::Conversion(ConversionStep::ToObjectStore(ToObjectStoreStep::Publish)),
+            Point::Conversion(ConversionStep::ToObjectStore(
+                ToObjectStoreStep::RepoWritten,
+            )),
             Point::Conversion(ConversionStep::ToObjectStore(
                 ToObjectStoreStep::RenameDir,
             )),

@@ -45,7 +45,6 @@ fn write_done(root: &RunRoot, tag: &str, go_seen_at: SystemTime, stopped_at: Sys
         incarnations_spawned: 1,
         external_kills: 0,
         stragglers: 0,
-        sampler_error: None,
     };
     fs::write(root.host_done(tag), serde_json::to_vec(&done).unwrap()).unwrap();
 }
@@ -194,7 +193,13 @@ async fn a_missing_repo_is_broken_history_in_a_written_report() {
     // `b` stays missing, so verify skips the recovery write, which would wait
     // out its whole deadline without a `repo`.
     write_done(&root, "a", now, now);
-    fs::remove_dir_all(root.storage().join("repo.d")).unwrap();
+    // `repo.d` keeps only its marker, which names a missing version.
+    for entry in fs::read_dir(root.storage().join("repo.d")).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.file_name().unwrap().to_string_lossy().starts_with("latest.") {
+            fs::remove_file(path).unwrap();
+        }
+    }
 
     let report = verify(&root, Duration::from_millis(100)).await.unwrap();
     assert!(
@@ -312,46 +317,6 @@ async fn a_run_root_reached_through_an_alias_path_verifies() {
     assert!(format!("{err:#}").contains("already verified"), "{err:#}");
 }
 
-/// Rule M2: verify publishes the mirror before checking it, so a mirror that
-/// a publisher left behind is repaired, and the publication is logged.
-#[tokio::test]
-async fn verify_publishes_a_lagging_mirror_before_checking_it() {
-    use std::sync::Arc;
-
-    use icechunk_fs_stress::storage_mode::{Attempt, Updater};
-
-    let dir = tempfile::tempdir().unwrap();
-    let root = RunRoot::new(dir.path().join("run"));
-    let config = no_faults(Mode::Storage, 1);
-    supervisor::init(&root, &config).await.unwrap();
-    register(&root, &host_info("a", &root.storage())).unwrap();
-    fs::write(root.go(), "a\n").unwrap();
-    let participants = BTreeSet::from(["a".to_owned()]);
-    write_control(&root, &Control::Go { participants }).unwrap();
-    let mirror = root.storage().join(storage_mode::REPO_KEY);
-    let initial = fs::read(&mirror).unwrap();
-
-    let who = WorkerId { tag: "a".to_owned(), slot: "0".to_owned(), incarnation: 0 };
-    let log = LogWriter::create(&root.worker_log("a", "0", 0)).unwrap();
-    let storage = storage_mode::storage(&root, &config, None).await.unwrap();
-    let mut updater = Updater::new(Arc::clone(&storage), &who, &config).await.unwrap();
-    let attempt = updater.attempt(&log).await.unwrap();
-    assert!(matches!(attempt, Attempt::Logged(OpResult::Ack { .. })), "{attempt:?}");
-    // As a publisher that died after its change, then a slow one, leave it.
-    fs::write(&mirror, &initial).unwrap();
-    let now = SystemTime::now();
-    write_done(&root, "a", now, now);
-
-    let report = verify(&root, Duration::from_secs(5)).await.unwrap();
-    assert!(report.passed, "{}", report.summary());
-    assert_ne!(fs::read(&mirror).unwrap(), initial);
-    let published = read_log(&root.worker_log("verify", "publish", 0)).unwrap();
-    assert!(
-        published.iter().any(|record| matches!(record, Record::MirrorRename { .. })),
-        "{published:?}"
-    );
-}
-
 /// Registers host `a` and starts a one-host run.
 fn start(root: &RunRoot) {
     register(root, &host_info("a", &root.storage())).unwrap();
@@ -360,43 +325,21 @@ fn start(root: &RunRoot) {
     write_control(root, &Control::Go { participants }).unwrap();
 }
 
-/// A verify that stopped after its publication, before its recovery write,
-/// runs again with its next publication under its own log; one that made its
-/// recovery write was the run's full check.
+/// A verify that stopped before its recovery write, here because the host
+/// hadn't finished, runs again; one that made its recovery write was the
+/// run's full check.
 #[tokio::test]
 async fn a_verify_interrupted_before_its_recovery_write_runs_again() {
-    use std::sync::Arc;
+    let (_dir, root, _) = changed_run(Mode::Storage).await;
+    let skipped = verify(&root, Duration::from_millis(100)).await.unwrap();
+    assert_eq!(skipped.participants.missing, ["a"]);
+    assert_eq!(skipped.recovery_ms, None);
 
-    use icechunk_fs_stress::storage_mode::{Attempt, Updater};
-
-    let dir = tempfile::tempdir().unwrap();
-    let root = RunRoot::new(dir.path().join("run"));
-    let config = no_faults(Mode::Storage, 1);
-    supervisor::init(&root, &config).await.unwrap();
-    start(&root);
-    let mirror = root.storage().join(storage_mode::REPO_KEY);
-    let initial = fs::read(&mirror).unwrap();
-    let who = WorkerId { tag: "a".to_owned(), slot: "0".to_owned(), incarnation: 0 };
-    let log = LogWriter::create(&root.worker_log("a", "0", 0)).unwrap();
-    let storage = storage_mode::storage(&root, &config, None).await.unwrap();
-    let mut updater = Updater::new(Arc::clone(&storage), &who, &config).await.unwrap();
-    let attempt = updater.attempt(&log).await.unwrap();
-    assert!(matches!(attempt, Attempt::Logged(OpResult::Ack { .. })), "{attempt:?}");
     let now = SystemTime::now();
     write_done(&root, "a", now, now);
-    // What the interrupted verify left: its publication's log, which
-    // renamed nothing, so the mirror still lags.
-    LogWriter::create(&root.worker_log("verify", "publish", 0)).unwrap();
-    fs::write(&mirror, &initial).unwrap();
-
     let report = verify(&root, Duration::from_secs(5)).await.unwrap();
     assert!(report.passed, "{}", report.summary());
     assert!(report.recovery_ms.is_some());
-    let published = read_log(&root.worker_log("verify", "publish", 1)).unwrap();
-    assert!(
-        published.iter().any(|record| matches!(record, Record::MirrorRename { .. })),
-        "{published:?}"
-    );
 
     let err = verify(&root, Duration::from_secs(5)).await.unwrap_err();
     assert!(format!("{err:#}").contains("already verified"), "{err:#}");
@@ -404,7 +347,7 @@ async fn a_verify_interrupted_before_its_recovery_write_runs_again() {
 
 /// A repository-mode run with deletions whose status toggler died during a
 /// hold: verify sets the status `Online` and the run passes in full, M7,
-/// the publication, the recovery write, the canaries and GC included.
+/// the recovery write, the canaries and GC included.
 #[tokio::test]
 async fn a_repository_run_left_read_only_is_set_online_and_verified() {
     use std::sync::Arc;
@@ -466,12 +409,11 @@ async fn a_repository_run_left_read_only_is_set_online_and_verified() {
     assert_eq!(repo.get_status().await.unwrap().availability, RepoAvailability::Online);
 }
 
-/// A one-host run with the fork actor configured, after one change.
-async fn forked_run(mode: Mode) -> (tempfile::TempDir, RunRoot, RunConfig) {
+/// A one-host run after one change of host `a`'s worker.
+async fn changed_run(mode: Mode) -> (tempfile::TempDir, RunRoot, RunConfig) {
     use std::sync::Arc;
 
     use icechunk_fs_stress::{
-        config::ForkConfig,
         log::start_worker_log,
         repo_mode::{RepoWorker, open_repo},
         storage_mode::{Attempt, Updater},
@@ -479,9 +421,7 @@ async fn forked_run(mode: Mode) -> (tempfile::TempDir, RunRoot, RunConfig) {
 
     let dir = tempfile::tempdir().unwrap();
     let root = RunRoot::new(dir.path().join("run"));
-    let mut config = no_faults(mode, 1);
-    config.fork =
-        Some(ForkConfig { at: Duration::from_secs(1), repeat: false, during_gc: false });
+    let config = no_faults(mode, 1);
     supervisor::init(&root, &config).await.unwrap();
     start(&root);
     let who = WorkerId { tag: "a".to_owned(), slot: "0".to_owned(), incarnation: 0 };
@@ -507,319 +447,6 @@ async fn forked_run(mode: Mode) -> (tempfile::TempDir, RunRoot, RunConfig) {
     (dir, root, config)
 }
 
-/// Writes a fork as the fork actor does, logging it in `a.fork.0.log`.
-fn fork(root: &RunRoot) -> icechunk_fs_stress::fork::Fork {
-    use icechunk_fs_stress::fork::{FORK_SLOT, announce_backup, write_fork};
-    let log = LogWriter::create(&root.worker_log("a", FORK_SLOT, 0)).unwrap();
-    let written = write_fork(&root.storage(), announce_backup(&log).unwrap()).unwrap();
-    log.append(&written.record(None)).unwrap();
-    written
-}
-
-/// A run whose fork persisted: F5 passes, the publication refuses the fork,
-/// the recovery write lands and reports it, and nothing is swept.
-#[tokio::test]
-async fn a_persisted_fork_is_checked_on_both_sides_and_reported() {
-    for mode in [Mode::Storage, Mode::Repository] {
-        let (_dir, root, _) = forked_run(mode).await;
-        let written = fork(&root);
-        let mirror = root.storage().join(storage_mode::REPO_KEY);
-        let forked = fs::read(&mirror).unwrap();
-        let now = SystemTime::now();
-        write_done(&root, "a", now, now);
-
-        let report = verify(&root, Duration::from_secs(5)).await.unwrap();
-        assert!(report.passed, "{mode:?}: {}", report.summary());
-        assert!(
-            report
-                .notes
-                .iter()
-                .any(|note| note.contains(&written.fork_hash)
-                    && note.contains("persisted")),
-            "{:?}",
-            report.notes
-        );
-        assert_eq!(fs::read(&mirror).unwrap(), forked, "{mode:?}");
-        let who = recovery_worker();
-        let recovery =
-            read_log(&root.worker_log(&who.tag, &who.slot, who.incarnation)).unwrap();
-        assert!(
-            recovery.iter().any(|record| matches!(
-                record,
-                Record::Outcome { result: OpResult::DurableButForked { .. }, .. }
-            )),
-            "{recovery:?}"
-        );
-        let published = read_log(&root.worker_log("verify", "publish", 0)).unwrap();
-        assert!(
-            !published.iter().any(|record| matches!(record, Record::MirrorRename { .. }))
-        );
-    }
-}
-
-/// A fork whose bytes left `$ROOT/repo` after the fork actor stopped
-/// watching, by a write outside any publication: verify logs the erasure and
-/// F4 finds it unexplained.
-#[tokio::test]
-async fn a_fork_erased_after_the_actor_stopped_is_seen_by_verify() {
-    let (_dir, root, _) = forked_run(Mode::Storage).await;
-    let mirror = root.storage().join(storage_mode::REPO_KEY);
-    let version = fs::read(&mirror).unwrap();
-    let written = fork(&root);
-    fs::write(&mirror, &version).unwrap();
-    let now = SystemTime::now();
-    write_done(&root, "a", now, now);
-
-    let report = verify(&root, Duration::from_secs(5)).await.unwrap();
-    assert!(
-        report.verdict.violations.iter().any(|v| matches!(
-            v,
-            Violation::SilentForkLoss { fork_hash, .. } if *fork_hash == written.fork_hash
-        )),
-        "{}",
-        report.summary()
-    );
-    let observed = read_log(&root.worker_log("verify", "fork", 0)).unwrap();
-    assert!(
-        observed.iter().any(|record| matches!(record, Record::ForkGone { .. })),
-        "{observed:?}"
-    );
-}
-
-/// Under the sabotage, verify's own publication erases a persisted fork: F4.
-#[tokio::test]
-async fn verify_reports_its_own_publication_erasing_a_fork() {
-    use icechunk_fs_stress::config::Sabotage;
-
-    let (_dir, root, mut config) = forked_run(Mode::Storage).await;
-    config.sabotage = Some(Sabotage::PublishWithoutForkCheck);
-    fs::remove_file(root.run_json()).unwrap();
-    config.write_new(&root).unwrap();
-    let written = fork(&root);
-    let now = SystemTime::now();
-    write_done(&root, "a", now, now);
-
-    let report = verify(&root, Duration::from_secs(5)).await.unwrap();
-    assert!(
-        report.verdict.violations.iter().any(|v| matches!(
-            v,
-            Violation::SilentForkLoss { fork_hash, erased_by }
-                if *fork_hash == written.fork_hash && erased_by.contains("publish_mirror()")
-        )),
-        "{}",
-        report.summary()
-    );
-}
-
-type Actors = Vec<tokio::task::JoinHandle<anyhow::Result<()>>>;
-
-/// Runs `actors` (each a worker slot's future) on a one-host run until they
-/// end, writes `done/` and verifies.
-async fn run_in_process(root: &RunRoot, actors: Actors, go: SystemTime) -> Report {
-    for actor in actors {
-        actor.await.unwrap().unwrap();
-    }
-    write_done(root, "a", go, SystemTime::now());
-    verify(root, Duration::from_secs(5)).await.unwrap()
-}
-
-fn worker_id(slot: &str) -> WorkerId {
-    WorkerId { tag: "a".to_owned(), slot: slot.to_owned(), incarnation: 0 }
-}
-
-/// A short in-process run with `sabotage`, its fault floor off: whether
-/// selftest's judge detects it, and whether the run without it passes.
-async fn judged(
-    config: &RunConfig,
-    sabotage: icechunk_fs_stress::config::Sabotage,
-    actors: fn(&RunRoot, &RunConfig, SystemTime) -> Actors,
-) -> (icechunk_fs_stress::selftest::CaseOutcome, Report) {
-    use icechunk_fs_stress::{config::FaultFloor, selftest::judge};
-
-    let mut sabotaged = config.clone();
-    sabotaged.fault_floor = FaultFloor::ZERO;
-    sabotaged.sabotage = Some(sabotage);
-    let mut control = sabotaged.clone();
-    control.sabotage = None;
-    let mut reports = Vec::new();
-    for config in [sabotaged, control] {
-        let dir = tempfile::tempdir().unwrap();
-        let root = RunRoot::new(dir.path().join("run"));
-        supervisor::init(&root, &config).await.unwrap();
-        start(&root);
-        let go = SystemTime::now();
-        let until = go + Duration::from_secs(2);
-        reports.push(run_in_process(&root, actors(&root, &config, until), go).await);
-    }
-    let control = reports.pop().unwrap();
-    (judge(&reports[0], sabotage), control)
-}
-
-/// `PublishWithoutForkCheck`: the fork actor's forks are erased by
-/// publications that never checked: F4.
-#[tokio::test]
-async fn a_publication_without_its_fork_check_is_caught_by_f4() {
-    use icechunk_fs_stress::{
-        config::{ForkConfig, Sabotage},
-        fork::{FORK_SLOT, fork_actor},
-        selftest::CaseOutcome,
-    };
-
-    let mut config = no_faults(Mode::Storage, 1);
-    config.fork =
-        Some(ForkConfig { at: Duration::from_millis(1), repeat: true, during_gc: false });
-    let (outcome, control) =
-        judged(&config, Sabotage::PublishWithoutForkCheck, |root, config, until| {
-            let worker = {
-                let (root, config) = (root.clone(), config.clone());
-                tokio::spawn(async move {
-                    storage_mode::worker(&root, &config, &worker_id("0"), until).await
-                })
-            };
-            let fork = {
-                let (root, config) = (root.clone(), config.clone());
-                tokio::spawn(async move {
-                    fork_actor(&root, &config, &worker_id(FORK_SLOT), until).await
-                })
-            };
-            vec![worker, fork]
-        })
-        .await;
-    assert!(
-        matches!(&outcome, CaseOutcome::Detected(d) if d.contains("SilentForkLoss")),
-        "{outcome:?}"
-    );
-    assert!(control.passed, "{}", control.summary());
-}
-
-/// `GcWithoutForkCheck`: a fork written after GC's change was published, as
-/// with `fork.during_gc`, is left in place by GC's hook, and GC acknowledged:
-/// F3.
-#[tokio::test]
-async fn a_gc_that_deletes_over_a_fork_is_caught_by_f3() {
-    use icechunk_fs_stress::{
-        config::{ForkConfig, GcConfig, Sabotage},
-        repo_mode::gc_worker,
-        selftest::CaseOutcome,
-        supervisor::GC_SLOT,
-    };
-
-    let mut config = no_faults(Mode::Repository, 1);
-    config.gc = Some(GcConfig {
-        every: Duration::from_millis(200),
-        ..GcConfig::defaults(config.faults.pause)
-    });
-    config.fork =
-        Some(ForkConfig { at: Duration::from_millis(1), repeat: false, during_gc: true });
-    let (outcome, control) =
-        judged(&config, Sabotage::GcWithoutForkCheck, |root, config, until| {
-            let (root, config) = (root.clone(), config.clone());
-            vec![tokio::spawn(async move {
-                gc_worker(&root, &config, &worker_id(GC_SLOT), until).await
-            })]
-        })
-        .await;
-    assert!(
-        matches!(&outcome, CaseOutcome::Detected(d) if d.contains("GcAfterFork")),
-        "{outcome:?}"
-    );
-    assert!(control.passed, "{}", control.summary());
-    assert!(
-        control.notes.iter().any(|note| note.contains("persisted")),
-        "{:?}",
-        control.notes
-    );
-}
-
-/// `CommitWithoutPublish`: the status toggler's own `ReadOnly` change, a
-/// change like any other, returns without publishing: M4.
-#[tokio::test]
-async fn a_change_without_its_publication_is_caught_by_m4() {
-    use icechunk_fs_stress::{
-        config::{ReadOnlyConfig, Sabotage},
-        selftest::CaseOutcome,
-        toggler::{TOGGLER_SLOT, toggler},
-    };
-
-    let mut config = no_faults(Mode::Repository, 1);
-    config.readonly = Some(ReadOnlyConfig {
-        every: Duration::from_millis(300),
-        hold: Duration::from_millis(100),
-    });
-    let (outcome, control) =
-        judged(&config, Sabotage::CommitWithoutPublish, |root, config, until| {
-            let (root, config) = (root.clone(), config.clone());
-            vec![tokio::spawn(async move {
-                toggler(&root, &config, &worker_id(TOGGLER_SLOT), until).await
-            })]
-        })
-        .await;
-    assert!(
-        matches!(&outcome, CaseOutcome::Detected(d) if d.contains("ReadOnlyMirrorMismatch")),
-        "{outcome:?}"
-    );
-    assert!(control.passed, "{}", control.summary());
-    assert!(control.verdict.stats.readonly_holds > 0, "{}", control.summary());
-}
-
-/// `PublishNonCurrent`: with a killed writer's version file above the
-/// marker, verify's own publication installs it: M1 and M2.
-#[tokio::test]
-async fn a_publication_of_a_version_above_the_marker_is_caught_by_m1_and_m2() {
-    use icechunk_fs_stress::{config::Sabotage, selftest::CaseOutcome};
-
-    let config = no_faults(Mode::Storage, 1);
-    let (outcome, control) =
-        judged(&config, Sabotage::PublishNonCurrent, |root, config, _| {
-            let (root, config) = (root.clone(), config.clone());
-            vec![tokio::spawn(async move {
-                use std::sync::Arc;
-
-                use icechunk_fs_stress::storage_mode::{Attempt, Updater};
-                // One acknowledged change, then what a writer killed after
-                // linking its next version leaves.
-                let who = worker_id("0");
-                let log = LogWriter::create(&root.worker_log("a", "0", 0))?;
-                let storage = storage_mode::storage(&root, &config, None).await?;
-                let mut updater =
-                    Updater::new(Arc::clone(&storage), &who, &config).await?;
-                let attempt = updater.attempt(&log).await?;
-                anyhow::ensure!(
-                    matches!(attempt, Attempt::Logged(OpResult::Ack { .. })),
-                    "{attempt:?}"
-                );
-                let repo_d = root.storage().join("repo.d");
-                let marker = fs::read_dir(&repo_d)?
-                    .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-                    .find(|name| name.starts_with("latest."))
-                    .unwrap();
-                let n: u64 = marker.split('.').nth(2).unwrap().parse()?;
-                let base = storage_mode::read_repo(&*storage).await?;
-                let decoded = storage_mode::decode(&base)?;
-                let payload = storage_mode::Payload {
-                    id: uuid::Uuid::new_v4(),
-                    parent: storage_mode::payload_etag(&base),
-                    host: "a".to_owned(),
-                    slot: "0".to_owned(),
-                    incarnation: 0,
-                    seq: 1,
-                    padding: String::new(),
-                };
-                let bytes =
-                    storage_mode::next_repo_info(&decoded.info, &payload, "repo.1.X")?;
-                let name = format!("{}.{}", n + 1, storage_mode::payload_etag(&bytes));
-                fs::write(repo_d.join(name), &bytes)?;
-                Ok(())
-            })]
-        })
-        .await;
-    assert!(
-        matches!(&outcome, CaseOutcome::Detected(d) if d.contains("MirrorNotAVersion") && d.contains("MirrorStale")),
-        "{outcome:?}"
-    );
-    assert!(control.passed, "{}", control.summary());
-}
-
 /// A verify pointed at a storage root without a repository fails loudly.
 #[tokio::test]
 async fn a_run_without_a_repository_is_a_harness_failure() {
@@ -837,7 +464,7 @@ async fn a_run_without_a_repository_is_a_harness_failure() {
             fs::create_dir(storage).unwrap();
         }),
     ] {
-        let (_dir, root, _) = forked_run(Mode::Storage).await;
+        let (_dir, root, _) = changed_run(Mode::Storage).await;
         damage(&root.storage());
         let now = SystemTime::now();
         write_done(&root, "a", now, now);

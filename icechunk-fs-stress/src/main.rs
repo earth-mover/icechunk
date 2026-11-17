@@ -26,13 +26,12 @@ mod cli {
     use icechunk_fs_stress::{
         bundle::Bundle,
         config::{
-            Backend, DEFAULT_READONLY_HOLD, FaultConfig, ForkConfig, GcConfig, Mode,
-            PointName, ReadOnlyConfig, RunConfig, WorkerId, parse_duration,
+            Backend, DEFAULT_READONLY_HOLD, FaultConfig, GcConfig, Mode, PointName,
+            ReadOnlyConfig, RunConfig, WorkerId, parse_duration,
         },
         control,
         convert::{self, Converter, ScenarioConfig},
         env_info::{Build, default_tag, host_name},
-        fork::{self, FORK_SLOT},
         layout::{QualifyRoot, RunRoot, ScenarioRoot, is_valid_slot, is_valid_tag},
         log::Direction,
         next_steps::{next_steps, qualify_init_next, qualify_workers_done},
@@ -46,7 +45,7 @@ mod cli {
             self, ASSUMED_OPS_PER_SECOND_PER_WORKER, GC_SLOT, LateHost,
             data_volume_estimate,
         },
-        toggler::{self, TOGGLER_SLOT, storage_error_counter},
+        toggler::{self, TOGGLER_SLOT},
         verify,
     };
     use tracing_subscriber::{
@@ -193,10 +192,8 @@ mod cli {
         /// Length of a pause [default: 2s]
         #[arg(long, value_parser = parse_duration)]
         pause: Option<Duration>,
-        /// Where kills and pauses happen [default: Linked,BeforeRename,BeforeTidyUp,
-        /// BeforePublish,BeforeMirrorRename]
-        /// [possible values: Staged,Linked,BeforeRename,Renamed,BeforeTidyUp,
-        /// BeforePublish,MirrorStaged,BeforeMirrorRename,MirrorRenamed]
+        /// Where kills and pauses happen [default: Linked,BeforeRename,BeforeTidyUp]
+        /// [possible values: Staged,Linked,BeforeRename,Renamed,BeforeTidyUp]
         #[arg(long, value_delimiter = ',', value_parser = parse_point)]
         fault_points: Option<Vec<PointName>>,
         /// How often each host SIGKILLs one of its workers, never the status
@@ -234,17 +231,6 @@ mod cli {
         /// How long the status toggler holds `ReadOnly` [default: 3s]
         #[arg(long, value_parser = parse_duration, requires = "readonly_every")]
         readonly_hold: Option<Duration>,
-        /// How often every host reads repo and logs what changed, e.g. 25ms
-        /// [default: off]
-        #[arg(long, value_parser = parse_duration)]
-        mirror_sample_every: Option<Duration>,
-        /// When, after the go, the fork actor replaces repo as Icechunk 2.3
-        /// does when it sets the status [default: off]
-        #[arg(long, value_parser = parse_duration)]
-        fork_at: Option<Duration>,
-        /// Fork again 500ms after each erasure of the fork.
-        #[arg(long, requires = "fork_at")]
-        fork_repeat: bool,
     }
 
     #[derive(Debug, Args)]
@@ -501,7 +487,6 @@ mod cli {
                     )
                     .with_filter(filter),
             )
-            .with(storage_error_counter())
             .init();
         Ok(())
     }
@@ -701,6 +686,7 @@ mod cli {
             sabotage: None,
             plant_object_store_write: false,
             late_commit: false,
+            kill_after_deleting_repo_d: false,
             guaranteed_kills: true,
         }
     }
@@ -808,12 +794,6 @@ mod cli {
             every,
             hold: args.readonly_hold.unwrap_or(DEFAULT_READONLY_HOLD),
         });
-        config.mirror_sample_every = args.mirror_sample_every;
-        config.fork = args.fork_at.map(|at| ForkConfig {
-            at,
-            repeat: args.fork_repeat,
-            during_gc: false,
-        });
         config.gc = args.gc.then(|| {
             let defaults = GcConfig::run_defaults(faults.pause);
             GcConfig {
@@ -846,10 +826,6 @@ mod cli {
             ("BeforeRename", PointName::BeforeRename),
             ("Renamed", PointName::Renamed),
             ("BeforeTidyUp", PointName::BeforeTidyUp),
-            ("BeforePublish", PointName::BeforePublish),
-            ("MirrorStaged", PointName::MirrorStaged),
-            ("BeforeMirrorRename", PointName::BeforeMirrorRename),
-            ("MirrorRenamed", PointName::MirrorRenamed),
         ];
         let key = |name: &str| name.replace('_', "").to_ascii_lowercase();
         points
@@ -929,10 +905,6 @@ mod cli {
             );
             return runtime.block_on(toggler::toggler(&root, &config, &who, until));
         }
-        if who.slot == FORK_SLOT {
-            ensure!(config.fork.is_some(), "slot {FORK_SLOT} needs a run with --fork-at");
-            return runtime.block_on(fork::fork_actor(&root, &config, &who, until));
-        }
         if who.slot == GC_SLOT {
             ensure!(
                 config.mode == Mode::Repository && config.gc.is_some(),
@@ -1011,11 +983,6 @@ mod cli {
                 "10s",
                 "--readonly-hold",
                 "4s",
-                "--mirror-sample-every",
-                "25ms",
-                "--fork-at",
-                "30s",
-                "--fork-repeat",
             ]);
             let config = config(&args).unwrap();
             let pause = Duration::from_secs(3);
@@ -1045,12 +1012,6 @@ mod cli {
             expected.readonly = Some(ReadOnlyConfig {
                 every: Duration::from_secs(10),
                 hold: Duration::from_secs(4),
-            });
-            expected.mirror_sample_every = Some(Duration::from_millis(25));
-            expected.fork = Some(ForkConfig {
-                at: Duration::from_secs(30),
-                repeat: true,
-                during_gc: false,
             });
             assert_eq!(config, expected);
             config.validate().unwrap();
@@ -1103,9 +1064,6 @@ mod cli {
                 &["--mode", "storage", "--duration", "5"],
                 &["--mode", "repository", "--gc-every", "5s"],
                 &["--mode", "repository", "--readonly-hold", "5s"],
-                &["--mode", "repository", "--mirror-sample-every", "25"],
-                &["--mode", "repository", "--fork-repeat"],
-                &["--mode", "repository", "--fork-at", "5"],
                 &["--mode", "repository", "--max-backoff", "5"],
                 &["--mode", "repository", "--initial-backoff", "2000h"],
             ] {
@@ -1456,7 +1414,6 @@ mod cli {
                 &["qualify", "run", "--root", "r", "--hosts", "1"],
                 &["qualify", "run", "--root", "r", "--gc"],
                 &["qualify", "run", "--root", "r", "--kill-p", "0"],
-                &["qualify", "run", "--root", "r", "--fork-at", "1m"],
                 &["qualify", "workers", "--root", "r", "--duration", "1m"],
                 &["qualify", "verify", "--root", "r", "--workers", "2"],
             ] {

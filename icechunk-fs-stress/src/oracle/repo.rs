@@ -32,7 +32,7 @@ use crate::{
         History, Intents, Stats, Verdict, Violation, Warning,
         gc_cutoff::{check_gc_cutoffs, missing_after_gc_cutoff},
         intents,
-        mirror::object_exists,
+        layout::object_exists,
     },
     repo_mode::{
         MAIN_BRANCH, array_path_on_branch, array_path_on_main, chunk_bytes,
@@ -510,10 +510,9 @@ fn failed_but_landed(
 ) {
     match failed {
         OpResult::Conflict => conflict_but_landed(id, false, network_fs, verdict),
-        OpResult::Ack { .. } | OpResult::DurableButForked { .. } => {}
+        OpResult::Ack { .. } => {}
         OpResult::Error { .. }
         | OpResult::ReadOnly { .. }
-        | OpResult::Forked { .. }
         | OpResult::ConversionInProgress { .. } => {
             verdict.warnings.push(Warning::AmbiguousErrorLanded { id });
         }

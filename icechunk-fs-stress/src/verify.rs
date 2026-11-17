@@ -1,6 +1,6 @@
 //! `verify`: checks a finished run, sets a status the run left `ReadOnly`
-//! `Online` again, publishes the mirror and makes a recovery write, checking
-//! the mirror after each, plants canaries, ages and sweeps the storage root,
+//! `Online` again, checks the objects the current version references, makes
+//! a recovery write, plants canaries, ages and sweeps the storage root,
 //! checks the canaries and the root, and writes `report.json`. Also `run`,
 //! which inits, runs this host's workers and verifies, in one go.
 
@@ -8,46 +8,34 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt, fs, io,
     path::{Path, PathBuf},
-    sync::Arc,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, ensure};
 use chrono::Utc;
 use icechunk::format::repo_info::{RepoAvailability, RepoStatus};
-use icechunk_fs::FilesystemStorage;
 use serde::de::DeserializeOwned;
 
 use crate::{
-    config::{Backend, Mode, RunConfig, WorkerId},
+    config::{Backend, Mode, RunConfig},
     control::{Control, read_control, read_go},
     env_info::{HostDone, HostInfo, default_tag},
-    faults::FaultHooks,
-    fork::{FORK_SLOT, erased},
-    layout::{RunRoot, VERIFY_TAG},
-    log::{
-        FaultAction, LogName, OpResult, Record, now_ms, read_all_logs, read_log,
-        start_worker_log,
-    },
+    layout::RunRoot,
+    log::{LogName, Record, read_all_logs},
     oracle::{
         History, Verdict, Violation, check_failures, check_mode, count_observed,
-        fork::{LoggedFork, check_fork_sides, check_forks, logged_forks, persisted_fork},
+        layout::check_current_objects,
         liveness::{check_landed, check_liveness},
-        mirror::{
-            MirrorCheckpoint, check_mirror_current, check_mirror_hashes,
-            check_mirror_objects,
-        },
     },
     progress::{BRIEF_EVERY, Progress},
     recovery::{
         RECOVERY_DEADLINE, RecoveryOutcome, age_storage_root, check_canaries,
-        check_clean_root, describe, plant_canaries, recovery_worker, recovery_write,
-        recovery_write_once, remove_canaries, sweep,
+        check_clean_root, plant_canaries, recovery_worker, recovery_write,
+        remove_canaries, sweep,
     },
     repo_mode,
     report::{Participants, Report},
-    storage_mode::{self, classify_storage},
-    supervisor,
+    storage_mode, supervisor,
 };
 
 pub const DEFAULT_DONE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -62,8 +50,7 @@ const PHASE_REPORT_EVERY: Duration = Duration::from_secs(5);
 /// checked is a failed report. The recovery write and the sweep change the
 /// repository, so they run once per run, and only once every participant
 /// finished: until then a host may still be writing. A verify interrupted
-/// before its recovery write can run again: each publishes under its own
-/// log.
+/// before its recovery write can run again.
 pub async fn verify(root: &RunRoot, done_timeout: Duration) -> anyhow::Result<Report> {
     verify_with_progress(root, done_timeout, &Progress::Stderr).await
 }
@@ -160,13 +147,8 @@ pub async fn verify_phase(
     }
 
     progress.detail("reading logs");
-    // The versions that were current, on the filesystem backend, and the
-    // fork still in place.
-    let (was_current, fork) = match read_all_logs(root) {
-        Ok(mut logs) => {
-            if config.fork.is_some() && missing.is_empty() {
-                observe_fork(root, &mut logs)?;
-            }
+    match read_all_logs(root) {
+        Ok(logs) => {
             let records: usize = logs.values().map(Vec::len).sum();
             progress.detail(&format!(
                 "read {records} records from {} logs; running the oracle",
@@ -174,7 +156,7 @@ pub async fn verify_phase(
             ));
             let own = History { logs, hosts: hosts.clone(), done: done.clone() };
             let history = own.clone().after_earlier_phases(&earlier.logs);
-            let was_current = check_mode(
+            check_mode(
                 root,
                 &config,
                 &history,
@@ -186,21 +168,20 @@ pub async fn verify_phase(
             check_liveness(&own, &config, network_fs, &mut verdict);
             check_failures(&own, &mut verdict);
             count_observed(&own, &mut verdict);
-            check_forks(&own, network_fs, &mut verdict);
             if missing.is_empty() {
                 check_landed(&own, &mut verdict);
             }
-            (was_current, persisted_fork(&logged_forks(&own)))
         }
         Err(err) => {
             verdict.violations.push(Violation::Harness {
                 detail: format!("reading the logs: {err:#}"),
             });
-            (None, None)
         }
-    };
+    }
 
-    let recovery_ms = if !missing.is_empty() {
+    let recovery_ms = if missing.is_empty() {
+        recover_and_clean(root, &config, &mut verdict, &mut notes, progress).await?
+    } else {
         let note = format!(
             "{RECOVERY_SKIPPED}: {}; verify again once they finished",
             missing.join(", ")
@@ -208,13 +189,6 @@ pub async fn verify_phase(
         progress.detail(&note);
         notes.push(note);
         None
-    } else if let Some(fork) = fork {
-        recover_forked(root, &config, &fork, &mut verdict, &mut notes, progress).await?;
-        None
-    } else {
-        let checked = Checked { was_current: was_current.as_ref(), network_fs };
-        recover_and_clean(root, &config, checked, &mut verdict, &mut notes, progress)
-            .await?
     };
     let missing = missing.into_iter().map(str::to_owned).collect();
     let participants = Participants { tags: participants, missing };
@@ -222,92 +196,6 @@ pub async fn verify_phase(
         root,
         Report::new(verdict, config, participants, hosts, done, recovery_ms, notes),
     )
-}
-
-/// The slot of `verify`'s record of a fork erased after the fork actor
-/// stopped watching, `logs/verify.fork.<k>.log`.
-pub const OBSERVED_FORK_SLOT: &str = FORK_SLOT;
-
-/// If the last fork wasn't seen erased but `$ROOT/repo` no longer holds it,
-/// as after a publication of a writer winding down, logs its erasure now,
-/// for F4, in a log of `verify`'s added to `logs`.
-fn observe_fork(
-    root: &RunRoot,
-    logs: &mut BTreeMap<LogName, Vec<Record>>,
-) -> anyhow::Result<()> {
-    let history = History { logs: logs.clone(), ..History::default() };
-    let Some(fork) = persisted_fork(&logged_forks(&history)) else { return Ok(()) };
-    let Some(found) = erased(&root.storage(), &fork.fork_hash) else { return Ok(()) };
-    let who = first_free(root, OBSERVED_FORK_SLOT)?;
-    let log = start_worker_log(root, &who)?;
-    log.append(&Record::ForkGone { t_ms: now_ms(), fork_hash: fork.fork_hash, found })?;
-    let path = root.worker_log(&who.tag, &who.slot, who.incarnation);
-    let name =
-        LogName { tag: who.tag, slot: who.slot, incarnation: Some(who.incarnation) };
-    logs.insert(name, read_log(&path)?);
-    Ok(())
-}
-
-/// After a run whose last fork is still in `$ROOT/repo`: F5, then the
-/// publication, which must refuse the fork (F4), and one recovery write,
-/// which must land and report the fork (F2). No canaries, aging, sweep or
-/// clean-root check: the storage refuses GC while the fork is there.
-async fn recover_forked(
-    root: &RunRoot,
-    config: &RunConfig,
-    fork: &LoggedFork,
-    verdict: &mut Verdict,
-    notes: &mut Vec<String>,
-    progress: &Progress,
-) -> anyhow::Result<()> {
-    notes.push(format!(
-        "the fork {} persisted: verify checks that both sides survive, that its \
-         publication and its recovery write report the fork, and doesn't sweep",
-        fork.fork_hash
-    ));
-    progress.detail("checking both sides of the fork");
-    let checked = async {
-        let repo = match config.mode {
-            Mode::Repository => Some(repo_mode::open_repo(root, config, None).await?),
-            Mode::Storage => None,
-        };
-        check_fork_sides(&root.storage(), fork, repo.as_ref(), verdict).await
-    };
-    if let Err(err) = checked.await {
-        verdict.violations.push(Violation::Harness {
-            detail: format!("checking both sides of the fork: {err:#}"),
-        });
-    }
-
-    progress.detail("publishing the mirror over the fork");
-    let who = publisher(root)?;
-    match publish_mirror(root, config, &who).await? {
-        Err(OpResult::Forked { .. }) => {}
-        Ok(()) => verdict.violations.push(Violation::SilentForkLoss {
-            fork_hash: fork.fork_hash.clone(),
-            erased_by: "verify's publish_mirror(), which didn't report it".to_owned(),
-        }),
-        Err(other) => verdict.violations.push(Violation::Recovery {
-            detail: format!("publish_mirror() over the fork didn't report it: {other:?}"),
-        }),
-    }
-
-    progress.detail("recovery write over the fork");
-    match recovery_write_once(root, config).await? {
-        Ok((_, OpResult::DurableButForked { .. })) => {}
-        Ok((id, OpResult::Ack { .. })) => {
-            verdict
-                .violations
-                .push(Violation::UnreportedFork { id, op: "recovery write".to_owned() });
-        }
-        Ok((_, other)) => verdict.violations.push(Violation::Recovery {
-            detail: format!("the recovery write over the fork didn't land: {other:?}"),
-        }),
-        Err(err) => verdict.violations.push(Violation::Recovery {
-            detail: format!("the recovery write over the fork wasn't attempted: {err}"),
-        }),
-    }
-    Ok(())
 }
 
 /// Why the storage root holds no repository: it is missing, or has neither
@@ -325,69 +213,34 @@ fn no_repository(root: &RunRoot) -> anyhow::Result<Option<String>> {
 
 /// The note of a verify that left the repository alone.
 pub const RECOVERY_SKIPPED: &str =
-    "publication, recovery write, aging and sweep skipped: hosts still missing";
-
-/// The slot of `verify`'s publications of the mirror, logged as
-/// `logs/verify.publish.<k>.log`, `k` counting the verifies that published.
-pub const PUBLISH_SLOT: &str = "publish";
-
-/// The publisher of this verify: the first incarnation without a log.
-fn publisher(root: &RunRoot) -> anyhow::Result<WorkerId> {
-    first_free(root, PUBLISH_SLOT)
-}
-
-/// `verify`'s worker in `slot`, with the first incarnation without a log.
-fn first_free(root: &RunRoot, slot: &str) -> anyhow::Result<WorkerId> {
-    let mut who =
-        WorkerId { tag: VERIFY_TAG.to_owned(), slot: slot.to_owned(), incarnation: 0 };
-    while exists(&root.worker_log(&who.tag, &who.slot, who.incarnation))? {
-        who.incarnation += 1;
-    }
-    Ok(who)
-}
-
-/// What the oracle found that the checks after it need.
-#[derive(Debug, Clone, Copy)]
-struct Checked<'a> {
-    /// The versions that were current; `None` if the logs couldn't be read.
-    was_current: Option<&'a HashSet<String>>,
-    network_fs: bool,
-}
+    "recovery write, aging and sweep skipped: hosts still missing";
 
 /// In repository mode, the status set `Online` if the run left it
-/// `ReadOnly`; on the filesystem backend, the mirror's objects (repository
-/// mode) and a publication of the mirror; then the timed recovery write,
-/// after each a check that the mirror is the current version, and finally
-/// canaries, aging, sweeping and the canary and clean-root checks. Returns
-/// the recovery write's milliseconds if it succeeded.
+/// `ReadOnly`, and on the filesystem backend M7 on the current version; then
+/// the timed recovery write, and finally canaries, aging, sweeping and the
+/// canary and clean-root checks. Returns the recovery write's milliseconds
+/// if it succeeded.
 async fn recover_and_clean(
     root: &RunRoot,
     config: &RunConfig,
-    checked: Checked<'_>,
     verdict: &mut Verdict,
     notes: &mut Vec<String>,
     progress: &Progress,
 ) -> anyhow::Result<Option<u64>> {
-    let Checked { was_current, network_fs } = checked;
     if config.mode == Mode::Repository {
         set_online(root, config, verdict, notes).await;
-    }
-    let layout = config.backend == Backend::Filesystem;
-    if layout {
-        if config.mode == Mode::Repository {
-            progress.detail("checking the mirror's objects");
+        if config.backend == Backend::Filesystem {
+            progress.detail("checking the current version's objects");
             let checked = async {
                 let repo = repo_mode::open_repo(root, config, None).await?;
-                check_mirror_objects(&repo, &root.storage(), verdict).await
+                check_current_objects(&repo, verdict).await
             };
             if let Err(err) = checked.await {
                 verdict.violations.push(Violation::Harness {
-                    detail: format!("checking the mirror's objects: {err:#}"),
+                    detail: format!("checking the current version's objects: {err:#}"),
                 });
             }
         }
-        progress.detail("publishing the mirror");
-        publish_and_check(root, config, was_current, network_fs, verdict).await?;
     }
 
     progress.detail("recovery write");
@@ -395,10 +248,6 @@ async fn recover_and_clean(
         RecoveryOutcome::Succeeded { elapsed } => {
             let ms = millis(elapsed);
             progress.detail(&format!("recovery write took {ms} ms"));
-            if layout {
-                let after = MirrorCheckpoint::RecoveryWrite;
-                check_mirror(root, config, after, Ok(()), network_fs, verdict).await;
-            }
             Some(ms)
         }
         RecoveryOutcome::Failed { elapsed, last_error } => {
@@ -441,62 +290,6 @@ async fn recover_and_clean(
     Ok(recovery_ms)
 }
 
-/// Rule M2's publication, then M1 on the mirror renames it logged against
-/// `was_current` (skipped without it: the oracle couldn't read the logs), and
-/// M2. `Err` only if its log can't be written or read.
-async fn publish_and_check(
-    root: &RunRoot,
-    config: &RunConfig,
-    was_current: Option<&HashSet<String>>,
-    network_fs: bool,
-    verdict: &mut Verdict,
-) -> anyhow::Result<()> {
-    let who = publisher(root)?;
-    let published =
-        publish_mirror(root, config, &who).await?.map_err(|failed| describe(&failed));
-    let log =
-        LogName { tag: who.tag, slot: who.slot, incarnation: Some(who.incarnation) };
-    let path = root.worker_log(&log.tag, &log.slot, who.incarnation);
-    let records = read_log(&path)?;
-    // It carries the run's sabotage, which may fire here alone.
-    let fired = records
-        .iter()
-        .filter(|record| {
-            matches!(record, Record::Fault { action: FaultAction::Sabotage, .. })
-        })
-        .count();
-    if fired > 0 {
-        *verdict.stats.faults.entry("sabotage".to_owned()).or_default() += fired as u64;
-    }
-    if let Some(was_current) = was_current {
-        let history = History { logs: [(log, records)].into(), ..History::default() };
-        check_mirror_hashes(&history, was_current, verdict);
-    }
-    let after = MirrorCheckpoint::FinalPublish;
-    check_mirror(root, config, after, published, network_fs, verdict).await;
-    Ok(())
-}
-
-/// Rule M2's publication: `publish_mirror()` through a storage whose hooks
-/// carry only the run's sabotage. `Err` only if its log can't be written;
-/// the inner error is the publication's, classified.
-async fn publish_mirror(
-    root: &RunRoot,
-    config: &RunConfig,
-    who: &WorkerId,
-) -> anyhow::Result<Result<(), OpResult>> {
-    let log = Arc::new(start_worker_log(root, who)?);
-    let hooks = FaultHooks::sabotage_only(config.sabotage, log);
-    let storage = FilesystemStorage::new(&root.storage())?
-        .with_fsync(config.fsync)
-        .with_protocol_hooks(Arc::new(hooks));
-    Ok(storage
-        .publish_mirror()
-        .await
-        .map(|_| ())
-        .map_err(|err| classify_storage(err.kind())))
-}
-
 /// Sets the status `Online` if it is `ReadOnly`, as a status toggler killed
 /// during a hold leaves it, and notes it: the recovery write and GC need it.
 /// A failure is a recovery violation.
@@ -533,35 +326,6 @@ async fn set_online(
         Err(err) => verdict.violations.push(Violation::Recovery {
             detail: format!("setting the status Online: {err:#}"),
         }),
-    }
-}
-
-/// Rule M2; a failure to check is a harness violation.
-async fn check_mirror(
-    root: &RunRoot,
-    config: &RunConfig,
-    after: MirrorCheckpoint,
-    published: Result<(), String>,
-    network_fs: bool,
-    verdict: &mut Verdict,
-) {
-    let checked = async {
-        let storage = storage_mode::storage(root, config, None).await?;
-        let published = published.err();
-        check_mirror_current(
-            &*storage,
-            &root.storage(),
-            after,
-            published,
-            network_fs,
-            verdict,
-        )
-        .await
-    };
-    if let Err(err) = checked.await {
-        verdict.violations.push(Violation::Harness {
-            detail: format!("checking the mirror after {after:?}: {err:#}"),
-        });
     }
 }
 
@@ -721,62 +485,7 @@ fn millis(d: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        config::Mode,
-        log::LogWriter,
-        oracle::mirror::MirrorSource,
-        storage_mode::{Attempt, Updater, payload_etag, read_repo},
-    };
-
-    /// An initialized storage-mode run after one change, its mirror left at
-    /// the initial version, and the etag of the current version.
-    async fn lagging_run() -> (tempfile::TempDir, RunRoot, RunConfig, String) {
-        let dir = tempfile::tempdir().unwrap();
-        let root = RunRoot::new(dir.path().join("run"));
-        let config = RunConfig::defaults(Mode::Storage, 1);
-        supervisor::init(&root, &config).await.unwrap();
-        let mirror = root.storage().join(storage_mode::REPO_KEY);
-        let initial = fs::read(&mirror).unwrap();
-        let who = WorkerId { tag: "h".to_owned(), slot: "0".to_owned(), incarnation: 0 };
-        let log = LogWriter::create(&root.worker_log("h", "0", 0)).unwrap();
-        let storage = storage_mode::storage(&root, &config, None).await.unwrap();
-        let mut updater =
-            Updater::new(Arc::clone(&storage), &who, &config).await.unwrap();
-        let attempt = updater.attempt(&log).await.unwrap();
-        assert!(matches!(attempt, Attempt::Logged(OpResult::Ack { .. })), "{attempt:?}");
-        fs::write(&mirror, initial).unwrap();
-        let current = payload_etag(&read_repo(&*storage).await.unwrap());
-        (dir, root, config, current)
-    }
-
-    /// M1 covers verify's own publication, which happens after the oracle
-    /// read the logs.
-    #[tokio::test]
-    async fn verifys_publication_must_install_a_version_that_was_current() {
-        let (_dir, root, config, current) = lagging_run().await;
-        let mut verdict = Verdict::default();
-        let was_current = HashSet::from([current]);
-        publish_and_check(&root, &config, Some(&was_current), false, &mut verdict)
-            .await
-            .unwrap();
-        assert_eq!(verdict.violations, []);
-        assert_eq!(verdict.stats.mirror_renames, 1);
-
-        let (_dir, root, config, current) = lagging_run().await;
-        let mut verdict = Verdict::default();
-        let was_current = HashSet::from(["another version".to_owned()]);
-        publish_and_check(&root, &config, Some(&was_current), false, &mut verdict)
-            .await
-            .unwrap();
-        assert!(
-            matches!(&verdict.violations[..], [Violation::MirrorNotAVersion {
-                hash,
-                source: MirrorSource::Rename,
-                ..
-            }] if *hash == current),
-            "{verdict:?}"
-        );
-    }
+    use crate::config::Mode;
 
     #[test]
     fn run_is_single_host() {

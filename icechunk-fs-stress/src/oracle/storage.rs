@@ -13,10 +13,8 @@ use uuid::Uuid;
 use crate::{
     log::{Op, OpResult},
     oracle::{
-        History, Verdict, Violation, Warning,
-        fork::unused_fork_backups,
-        intents,
-        mirror::{RunStatuses, layout_defect},
+        History, Verdict, Violation, Warning, intents,
+        layout::{RunStatuses, layout_defect},
     },
     storage_mode::{BACKUP_DIR, Decoded, decode, payload_etag},
 };
@@ -136,8 +134,7 @@ pub(crate) fn read_listed_backup(path: &Path) -> anyhow::Result<Option<Vec<u8>>>
 
 /// Rebuilds the chain from `final_repo` back to the initial repo info and
 /// checks every intent in `history` against it. `None` if `repo` couldn't be
-/// read, which the caller reports. An undecodable backup breaks the history
-/// unless it is a fork write's interrupted copy.
+/// read, which the caller reports. An undecodable backup breaks the history.
 pub fn check_chain(
     final_repo: Option<&[u8]>,
     backups: &Backups,
@@ -145,18 +142,10 @@ pub fn check_chain(
     network_fs: bool,
     verdict: &mut Verdict,
 ) {
-    let partial = unused_fork_backups(history);
     for (name, error) in &backups.unparsable {
-        if partial.contains(name.as_str()) {
-            verdict.warnings.push(Warning::ForkActorPartialBackup {
-                backup: name.clone(),
-                detail: error.clone(),
-            });
-        } else {
-            verdict.violations.push(Violation::BrokenHistory {
-                detail: format!("backup {BACKUP_DIR}/{name}: {error}"),
-            });
-        }
+        verdict.violations.push(Violation::BrokenHistory {
+            detail: format!("backup {BACKUP_DIR}/{name}: {error}"),
+        });
     }
     let head = final_repo.and_then(|bytes| {
         decode(bytes)
@@ -356,7 +345,6 @@ mod tests {
 
     use super::*;
     use crate::{
-        fork::FORK_SLOT,
         log::{LogName, Op, OpResult, Record},
         oracle::{Violation, Warning},
         storage_mode::{Payload, initial_repo_info, next_repo_info, payload_etag},
@@ -438,34 +426,6 @@ mod tests {
             &mut verdict,
         );
         verdict
-    }
-
-    /// `records`, and a fork actor's log announcing the backups `announced`
-    /// and then writing forks that name the backups `written`.
-    fn with_fork_actor(
-        records: Vec<Record>,
-        announced: &[&str],
-        written: &[&str],
-    ) -> History {
-        let announcements = announced
-            .iter()
-            .map(|backup| Record::ForkBackup { t_ms: 0, backup: (*backup).to_owned() });
-        let forks = written.iter().map(|backup| Record::ForkWritten {
-            t_before_ms: 0,
-            t_after_ms: 0,
-            base_hash: "base".to_owned(),
-            fork_hash: "fork".to_owned(),
-            backup: (*backup).to_owned(),
-            gc: None,
-        });
-        let mut history = history(records);
-        let name = LogName {
-            tag: "h".to_owned(),
-            slot: FORK_SLOT.to_owned(),
-            incarnation: Some(0),
-        };
-        history.logs.insert(name, announcements.chain(forks).collect());
-        history
     }
 
     fn ids<const N: usize>() -> [Uuid; N] {
@@ -807,41 +767,6 @@ mod tests {
             matches!(&verdict.violations[..], [Violation::BrokenHistory { .. }]),
             "{verdict:?}"
         );
-    }
-
-    /// The fork actor's copy of `repo` to its backup, interrupted as by
-    /// `ESTALE` on NFS, leaves a partial backup that no ops log references.
-    #[test]
-    fn only_an_announced_partial_fork_backup_is_a_warning() {
-        let [a] = ids();
-        let p0 = initial();
-        let p1 = child(a, &p0);
-        let records = || vec![intent(a, &p0, &p1), ack(a)];
-        let backups: &[(&str, &[u8])] = &[(&p1.1, &p0), ("repo.9.B", b"")];
-        let check = |history| check_history(&p1.0, backups, &history, true);
-
-        let verdict = check(with_fork_actor(records(), &["repo.8.A", "repo.9.B"], &[]));
-        assert_eq!(verdict.violations, []);
-        assert!(
-            matches!(&verdict.warnings[..], [Warning::ForkActorPartialBackup { backup, detail }]
-                if backup == "repo.9.B" && detail.contains("header")),
-            "{verdict:?}"
-        );
-        assert_eq!(verdict.stats.chain_len, 2);
-
-        let broken = |verdict: Verdict| {
-            assert!(
-                matches!(&verdict.violations[..], [Violation::BrokenHistory { detail }]
-                    if detail.contains("repo.9.B")),
-                "{verdict:?}"
-            );
-            assert_eq!(verdict.warnings, []);
-        };
-        // Not announced, or another backup announced.
-        broken(check(with_fork_actor(records(), &[], &[])));
-        broken(check(with_fork_actor(records(), &["repo.8.A"], &[])));
-        // A fork was derived from it, so its copy was complete.
-        broken(check(with_fork_actor(records(), &["repo.9.B"], &["repo.9.B"])));
     }
 
     #[test]

@@ -1,12 +1,13 @@
 //! The conversion scenario's rules, on the files a conversion leaves: it
-//! changes only the writer features, the gate and the ops log (C2), a
+//! changes only the writer features and the ops log (C2), a
 //! finished one leaves the target layout and nothing else (C3), nothing
 //! overwrites the converted `$ROOT/repo` afterwards (C5),
 //! `repo.d` is deleted only once `$ROOT/repo` holds the conversion's version
 //! without the feature (C6), and a writer during an interrupted conversion to
 //! the object store layout fails with the error naming it (C7). C1 is the
 //! repository oracle over every phase's logs, C4 rule I1 on the first version
-//! a conversion from the object store layout builds.
+//! a conversion from the object store layout builds. A rerun that finds a
+//! planted object-store-layout write must keep it (C3).
 
 use std::{fs, io, path::Path};
 
@@ -79,7 +80,7 @@ fn named_backup(bytes: &[u8]) -> Result<String, String> {
 /// C2: the defect of `after`, the repo info a conversion in `direction`
 /// wrote, against `before`, the backup its newest ops-log entry names: it
 /// must be `before` with only the writer feature added (from the object store
-/// layout) or removed with the gate (to it), the same status, and exactly
+/// layout) or removed (to it), the same status, and exactly
 /// one `RepoStatusChangedUpdate` on top of `before`'s ops log. `Err` only if
 /// the backup can't be read.
 pub fn conversion_defect(
@@ -132,15 +133,6 @@ fn compare(
             "it wrote the writer features {:?}, not {expected_after:?}",
             features(&after, "the converted repo info")?
         ));
-    }
-    if direction == Direction::ToObjectStore
-        && !after
-            .header()
-            .map_err(|err| field("the header", err))?
-            .writer_features()
-            .is_empty()
-    {
-        return Err("it kept the gate".to_owned());
     }
     let status = |info: &RepoInfo| info.status().map_err(|err| field("the status", err));
     if status(&before)? != status(&after)? {
@@ -221,11 +213,39 @@ fn compare(
     Ok(())
 }
 
+/// The current version of `repo.d`, that of its one marker, or why there is
+/// none: `repo.d` is missing, holds another number of markers, a malformed
+/// one, or not its version.
+pub fn current_version(storage_root: &Path) -> anyhow::Result<Result<Vec<u8>, String>> {
+    let repo_d = storage_root.join(REPO_D);
+    if !exists(&repo_d)? {
+        return Ok(Err("there is no repo.d".to_owned()));
+    }
+    let mut markers = Vec::new();
+    for entry in
+        fs::read_dir(&repo_d).with_context(|| format!("listing {}", repo_d.display()))?
+    {
+        let name = entry?.file_name().to_string_lossy().into_owned();
+        if let Some(marker) = name.strip_prefix(MARKER_PREFIX) {
+            markers.push(marker.to_owned());
+        }
+    }
+    let [marker] = &markers[..] else {
+        return Ok(Err(format!("repo.d has {} markers", markers.len())));
+    };
+    // `<K>.<N>.<h>`: the version file is `<N>.<h>`.
+    let Some((_, version)) = marker.split_once('.') else {
+        return Ok(Err(format!("repo.d has the malformed marker latest.{marker}")));
+    };
+    Ok(read(&repo_d.join(version))?
+        .ok_or_else(|| format!("repo.d has no version {version}")))
+}
+
 /// C3: what keeps the storage root from being in the layout `direction`
 /// converts to, and nothing else: to the object store layout, a `$ROOT/repo`
-/// without writer features or gate, no `repo.d` and no `repo.d.tmp.*`; from
-/// it, `repo.d` with one marker whose version `$ROOT/repo` copies, listing
-/// the feature, and no `repo.d.tmp.*`.
+/// without writer features, no `repo.d` and no `repo.d.tmp.*`; from
+/// it, `repo.d` with one marker whose version lists the feature, no
+/// `$ROOT/repo` and no `repo.d.tmp.*`.
 pub fn end_state_defect(
     direction: Direction,
     storage_root: &Path,
@@ -234,74 +254,52 @@ pub fn end_state_defect(
     if !tmp.is_empty() {
         return Ok(Some(format!("it left {}", tmp.join(", "))));
     }
-    let Some(mirror) = read(&storage_root.join(REPO_KEY))? else {
-        return Ok(Some("there is no repo".to_owned()));
-    };
-    let repo_d = storage_root.join(REPO_D);
+    let repo = storage_root.join(REPO_KEY);
     match direction {
         Direction::ToObjectStore => {
-            if exists(&repo_d)? {
+            if exists(&storage_root.join(REPO_D))? {
                 return Ok(Some("repo.d exists".to_owned()));
             }
-            let info = match decode(&mirror, "repo") {
+            let Some(bytes) = read(&repo)? else {
+                return Ok(Some("there is no repo".to_owned()));
+            };
+            let info = match decode(&bytes, "repo") {
                 Ok(info) => info,
                 Err(detail) => return Ok(Some(detail)),
             };
-            let listed = info.raw_writer_features().map(|names| names.is_empty());
-            let gated = info.header().map(|header| !header.writer_features().is_empty());
-            Ok(match (listed, gated) {
-                (Ok(true), Ok(false)) => None,
-                (Ok(_), Ok(_)) => {
-                    Some("repo lists writer features or carries the gate".to_owned())
-                }
-                (Err(err), _) | (_, Err(err)) => {
-                    Some(format!("reading repo: {}", err.kind()))
-                }
+            Ok(match info.raw_writer_features() {
+                Ok(names) if names.is_empty() => None,
+                Ok(_) => Some("repo lists writer features".to_owned()),
+                Err(err) => Some(format!("reading repo: {}", err.kind())),
             })
         }
         Direction::FromObjectStore => {
-            if !exists(&repo_d)? {
-                return Ok(Some("there is no repo.d".to_owned()));
-            }
-            let mut markers = Vec::new();
-            for entry in fs::read_dir(&repo_d)
-                .with_context(|| format!("listing {}", repo_d.display()))?
-            {
-                let name = entry?.file_name().to_string_lossy().into_owned();
-                if let Some(marker) = name.strip_prefix(MARKER_PREFIX) {
-                    markers.push(marker.to_owned());
-                }
-            }
-            let [marker] = &markers[..] else {
-                return Ok(Some(format!("repo.d has {} markers", markers.len())));
+            let current = match current_version(storage_root)? {
+                Ok(current) => current,
+                Err(detail) => return Ok(Some(detail)),
             };
-            // `<K>.<N>.<h>`: the version file is `<N>.<h>`.
-            let Some((_, version)) = marker.split_once('.') else {
-                return Ok(Some(format!(
-                    "repo.d has the malformed marker latest.{marker}"
-                )));
-            };
-            let Some(current) = read(&repo_d.join(version))? else {
-                return Ok(Some(format!("repo.d has no version {version}")));
-            };
-            if current != mirror {
-                return Ok(Some(format!(
-                    "repo isn't a copy of the current version {version}"
-                )));
+            if exists(&repo)? {
+                return Ok(Some("repo exists next to repo.d".to_owned()));
             }
-            Ok(match layout_v1::lists_feature(&mirror) {
+            Ok(match layout_v1::lists_feature(&current) {
                 Ok(true) => None,
-                Ok(false) => Some(format!("repo doesn't list {}", layout_v1::FEATURE)),
-                Err(err) => Some(format!("repo doesn't decode: {}", err.kind())),
+                Ok(false) => Some(format!(
+                    "the current version doesn't list {}",
+                    layout_v1::FEATURE
+                )),
+                Err(err) => {
+                    Some(format!("the current version doesn't decode: {}", err.kind()))
+                }
             })
         }
     }
 }
 
-/// Whether the storage root is as a rerun of the conversion to the object store
-/// layout leaves it when its listing of the storage root misses `repo.d`
-/// (an accepted limit): `repo.d` is there, its current version, that of its
-/// highest marker, lacks the feature, and `$ROOT/repo` is a copy of it.
+/// Whether the storage root is as a run of the conversion to the object
+/// store layout leaves it when its listing of the storage root misses
+/// `repo.d` (an accepted limit): `repo.d` is there, its current version, that
+/// of its highest marker, lacks the feature, and `$ROOT/repo` is a copy of
+/// it, or missing if no run wrote it yet.
 pub fn left_by_stale_root_listing(storage_root: &Path) -> anyhow::Result<bool> {
     let repo_d = storage_root.join(REPO_D);
     let entries = match fs::read_dir(&repo_d) {
@@ -328,12 +326,9 @@ pub fn left_by_stale_root_listing(storage_root: &Path) -> anyhow::Result<bool> {
         }
     }
     let Some((_, version)) = current else { return Ok(false) };
-    let (Some(current), Some(mirror)) =
-        (read(&repo_d.join(version))?, read(&storage_root.join(REPO_KEY))?)
-    else {
-        return Ok(false);
-    };
-    Ok(current == mirror && matches!(layout_v1::lists_feature(&mirror), Ok(false)))
+    let Some(current) = read(&repo_d.join(version))? else { return Ok(false) };
+    let copied = read(&storage_root.join(REPO_KEY))?.is_none_or(|repo| repo == current);
+    Ok(copied && matches!(layout_v1::lists_feature(&current), Ok(false)))
 }
 
 /// C5: what shows that something overwrote the repository after a conversion
@@ -343,10 +338,10 @@ pub fn object_store_overwritten(storage_root: &Path) -> anyhow::Result<Option<St
     if exists(&storage_root.join(REPO_D))? {
         return Ok(Some("repo.d exists".to_owned()));
     }
-    let Some(mirror) = read(&storage_root.join(REPO_KEY))? else {
+    let Some(repo) = read(&storage_root.join(REPO_KEY))? else {
         return Ok(Some("there is no repo".to_owned()));
     };
-    Ok(match layout_v1::lists_feature(&mirror) {
+    Ok(match layout_v1::lists_feature(&repo) {
         Ok(false) => None,
         Ok(true) => Some(format!("repo lists {}", layout_v1::FEATURE)),
         Err(err) => Some(format!("repo doesn't decode: {}", err.kind())),
@@ -362,15 +357,15 @@ pub fn deleted_history(storage_root: &Path) -> anyhow::Result<Option<String>> {
         return Ok(None);
     }
     let gone = |detail: String| Ok(Some(format!("repo.d is gone, and {detail}")));
-    let Some(mirror) = read(&storage_root.join(REPO_KEY))? else {
+    let Some(repo) = read(&storage_root.join(REPO_KEY))? else {
         return gone("there is no repo".to_owned());
     };
-    match layout_v1::lists_feature(&mirror) {
+    match layout_v1::lists_feature(&repo) {
         Ok(false) => {}
         Ok(true) => return gone(format!("repo still lists {}", layout_v1::FEATURE)),
         Err(err) => return gone(format!("repo doesn't decode: {}", err.kind())),
     }
-    let backup = match named_backup(&mirror) {
+    let backup = match named_backup(&repo) {
         Ok(backup) => backup,
         Err(detail) => return gone(format!("repo: {detail}")),
     };
@@ -412,6 +407,7 @@ mod tests {
     use icechunk_fs::FilesystemStorage;
 
     use super::*;
+    use crate::convert::status_changed;
 
     /// A repository in the object store layout in `root` with one commit on
     /// `main`.
@@ -426,8 +422,12 @@ mod tests {
         session.commit("one").execute().await.unwrap();
     }
 
-    fn mirror(root: &Path) -> Vec<u8> {
+    fn repo(root: &Path) -> Vec<u8> {
         fs::read(root.join(REPO_KEY)).unwrap()
+    }
+
+    fn current(root: &Path) -> Vec<u8> {
+        current_version(root).unwrap().unwrap()
     }
 
     #[tokio::test]
@@ -438,21 +438,22 @@ mod tests {
         assert_eq!(object_store_overwritten(root).unwrap(), None);
         let storage = FilesystemStorage::new(root).unwrap();
         storage.convert_to_filesystem_layout().await.unwrap();
+        assert!(!root.join(REPO_KEY).exists());
         assert_eq!(
-            conversion_defect(Direction::FromObjectStore, &mirror(root), root).unwrap(),
+            conversion_defect(Direction::FromObjectStore, &current(root), root).unwrap(),
             None
         );
         assert_eq!(end_state_defect(Direction::FromObjectStore, root).unwrap(), None);
         assert!(end_state_defect(Direction::ToObjectStore, root).unwrap().is_some());
         assert!(object_store_overwritten(root).unwrap().is_some());
         assert_eq!(deleted_history(root).unwrap(), None);
-        assert!(!left_by_stale_root_listing(root).unwrap(), "repo lists the feature");
+        assert!(!left_by_stale_root_listing(root).unwrap(), "it lists the feature");
 
         let storage: Arc<FilesystemStorage> =
             Arc::new(FilesystemStorage::new(root).unwrap());
         storage.convert_to_object_store_layout().await.unwrap();
         assert_eq!(
-            conversion_defect(Direction::ToObjectStore, &mirror(root), root).unwrap(),
+            conversion_defect(Direction::ToObjectStore, &repo(root), root).unwrap(),
             None
         );
         assert_eq!(end_state_defect(Direction::ToObjectStore, root).unwrap(), None);
@@ -461,7 +462,7 @@ mod tests {
         assert!(!left_by_stale_root_listing(root).unwrap(), "no repo.d");
         // The wrong direction is a mismatch.
         assert!(
-            conversion_defect(Direction::FromObjectStore, &mirror(root), root)
+            conversion_defect(Direction::FromObjectStore, &repo(root), root)
                 .unwrap()
                 .is_some()
         );
@@ -477,13 +478,13 @@ mod tests {
             .convert_to_filesystem_layout()
             .await
             .unwrap();
-        let after = mirror(root);
+        let after = current(root);
         let backup = named_backup(&after).unwrap();
         let path = root.join(OVERWRITTEN_FILES_PATH).join(&backup);
         let before = fs::read(&path).unwrap();
 
-        // A backup of another repo info: one with another ops log.
-        let other = crate::fork::fork_bytes(&before, "repo.9.Z").unwrap();
+        // A backup of another repo info: one with another status and ops log.
+        let other = status_changed(&before, "repo.9.Z").unwrap();
         fs::write(&path, &other).unwrap();
         let defect = conversion_defect(Direction::FromObjectStore, &after, root).unwrap();
         assert!(
@@ -544,18 +545,21 @@ mod tests {
                 fs::remove_dir(path).unwrap();
             }
         }
-        // A mirror that isn't the current version.
-        let mirror_bytes = mirror(root);
-        let other = crate::fork::fork_bytes(&mirror_bytes, "repo.9.Z").unwrap();
+        assert_eq!(end_state_defect(Direction::FromObjectStore, root).unwrap(), None);
+        // A repo info in `$ROOT/repo` next to `repo.d`.
+        let other = status_changed(&current(root), "repo.9.Z").unwrap();
         fs::write(root.join(REPO_KEY), other).unwrap();
         let defect = end_state_defect(Direction::FromObjectStore, root).unwrap();
-        assert!(defect.as_deref().is_some_and(|d| d.contains("copy")), "{defect:?}");
+        assert!(
+            defect.as_deref().is_some_and(|d| d.contains("repo exists")),
+            "{defect:?}"
+        );
     }
 
-    /// The state the sabotage `DeleteDirBeforePublish` leaves: `repo.d` gone
-    /// while `$ROOT/repo` still holds the mirror with the feature.
+    /// The state the sabotage `DeleteDirBeforeRepoWrite` leaves: `repo.d`
+    /// gone before `$ROOT/repo` was written.
     #[tokio::test]
-    async fn c6_c3_and_c5_catch_repo_d_deleted_before_the_publication() {
+    async fn c6_c3_and_c5_catch_repo_d_deleted_before_writing_repo() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         object_store_repo(root).await;
@@ -567,7 +571,7 @@ mod tests {
         fs::remove_dir_all(root.join(REPO_D)).unwrap();
         let defect = deleted_history(root).unwrap();
         assert!(
-            defect.as_deref().is_some_and(|d| d.contains("still lists")),
+            defect.as_deref().is_some_and(|d| d.contains("there is no repo")),
             "{defect:?}"
         );
         assert!(end_state_defect(Direction::ToObjectStore, root).unwrap().is_some());

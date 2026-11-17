@@ -1,7 +1,7 @@
 //! The checks before every modification (writer features, required features,
-//! shape, status) and the durable-but-forked change, through real
-//! repositories on in-memory storage and a wrapper that changes what the
-//! storage implements and how its repo-info writes end.
+//! shape, status), through real repositories on in-memory storage and a
+//! wrapper that changes what the storage implements and how its repo-info
+//! writes end.
 //!
 //! Compiled only for tests.
 
@@ -23,16 +23,10 @@ use crate::{
     asset_manager::write_repo_info,
     format::{
         IcechunkFormatErrorKind, IcechunkResult, Path, REPO_INFO_FILE_PATH, SnapshotId,
-        flatbuffers::generated,
         format_constants::SpecVersionBin,
-        repo_info::{
-            RepoAvailability, RepoInfo, RepoStatus, StoredRepoStatus, WritableShapeMode,
-        },
+        repo_info::{RepoAvailability, RepoInfo, RepoStatus},
         snapshot::{Snapshot, SnapshotProperties},
-        writer_features::{
-            FeatureName, IcechunkVersion, MinVersion, WRITER_FEATURES_SINCE,
-            WriterFeature,
-        },
+        writer_features::{FeatureName, IcechunkVersion, MinVersion, WriterFeature},
     },
     ops::{
         GCError,
@@ -51,16 +45,15 @@ use crate::{
 type TestResult<A = ()> = Result<A, Box<dyn std::error::Error>>;
 
 const LAYOUT: WriterFeature = WriterFeature::FilesystemLayoutV1;
+const LAYOUT_SINCE: IcechunkVersion = IcechunkVersion { major: 2, minor: 4, patch: 0 };
 
 /// Intercepts the storage [`TestStorage::wrapped`] makes: it implements and
 /// requires `filesystem-layout-v1` when `requires_layout`, and its repo-info
-/// writes can be made to land and then report a fork, or to fail for missing
-/// features.
+/// writes can be made to fail for missing features.
 #[derive(Debug)]
 struct TestStorage {
     backend: Arc<dyn Storage + Send + Sync>,
     requires_layout: bool,
-    fork_after_update: AtomicBool,
     refuse_for_missing_features: AtomicBool,
     repo_info_writes: AtomicUsize,
 }
@@ -70,7 +63,6 @@ impl TestStorage {
         Arc::new(Self {
             backend,
             requires_layout,
-            fork_after_update: AtomicBool::new(false),
             refuse_for_missing_features: AtomicBool::new(false),
             repo_info_writes: AtomicUsize::new(0),
         })
@@ -116,23 +108,9 @@ impl Intercept for TestStorage {
                 ));
             }
         }
-        let res = backend
+        backend
             .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
-            .await?;
-        match res {
-            VersionedUpdateResult::Updated { new_version }
-                if path == REPO_INFO_FILE_PATH
-                    && self.fork_after_update.load(Ordering::SeqCst) =>
-            {
-                Err(StorageError::capture(
-                    StorageErrorKind::RepositoryForkedAfterUpdate {
-                        new_version: Box::new(new_version),
-                        detail: "test fork".to_string(),
-                    },
-                ))
-            }
-            res => Ok(res),
-        }
+            .await
     }
 }
 
@@ -369,12 +347,8 @@ async fn assert_reads_work(repo: &Repository, first: &SnapshotId) -> TestResult 
 async fn modifications_refuse_features_the_storage_does_not_implement() -> TestResult {
     for (feature, min_version, version_text) in [
         ("test-feature-v1", MinVersion::Newer, "a newer Icechunk"),
-        (LAYOUT.name(), MinVersion::Icechunk(WRITER_FEATURES_SINCE), "Icechunk 2.4.0"),
+        (LAYOUT.name(), MinVersion::Icechunk(LAYOUT_SINCE), "Icechunk 2.4.0"),
     ] {
-        assert_eq!(
-            WRITER_FEATURES_SINCE,
-            IcechunkVersion { major: 2, minor: 4, patch: 0 }
-        );
         let storage = in_memory_test_storage(false).await?;
         let mut fixture = fixture(storage.wrapped()).await?;
         rewrite_repo_info(&fixture.repo, change_features(&[feature], &[])).await?;
@@ -442,129 +416,51 @@ async fn every_op_succeeds_when_the_checks_pass() -> TestResult {
 }
 
 /// A malformed repo info is readable, not `Online`, and a format error to
-/// modify; a status-only change writes a well-formed status.
+/// modify, status-only changes included; nothing is written.
 #[tokio_test]
-async fn malformed_shape_refuses_changes_except_the_status() -> TestResult {
-    let storage = in_memory_test_storage(false).await?;
-    let Fixture { repo, first, .. } = fixture(storage.wrapped()).await?;
-    let set_at = Utc::now();
-    rewrite_repo_info(&repo, |info| {
-        info.with_raw_header_for_tests(
-            vec![],
-            StoredRepoStatus::for_tests(
-                generated::RepoAvailability::ReadOnly,
-                set_at,
-                None,
-                Some(StoredRepoStatus::for_tests(
-                    generated::RepoAvailability::Online,
-                    set_at,
-                    None,
-                    None,
-                )),
-            ),
-        )
+async fn malformed_shape_refuses_every_change() -> TestResult {
+    let storage = in_memory_test_storage(true).await?;
+    let mut fixture = fixture(storage.wrapped()).await?;
+    rewrite_repo_info(&fixture.repo, |info| {
+        let duplicated = vec![FeatureName::from(LAYOUT), FeatureName::from(LAYOUT)];
+        info.with_raw_header_for_tests(duplicated, info.raw_status()?)
     })
     .await?;
-
-    let err = repo.create_branch("other", &first).await.err().map(|e| e.kind);
-    assert!(
-        matches!(
-            err,
-            Some(RepositoryErrorKind::FormatError(
-                IcechunkFormatErrorKind::MalformedRepoInfo(_)
-            ))
-        ),
-        "{err:?}"
-    );
-    let status = repo.get_status().await?;
-    assert_eq!(status.availability, RepoAvailability::ReadOnly);
-    assert_reads_work(&repo, &first).await?;
-
-    repo.set_status(&RepoStatus {
-        availability: RepoAvailability::Online,
-        set_at: Utc::now(),
-        limited_availability_reason: None,
-    })
-    .await?;
-    let (info, _) = repo.asset_manager().fetch_repo_info().await?;
-    info.check_writable_shape(WritableShapeMode::AnyChange)?;
-    assert_eq!(repo.get_status().await?.availability, RepoAvailability::Online);
-    repo.create_branch("other", &first).await?;
-    Ok(())
-}
-
-/// A change that lands and then finds a fork is durable: it isn't retried,
-/// the cache holds it, and a commit's error carries its snapshot id.
-#[tokio_test]
-async fn durable_update_that_found_a_fork_is_not_retried() -> TestResult {
-    let storage = in_memory_test_storage(false).await?;
-    let Fixture { repo, mut commit_session, first, .. } =
-        fixture(storage.wrapped()).await?;
-    storage.fork_after_update.store(true, Ordering::SeqCst);
     let writes_before = storage.repo_info_writes.load(Ordering::SeqCst);
 
-    let err = commit_session.commit("second").execute().await.err().ok_or("no error")?;
-    let msg = err.kind.to_string();
-    let SessionErrorKind::CommitDurableButRepositoryForked {
-        snapshot, new_version, ..
-    } = err.kind
-    else {
-        panic!("{msg}");
-    };
-    assert_eq!(storage.repo_info_writes.load(Ordering::SeqCst), writes_before + 1);
-    for part in [
-        snapshot.to_string().as_str(),
-        "durable",
-        "must not be retried",
-        "forked",
-        "recovery",
-        "test fork",
-    ] {
-        assert!(msg.contains(part), "{part}: {msg}");
+    for (op, err) in run_every_op(&mut fixture).await {
+        assert!(
+            matches!(
+                err,
+                Some(RepositoryErrorKind::FormatError(
+                    IcechunkFormatErrorKind::MalformedRepoInfo(_)
+                ))
+            ),
+            "{op:?}: {err:?}"
+        );
     }
-    let (cached, version) =
-        repo.asset_manager().cached_repo_info().ok_or("nothing cached")?;
-    assert_eq!(version, *new_version);
-    assert_eq!(cached.resolve_branch("main")?, snapshot);
-    // The session is done: committing again can't duplicate the commit.
-    let again = commit_session.commit("again").execute().await.err().map(|e| e.kind);
-    assert!(matches!(again, Some(SessionErrorKind::CommitNotAllowed)), "{again:?}");
-
-    let err = repo.create_branch("other", &first).await.err().map(|e| e.kind);
-    let Some(RepositoryErrorKind::StorageError(
-        StorageErrorKind::RepositoryForkedAfterUpdate { new_version, .. },
-    )) = err
-    else {
-        panic!("{err:?}");
-    };
-    assert_eq!(storage.repo_info_writes.load(Ordering::SeqCst), writes_before + 2);
-    let (cached, version) =
-        repo.asset_manager().cached_repo_info().ok_or("nothing cached")?;
-    assert_eq!(version, *new_version);
-    assert_eq!(cached.resolve_branch("other")?, first);
-
-    storage.fork_after_update.store(false, Ordering::SeqCst);
-    let fresh = Repository::open(storage.wrapped()).execute().await?;
-    assert_eq!(fresh.lookup_branch("main").await?, snapshot);
-    assert_eq!(fresh.lookup_branch("other").await?, first);
+    assert_eq!(storage.repo_info_writes.load(Ordering::SeqCst), writes_before);
+    let status = fixture.repo.get_status().await?;
+    assert_eq!(status.availability, RepoAvailability::ReadOnly);
+    assert_reads_work(&fixture.repo, &fixture.first).await?;
     Ok(())
 }
 
-/// Creation lists the storage's required features, with the gate over an
-/// `Online` status; through other storage the repository is read-only.
+/// Creation lists the storage's required features with a plain `Online`
+/// status; through a storage that doesn't implement them, the repository is
+/// read-only.
 #[tokio_test]
 async fn creation_lists_the_required_features() -> TestResult {
     let storage = in_memory_test_storage(true).await?;
     let repo = Repository::create(storage.wrapped()).execute().await?;
     let (info, _) = repo.asset_manager().fetch_repo_info().await?;
     assert_eq!(info.raw_writer_features()?, [FeatureName::from(LAYOUT)]);
-    info.check_writable_shape(WritableShapeMode::AnyChange)?;
+    info.check_writable_shape()?;
     assert_eq!(info.status()?.availability, RepoAvailability::Online);
     assert_eq!(repo.get_status().await?.availability, RepoAvailability::Online);
-    let gate = info.raw_status()?;
-    assert_eq!(gate.repo_status().availability, RepoAvailability::Online);
-    assert!(serde_json::to_value(&gate)?["underlying"].is_object());
-    assert_eq!(serde_json::to_value(&gate)?["availability"], "ReadOnly");
+    let stored = serde_json::to_value(info.raw_status()?)?;
+    assert_eq!(stored["availability"], "Online", "{stored}");
+    assert_eq!(stored["limited_availability_reason"], serde_json::Value::Null);
 
     let other = Repository::open(Arc::clone(&storage.backend)).execute().await?;
     let first = other.lookup_branch("main").await?;
@@ -574,7 +470,7 @@ async fn creation_lists_the_required_features() -> TestResult {
             &err,
             Some(RepositoryErrorKind::StorageError(
                 StorageErrorKind::MissingWriterFeatures {
-                    min_version: MinVersion::Icechunk(WRITER_FEATURES_SINCE),
+                    min_version: MinVersion::Icechunk(LAYOUT_SINCE),
                     ..
                 }
             ))

@@ -16,9 +16,9 @@ use futures::{Stream, StreamExt as _, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
-    RepositoryCreation, Settings, Storage, StorageContext, StorageError, StorageInfo,
-    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
+    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
+    StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use icechunk_storage::sealed;
 
@@ -179,14 +179,6 @@ impl Storage for MeteringStorage {
 
     async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
         self.backend.writer_features().await
-    }
-
-    async fn gc_hook(
-        &self,
-        ctx: &StorageContext<'_>,
-        phase: GcPhase<'_>,
-    ) -> StorageResult<()> {
-        self.backend.gc_hook(ctx, phase).await
     }
 
     async fn create_location_if_needed(&self) -> StorageResult<()> {

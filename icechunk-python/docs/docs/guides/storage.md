@@ -315,7 +315,7 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 Icechunk can also store a repository in a filesystem, given the path to the location of the store. There are two filesystem backends:
 
 - [`local_filesystem_storage`](../reference/storage.md#icechunk.storage.local_filesystem_storage). Like every other backend, it stores repositories in the object store layout: it emulates an object store on the filesystem, with the repo info in a single `repo` file. It is not safe for concurrent commits.
-- [`filesystem_storage`](../reference/storage.md#icechunk.storage.filesystem_storage), experimental. It is safe for concurrent writers on filesystems that meet [its requirements](#requirements-and-limits-of-filesystem_storage), including network filesystems such as NFS. It stores repositories in [the filesystem layout](../reference/spec-filesystem-layout-v1.md), which other backends and older Icechunk versions can read but not modify.
+- [`filesystem_storage`](../reference/storage.md#icechunk.storage.filesystem_storage), experimental. It is safe for concurrent writers on filesystems that meet [its requirements](#requirements-and-limits-of-filesystem_storage), including network filesystems such as NFS. It stores repositories in [the filesystem layout](../reference/spec-filesystem-layout-v1.md), which other backends and older Icechunk versions can't open.
 
 === "Local filesystem"
 
@@ -343,24 +343,22 @@ Icechunk can also store a repository in a filesystem, given the path to the loca
 #### Requirements and limits of `filesystem_storage`
 
 - **Filesystem.** The filesystem must provide hard links, atomic rename by name and exclusive directory rename, and the whole repository must be on one filesystem, with no mount point inside it. Icechunk doesn't check for them.
-- **Other backends and older versions.** The repository lists the `filesystem-layout-v1` [writer feature](../reference/spec-v2-2.md#writer-features), which only `filesystem_storage` implements. Other backends, and Icechunk older than 2.4.0 with any backend, read the repository through the mirror and refuse to modify it. From Icechunk 2.4.0, the refusal is a [`ReadOnlyError`](../reference/index.md#icechunk.ReadOnlyError) of kind `missing-writer-features` that names the feature. Icechunk 2.0 to 2.3 fail with a message that names the feature and the version it needs, except garbage collection and expiration, which say only that the repository is read-only. Never change the status with Icechunk older than 2.4.0, and never write `repo` by hand.
+- **Other backends and older versions.** The repository lists the `filesystem-layout-v1` [writer feature](../reference/spec-v2-2.md#writer-features), which only `filesystem_storage` implements. The repository info is in `repo.d/`, and there is no `repo` file, so other backends, and Icechunk older than 2.4.0 with any backend, can't open it: they report that the repository doesn't exist. To use the repository with them, [convert it to the object store layout](#switching-an-existing-repo). Never write a `repo` file into the repository's root, by hand or by creating a repository there with another backend: that makes an unrelated repository, whose garbage collection can delete files of this one.
 - **Unix only.** `filesystem_storage` is available on Unix platforms only; elsewhere it raises an error when constructed.
 - <a id="reads-can-lag"></a>**Commit visibility can lag.** Unlike object stores, a commit made on one machine isn't always visible on another right away. Commits are never lost, but a reader can open a branch and get its previous tip without any error. How long a reader can lag depends on the filesystem and the client, but Icechunk makes a best effort to minimize this time, and the time collapses to zero in some filesystems. To hand a commit over between machines, pass its snapshot id and open it with [`Repository.readonly_session(snapshot_id=...)`](../reference/index.md#icechunk.Repository.readonly_session).
 - **Spurious conflicts.** In rare cases, when the filesystem loses the reply to a change and then many other changes land, or directory listings stay stale, the change reports a conflict although it landed. A change is never reported as done when it didn't land. Check the branch before retrying a commit that failed this way.
 - **Icechunk 1 repositories** are refused. See [Switching an existing repo](#switching-an-existing-repo).
 - **Conditional writes.** Repositories whose config disables `unsafe_use_conditional_create` or `unsafe_use_conditional_update` log a warning; the setting is ignored and the backend always uses its own conditional writes.
 
-`filesystem_storage` takes one optional setting, `fsync` (default `True`): whether to fsync data files after writes, and their directories before each change. Turning it off risks losing writes after an OS crash or power loss. The fsyncs of the repository info and the mirror always run.
+`filesystem_storage` takes one optional setting, `fsync` (default `True`): whether to fsync data files after writes, and their directories before each change. Turning it off risks losing writes after an OS crash or power loss. The fsyncs of the repository info always run.
 
 ```python
 icechunk.filesystem_storage("/path/to/my/dataset", fsync=False)
 ```
 
-#### The mirror
+#### Stopping writers and copying a repository
 
-Other backends and older Icechunk versions read the repository through the mirror `repo` object. Every change publishes this object before returning, but it can lag behind the current version in cases of process crashes or heavy contention.
-
-To guarantee the mirror is current, wait until every process that changed the repository has finished, then set the status to read-only. Do this before serving a finished repository read-only through the mirror:
+While the status is read-only, every modification of the repository is refused, garbage collection and expiration included, except status changes and the conversions. To stop every writer, for example before copying the repository, set the status to read-only:
 
 ```python
 storage = icechunk.filesystem_storage("/path/to/my/dataset")
@@ -368,21 +366,11 @@ repo = icechunk.Repository.open(storage)
 repo.set_status(icechunk.RepoStatus(icechunk.RepoAvailability.read_only))
 ```
 
-[`FilesystemStorage.publish_mirror`](../reference/storage.md#icechunk.storage.FilesystemStorage.publish_mirror) repairs a lagging mirror without changing the repository, and is safe while writers run. It is best effort: it publishes the version it sees, which a change landing meanwhile, or a stale listing, can make older than the current one.
-
-```python
-outcome = storage.publish_mirror()
-if not outcome.current:
-    print("the mirror holds", outcome.left)
-```
-
-#### Stopping writers and copying a repository
-
-While the status is read-only, every modification of the repository is refused, garbage collection and expiration included, except status changes and the conversions. To stop every writer, for example before copying the repository, set the status to read-only. To copy a repository consistently:
+To copy a repository consistently:
 
 1. Set the status to read-only, as above, and keep it until the copy is complete.
-2. Copy every entry under the repository's root, `repo.d/` and `repo` included, in any order.
-3. Check the copy: its `repo.d/` has exactly one marker, `latest.<K>.<N>.<h>`; `repo.d/<N>.<h>` has the SHA-256 `h` and the status read-only; and the copied `repo` has the SHA-256 `h`. If the marker or its version fails the check, start over. If only `repo` differs, run `publish_mirror()` on the original, copy `repo` again and check again; if it still differs, set the status to read-only again and start over.
+2. Copy every entry under the repository's root, `repo.d/` included, in any order.
+3. Check the copy: its `repo.d/` has exactly one marker, `latest.<K>.<N>.<h>`, and `repo.d/<N>.<h>` has the SHA-256 `h` and the status read-only. Otherwise, start over.
 
     ```python
     import hashlib
@@ -398,15 +386,14 @@ While the status is read-only, every modification of the repository is refused, 
     assert sha256(copy / "repo.d" / f"{n}.{h}") == h, "start over"
     copied = icechunk.Repository.open(icechunk.filesystem_storage(str(copy)))
     assert copied.get_status().availability == icechunk.RepoAvailability.read_only, "start over"
-    assert sha256(copy / "repo") == h, "publish the mirror, copy repo again"
     ```
 
 4. Set the status of the original back to online.
 
-The copy keeps the read-only status. On a filesystem, `filesystem_storage` can set it online and write to it. A copy on other storage, such as an object store, can be read through its mirror, but every modification is refused. To get a copy that can be modified on other storage:
+The copy keeps the read-only status. On a filesystem, `filesystem_storage` can set it online and write to it. Other storage, such as an object store, needs the object store layout: convert a consistent copy made on a filesystem with `convert_to_object_store_layout()`, as described in [Switching an existing repo](#switching-an-existing-repo), upload it, and set its status to online. Or convert the original:
 
 1. Set the status of the original to read-only.
-2. Convert the original to the object store layout with `convert_to_object_store_layout()`, as described in [Switching an existing repo](#switching-an-existing-repo).
+2. Convert the original to the object store layout with `convert_to_object_store_layout()`.
 3. Copy it.
 4. If the original should stay in the filesystem layout, convert it back with `convert_to_filesystem_layout()`.
 5. Set the statuses of the original and the copy to online.
@@ -417,7 +404,7 @@ Repositories created with `local_filesystem_storage`, another backend or an Icec
 
 !!! warning "Conversions are administrative operations"
 
-    Run a conversion with nothing else using the repository: no writer in any process, no process still publishing the mirror after its change, and no other conversion. What happens otherwise is undefined. If a conversion is interrupted, run the same command again, under the same condition, before anything else uses the repository.
+    Run a conversion with nothing else using the repository: no writer in any process and no other conversion. What happens otherwise is undefined. If a conversion is interrupted, run the same command again, under the same condition, before anything else uses the repository.
 
 Both conversions change only the writer features and the ops log, and keep the repository's status, whatever it is. Neither copies or rewrites data.
 
@@ -432,9 +419,9 @@ To convert a repository to the filesystem layout:
     repo = icechunk.Repository.open(storage)
     ```
 
-3. From then on, modify the repository only with `filesystem_storage`.
+3. From then on, use the repository only with `filesystem_storage`: other backends can't open it.
 
-To convert it back to the object store layout, stop every writer and run `convert_to_object_store_layout()`. It changes the repository to a version without the writer feature, publishes it as `repo`, then deletes `repo.d/`. It returns `True` if it converted the repository and `False` if it was in the object store layout already. A run interrupted before its change leaves the repository usable.
+To convert it back to the object store layout, stop every writer and run `convert_to_object_store_layout()`. It changes the repository to a version without the writer feature, creates `repo` with it, then deletes `repo.d/`. It never replaces an existing `repo`. It refuses to start while a `repo` file exists next to `repo.d/`, which an interrupted `convert_to_filesystem_layout()` leaves: run that again to complete it. A rerun of an interrupted `convert_to_object_store_layout()` keeps a `repo` it finds only if it holds a repository in the object store layout; otherwise it stops, keeping `repo.d/`, with an error that names the manual recovery. It returns `True` if it converted the repository and `False` if it was in the object store layout already. A run interrupted before its change leaves the repository usable.
 
 ```python
 storage = icechunk.filesystem_storage("/path/to/my/dataset")
@@ -447,33 +434,6 @@ Also note:
 - Icechunk 1 repositories must first be migrated to Icechunk 2 with `local_filesystem_storage`. See [Migrate to 2.0](../reference/migration-2.md).
 - A repository config that disables conditional writes only logs a harmless warning; see **Conditional writes** in [Requirements and limits](#requirements-and-limits-of-filesystem_storage).
 - Pickled storage carries the absolute root path. With Dask or distributed, every worker must see the filesystem at the same path.
-
-#### Forks
-
-A _fork_ is a `repo` file that doesn't list the `filesystem-layout-v1` writer feature, next to a `repo.d/` that doesn't hold it. `repo` and `repo.d/` then hold diverging histories. To other backends and older Icechunk versions, the `repo` side is an ordinary repository in the object store layout: they can commit to it and collect garbage in it, and that garbage collection deletes files that only the `repo.d/` history references.
-
-Forks come only from unsupported writes of `repo`:
-
-- **Icechunk older than 2.4.0 changing the status.** Those versions can't modify the repository, except its status, and a status change removes the writer feature and the read-only marking from `repo`. Never change the status of a repository in the filesystem layout with Icechunk older than 2.4.0.
-- **Writing `repo` by hand or with other tools**, such as copying a backup over it. Never write `repo` yourself: only `filesystem_storage` writes it.
-- **Writes through other backends that skip the writer-feature check**
-
-**Detection is best effort.** Before every publication of the mirror, and before the change of a conversion to the object store layout, `filesystem_storage` checks `repo`. On a fork, nothing is published or deleted, and the operation raises an error.
-
-**Recovery** is manual and keeps one of the two histories. First stop every process that uses the repository, older Icechunk versions included.
-
-_Keep `repo.d/`_, dropping the changes made through the fork:
-
-1. Check that no garbage collection or expiration ran on the fork side: Icechunk 2.0 to 2.3 garbage collection deletes objects that only `repo.d/` references. If one did, check that every object the current version in `repo.d/` references still exists; if some don't, keep `repo` instead.
-2. Move `repo` out of the repository's root, and keep it until the recovery is done.
-3. Run `publish_mirror()`. A missing `repo` is not a fork, so it publishes the current version.
-4. The changes made through the fork are lost. Garbage collection deletes the objects only they referenced.
-
-_Keep `repo`_, dropping the changes made through `filesystem_storage` after the fork:
-
-1. Check that every object `repo` references exists: a mirror that lagged behind garbage collection can reference deleted objects.
-2. Archive `repo.d/`, then delete it.
-3. The repository is now in the object store layout. To return to the filesystem layout, convert it with `convert_to_filesystem_layout()`.
 
 ### HTTP Storage
 

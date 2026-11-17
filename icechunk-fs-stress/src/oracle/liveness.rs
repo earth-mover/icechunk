@@ -19,7 +19,7 @@ const MAX_START_SKEW_MS: i64 = 2000;
 const STARVED_FACTOR: i64 = 4;
 
 /// Checks for stalls and starved hosts, that enough faults fired, and warns
-/// about start skew, stragglers and failed mirror samplers. Acks of the GC
+/// about start skew and stragglers. Acks of the GC
 /// worker and the status toggler don't count as progress.
 pub fn check_liveness(
     history: &History,
@@ -32,10 +32,6 @@ pub fn check_liveness(
     verdict.warnings.extend(history.done.iter().filter(|done| done.stragglers > 0).map(
         |done| Warning::Stragglers { tag: done.tag.clone(), count: done.stragglers },
     ));
-    verdict.warnings.extend(history.done.iter().filter_map(|done| {
-        let error = done.sampler_error.clone()?;
-        Some(Warning::SamplerFailed { tag: done.tag.clone(), error })
-    }));
 }
 
 /// At least one operation of the hosts' workers landed: a run whose workers
@@ -203,17 +199,13 @@ fn point_name(point: PointName) -> &'static str {
         PointName::BeforeRename => "before_rename",
         PointName::Renamed => "renamed",
         PointName::BeforeTidyUp => "before_tidy_up",
-        PointName::BeforePublish => "before_publish",
-        PointName::MirrorStaged => "mirror_staged",
-        PointName::BeforeMirrorRename => "before_mirror_rename",
-        PointName::MirrorRenamed => "mirror_renamed",
         PointName::FromObjectStoreBackup => "from_object_store_backup",
         PointName::FromObjectStoreBuild => "from_object_store_build",
         PointName::FromObjectStoreRenameDir => "from_object_store_rename_dir",
-        PointName::FromObjectStorePublish => "from_object_store_publish",
-        PointName::ToObjectStoreForkCheck => "to_object_store_fork_check",
+        PointName::FromObjectStoreRepoUnlinked => "from_object_store_repo_unlinked",
+        PointName::ToObjectStoreBeforeChange => "to_object_store_before_change",
         PointName::ToObjectStoreChange => "to_object_store_change",
-        PointName::ToObjectStorePublish => "to_object_store_publish",
+        PointName::ToObjectStoreRepoWritten => "to_object_store_repo_written",
         PointName::ToObjectStoreRenameDir => "to_object_store_rename_dir",
         PointName::ToObjectStoreDeleteDir => "to_object_store_delete_dir",
     }
@@ -264,7 +256,6 @@ mod tests {
             incarnations_spawned: 1,
             external_kills: 0,
             stragglers: 0,
-            sampler_error: None,
         }
     }
 
@@ -545,21 +536,6 @@ mod tests {
         assert_eq!(
             verdict.warnings,
             [Warning::Stragglers { tag: "h".to_owned(), count: 2 }]
-        );
-    }
-
-    #[test]
-    fn a_failed_sampler_is_a_warning() {
-        let mut history = busy(vec![]);
-        history.done[0].sampler_error = Some("No space left on device".to_owned());
-        let verdict = check(&history, &quiet_config(), false);
-        assert_eq!(verdict.violations, []);
-        assert_eq!(
-            verdict.warnings,
-            [Warning::SamplerFailed {
-                tag: "h".to_owned(),
-                error: "No space left on device".to_owned()
-            }]
         );
     }
 

@@ -316,16 +316,11 @@ fn selftest_detects_every_case_in_both_modes() {
         "link-after-rename",
         "delete-winner-file",
         "ack-superseded-without-proof",
-        "publish-without-fork-check",
-        "publish-non-current",
     ];
     let repository_only = [
-        "commit-without-publish",
-        "gc-without-fork-check",
-        "gc-publishes-listed",
         "from-object-store-without-provenance",
         "to-object-store-without-change",
-        "delete-dir-before-publish",
+        "delete-dir-before-repo-write",
     ];
     let storage = both.iter().chain(&["legacy-local"]).map(|case| ("storage", *case));
     let repository = both
@@ -337,12 +332,7 @@ fn selftest_detects_every_case_in_both_modes() {
     assert_eq!(lines.len(), expected.len() + 1, "{stdout}");
     for (line, (mode, case)) in lines.iter().zip(&expected) {
         let detected = format!("{mode} {case}: detected");
-        // No oracle catches it on a local filesystem, and the case says so.
-        let undetectable =
-            format!("{mode} {case}: undetectable here: no oracle can catch it");
-        let ok = line.starts_with(&detected)
-            || (*case == "gc-publishes-listed" && line.starts_with(&undetectable));
-        assert!(ok, "{detected:?} expected in {stdout}");
+        assert!(line.starts_with(&detected), "{detected:?} expected in {stdout}");
     }
     assert_eq!(lines[expected.len()], "PASS");
     for mode in ["storage", "repository"] {

@@ -128,7 +128,8 @@ async fn init_writes_the_layout() {
             if host == "init"),
         "{logs:?}"
     );
-    assert!(root.storage().join(REPO_KEY).is_file());
+    assert!(root.storage().join("repo.d").is_dir());
+    assert!(!root.storage().join(REPO_KEY).exists());
     let mut names: Vec<_> = fs::read_dir(root.root())
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())

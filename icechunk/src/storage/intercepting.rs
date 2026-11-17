@@ -12,9 +12,9 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
-    RepositoryCreation, Settings, Storage, StorageContext, StorageError, StorageInfo,
-    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
+    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
+    StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
 };
 
 type Backend<'a> = &'a (dyn Storage + Send + Sync);
@@ -27,15 +27,6 @@ pub(crate) trait Intercept: fmt::Debug + Send + Sync {
         backend: Backend<'_>,
     ) -> StorageResult<StorageWriterFeatures> {
         backend.writer_features().await
-    }
-
-    async fn gc_hook(
-        &self,
-        backend: Backend<'_>,
-        ctx: &StorageContext<'_>,
-        phase: GcPhase<'_>,
-    ) -> StorageResult<()> {
-        backend.gc_hook(ctx, phase).await
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -159,14 +150,6 @@ impl Storage for InterceptingStorage {
 
     async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
         self.intercept.writer_features(self.backend.as_ref()).await
-    }
-
-    async fn gc_hook(
-        &self,
-        ctx: &StorageContext<'_>,
-        phase: GcPhase<'_>,
-    ) -> StorageResult<()> {
-        self.intercept.gc_hook(self.backend.as_ref(), ctx, phase).await
     }
 
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {

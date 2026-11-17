@@ -11,7 +11,7 @@ pub(crate) type Version = (u8, AttemptId);
 
 pub(crate) const INITIAL_HASH: AttemptId = (u8::MAX, 0);
 
-/// A file in `repo.d`, other than the marker and the mirror's stages.
+/// A file in `repo.d`, other than the marker.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Name {
     /// `<N>.<h>`: the bytes of version `N`.

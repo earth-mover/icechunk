@@ -314,8 +314,9 @@ async def write_a_test_repo(path: str, *, backend: str) -> None:
 # marker and the creation directory. `repo.stub.*` is an unknown name: GC never
 # deletes it.
 LEFTOVERS_SWEPT = 3
-# A real GC first makes a change to `repo`, whose tidy-up deletes the version
-# below the marker before the sweep runs; a dry run makes no change.
+# GC configured to delete snapshots (the default) makes a change even when it
+# drops none, and that change's tidy-up deletes the version below the marker
+# before the sweep runs; a dry run makes no change.
 LEFTOVERS_SWEPT_AFTER_TIDY_UP = LEFTOVERS_SWEPT - 1
 
 
@@ -384,9 +385,9 @@ async def write_a_leftovers_repo(path: str) -> None:
     tmp.mkdir()
     h = plant_version(tmp, 0, infos[3])
     (tmp / f"latest.{999_999_999_999_999:015d}.0.{h}").touch()
-    # An unknown name, which GC keeps: the stub staging file of earlier
-    # development versions.
-    (root / f"repo.stub.{uuid.uuid4()}").write_bytes((root / "repo").read_bytes())
+    # An unknown name, which GC keeps.
+    (current_file,) = repo_d.glob(f"{current}.*")
+    (root / f"repo.stub.{uuid.uuid4()}").write_bytes(current_file.read_bytes())
     # A write of a backup of `repo` that crashed before its rename.
     backup = next((root / "overwritten").iterdir())
     backup.with_name(f"{backup.name}.staging.{uuid.uuid4()}").write_bytes(
@@ -597,24 +598,13 @@ async def test_icechunk_can_read_old_repo_with_manifest_splitting_v2_fs() -> Non
 @pytest.mark.parametrize(
     "path", ["./tests/data/test-repo-v2-fs", "./tests/data/split-repo-v2-fs"]
 )
-def test_local_filesystem_refuses_v2_fs_repo(path: str, tmp_path: Path) -> None:
-    """`local_filesystem_storage` reads the repository through the mirror
-    `repo`, and refuses to write it: it doesn't implement the writer feature
-    `filesystem-layout-v1`."""
-    copy = tmp_path / "repo"
-    shutil.copytree(path, copy)
-    mirror = ic.Repository.open(storage=ic.local_filesystem_storage(str(copy)))
-    layout = ic.Repository.open(storage=ic.filesystem_storage(path))
-    assert mirror.list_branches() == layout.list_branches()
-    assert [s.id for s in mirror.ancestry(branch="main")] == [
-        s.id for s in layout.ancestry(branch="main")
-    ]
-    refused = r"filesystem-layout-v1.*first implemented in Icechunk 2\.4\.0"
-    with pytest.raises(ic.IcechunkError, match=refused):
-        mirror.writable_session("main")
-    with pytest.raises(ic.IcechunkError, match="filesystem-layout-v1"):
-        mirror.create_branch("refused", mirror.lookup_branch("main"))
-    assert mirror.list_branches() == layout.list_branches()
+def test_local_filesystem_cant_open_v2_fs_repo(path: str) -> None:
+    """A repository in the filesystem layout has no `repo` at its root, so
+    `local_filesystem_storage` can't open it."""
+    storage = ic.local_filesystem_storage(path)
+    assert not ic.Repository.exists(storage)
+    with pytest.raises(ic.RepositoryNotFoundError):
+        ic.Repository.open(storage)
 
 
 def commit_to_copy(path: str, tmp_path: Path) -> None:
@@ -645,9 +635,16 @@ async def test_icechunk_can_read_old_leftovers_repo_v2_fs(tmp_path: Path) -> Non
     # Not the version above the marker, which may be a commit in flight.
     assert sweep_count(copy, dry_run=True) == LEFTOVERS_SWEPT
     assert sweep_count(copy, dry_run=False) == LEFTOVERS_SWEPT_AFTER_TIDY_UP
-    # GC commits too, so the version above the marker ends up dead or current.
+    # GC's change replaces the version above the marker, so only its own is left.
     new_current, versions = repo_d_versions(copy)
     assert versions == {new_current}
+    names = [p.name for p in (copy / "repo.d").iterdir()]
+    (marker,) = [n for n in names if n.startswith("latest.")]
+    (version_file,) = [n for n in names if n.split(".")[0].isdigit()]
+    marker_hash = marker.split(".")[-1]
+    assert version_file == f"{new_current}.{marker_hash}"
+    version_bytes = (copy / "repo.d" / version_file).read_bytes()
+    assert hashlib.sha256(version_bytes).hexdigest() == marker_hash
     # Nested staging files and unknown names are never swept.
     assert leftover_counts(copy) == {"stage": 0, "tmp": 0, "stub": 1, "staging": 1}
     await do_icechunk_can_read_old_repo(str(copy), backend="filesystem")
@@ -682,8 +679,6 @@ async def test_icechunk_can_read_old_repo_with_unknown_writer_feature(
     repo = mk_repo(create=False, store_path=str(copy), backend="local_filesystem")
     info = repo.inspect_repo_info()
     assert info["writer_features"] == ["test-feature-v1"]
-    assert info["status"]["availability"] == "ReadOnly"
-    assert "test-feature-v1" in info["status"]["limited_availability_reason"]
     assert info["latest_updates"][0]["update_type"]["type"] == "RepoStatusChangedUpdate"
     assert repo.get_status().availability == ic.RepoAvailability.online
 

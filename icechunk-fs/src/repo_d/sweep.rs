@@ -20,7 +20,7 @@ use crate::{
 };
 
 enum Leftover {
-    /// `stage.*`, `mirror.*` or `<name>.staging.<id>`.
+    /// `stage.*` or `<name>.staging.<id>`.
     Staging(PathBuf),
     /// A version file the marker proves dead.
     Version(PathBuf),
@@ -33,8 +33,8 @@ enum Leftover {
 ///   dead, whatever their age: `<i>.<x>` with `i < N`, and `<N>.<x>` with
 ///   `x != h`. Files above `N` belong to attempts in flight.
 /// - staging files and creation directories last modified before `cutoff`:
-///   `repo.d/stage.*` and `repo.d/mirror.*`, and in the root `repo.d.tmp.*`
-///   and `<name>.staging.<id>`, `repo.staging.<id>` included.
+///   `repo.d/stage.*`, and in the root `repo.d.tmp.*` and
+///   `<name>.staging.<id>`, `repo.staging.<id>` included.
 ///   Deleting them affects liveness only.
 ///
 /// Everything else is kept, and other subdirectories aren't visited. A
@@ -86,7 +86,7 @@ pub(crate) fn sweep(
                     versions.push((version, entry.path(), metadata.len()));
                 }
             }
-            Some(RepoDName::Stage(_) | RepoDName::Mirror(_)) => {
+            Some(RepoDName::Stage(_)) => {
                 if let Some(metadata) = old_metadata(&entry, cutoff, Metadata::is_file) {
                     leftovers.push((Leftover::Staging(entry.path()), metadata.len()));
                 }
@@ -206,7 +206,7 @@ mod tests {
     use super::{super::testing::*, *};
     use crate::{
         hooks::{NoHooks, Sabotage},
-        names::{mirror_name, stage_name, tmp_dir_name},
+        names::{stage_name, tmp_dir_name},
         path::staging_path,
     };
 
@@ -281,12 +281,11 @@ mod tests {
         ];
         let old_stage = old(dir.join(stage_name(Uuid::new_v4())), b"staged");
         let young_stage = write(dir.join(stage_name(Uuid::new_v4())), b"staged");
-        let old_mirror = old(dir.join(mirror_name(Uuid::new_v4())), b"mirror");
-        let young_mirror = write(dir.join(mirror_name(Uuid::new_v4())), b"mirror");
         let nfs = old(dir.join(".nfs0002"), b"n");
         let unknown = old(dir.join("unknown"), b"u");
+        let unknown_with_id = old(dir.join(format!("mirror.{}", Uuid::new_v4())), b"m");
 
-        let mirror = old(root.join("repo"), &repo_info(3));
+        let repo_file = old(root.join("repo"), &repo_info(3));
         // Unknown names, whatever they once meant.
         let legacy = old(root.join(format!("repo.legacy.{}", Uuid::new_v4())), b"legacy");
         let stub = old(root.join(format!("repo.stub.{}", Uuid::new_v4())), b"stub");
@@ -306,7 +305,7 @@ mod tests {
         let nested = old(staging_path(&chunks.join("ABC")), b"nested");
 
         let mut deleted: Vec<&PathBuf> = dead.iter().collect();
-        deleted.extend([&old_stage, &old_mirror, &old_staging]);
+        deleted.extend([&old_stage, &old_staging]);
         let tmp_files: Vec<&PathBuf> = old_tmp_files.iter().collect();
         let deleted = DeleteObjectsResult {
             // The tmp directory is one object.
@@ -322,10 +321,10 @@ mod tests {
             &above[0],
             &above[1],
             &young_stage,
-            &young_mirror,
             &nfs,
             &unknown,
-            &mirror,
+            &unknown_with_id,
+            &repo_file,
             &legacy,
             &stub,
             &young_tmp,

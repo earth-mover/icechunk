@@ -3310,37 +3310,34 @@ class FilesystemStorage(Storage):
         filesystem layout of `filesystem_storage`.
 
         `filesystem_storage` refuses to open such a repository until it is
-        converted.
+        converted. The conversion backs `repo` up to `overwritten/`, builds
+        `repo.d/` from it and deletes `repo`. Only the writer features and the
+        ops log change; the status is kept, except that a stored offline or
+        undefined status is written as `RepoAvailability.read_only`.
 
         This is an administrative operation: run it with nothing else using
-        the repository, no writer in any process, no process still publishing
-        the mirror and no other administrative operation. Anything else is
-        undefined behavior. If it is interrupted, run it again under the same
-        condition: the rerun completes the conversion.
+        the repository, no writer in any process and no other administrative
+        operation. Anything else is undefined behavior. If it is interrupted,
+        run it again under the same condition: the rerun completes the
+        conversion.
 
         Returns
         -------
         bool
             True if this call converted the repository, including when it
             completed an interrupted conversion. False if it was in the
-            filesystem layout already, including when this call only
-            published a missing mirror.
+            filesystem layout already.
 
         Raises
         ------
         StorageError
-            With kind `object-not-found` if there is no repository, kind
-            `mirror-unreadable` if `repo` can't be read or decoded, or kind
-            `storage-other` if a rerun finds `repo.d/` next to a `repo` it
-            can't attribute to its earlier run; that message names the manual
-            recovery.
+            With kind `object-not-found` if there is no repository, or kind
+            `storage-other` if `repo` can't be read or decoded, or if a rerun
+            finds `repo.d/` next to a `repo` it can't attribute to its earlier
+            run; that message names the manual recovery.
         ReadOnlyError
             With kind `missing-writer-features` if the repository lists writer
             features this library doesn't implement.
-        RepositoryForkedError
-            If publishing the mirror finds the repository forked. The
-            conversion's change has already landed then: after recovering the
-            fork, run `convert_to_filesystem_layout` again.
         SessionStateError
             With kind `layout-conversion-in-progress` if a conversion to the
             object store layout was interrupted: rerun `convert_to_object_store_layout`.
@@ -3362,20 +3359,27 @@ class FilesystemStorage(Storage):
         back to the object store layout that `local_filesystem_storage`, other
         storage backends and Icechunk before 2.4.0 write.
 
-        This is an administrative operation: run it with nothing else using
-        the repository, no writer in any process, no process still publishing
-        the mirror and no other administrative operation. Anything else is
-        undefined behavior. If it is interrupted, run it again under the same
-        condition: the rerun completes the conversion. Until then, every write
-        and garbage collection through `filesystem_storage` fails with a
-        `SessionStateError` of kind `layout-conversion-in-progress` saying
-        that a conversion to the object store layout is in progress and to rerun
-        it.
+        The conversion backs the current version up to `overwritten/`, writes
+        it without the writer feature `filesystem-layout-v1` as `repo`, then
+        deletes `repo.d/`. It creates `repo` only if it doesn't exist, never
+        replacing one. Only the writer features and the ops log change; the
+        status is kept, except that a stored offline or undefined status is
+        written as `RepoAvailability.read_only`.
 
-        A copy of a repository in the filesystem layout on other storage is
-        read-only. To get a copy that can be written elsewhere: set the
-        status of the source to `RepoAvailability.read_only`, convert it to the
-        object store layout, copy it, convert the source back with
+        This is an administrative operation: run it with nothing else using
+        the repository, no writer in any process and no other administrative
+        operation. Anything else is undefined behavior. If it is interrupted,
+        run it again under the same condition: the rerun completes the
+        conversion, keeping a `repo` in the object store layout that it finds.
+        Until then, every write and garbage collection through
+        `filesystem_storage` fails with a `SessionStateError` of kind
+        `layout-conversion-in-progress` saying that a conversion to the object
+        store layout is in progress and to rerun it.
+
+        Other storage backends and Icechunk before 2.4.0 can't open a repository
+        in the filesystem layout. To get a copy that they can use: set the status
+        of the source to `RepoAvailability.read_only`, convert it to the object
+        store layout, copy it, convert the source back with
         `convert_to_filesystem_layout` if it should stay in this layout, and
         set the statuses to `RepoAvailability.online`.
 
@@ -3389,18 +3393,20 @@ class FilesystemStorage(Storage):
         Raises
         ------
         StorageError
-            With kind `object-not-found` if there is no repository, kind
-            `mirror-unreadable` if `repo` can't be read or decoded, or kind
-            `storage-other` if directory listings are stale: nothing was
-            changed, run it again once they refresh.
+            With kind `object-not-found` if there is no repository, or kind
+            `storage-other` if `repo` can't be read or decoded, if directory
+            listings are stale (nothing was changed: run it again once they
+            refresh), if `repo` exists next to `repo.d/`, which an interrupted
+            `convert_to_filesystem_layout` leaves (nothing was changed: rerun
+            `convert_to_filesystem_layout` to finish it), if something else
+            wrote `repo` while this conversion ran (its change landed and
+            `repo.d/` was kept: check `repo`, then rerun, which keeps `repo`),
+            or if a rerun finds a `repo` that isn't a repo info in the object
+            store layout (`repo.d/` was kept; that message names the manual
+            recovery).
         ReadOnlyError
             With kind `missing-writer-features` if the repository lists writer
             features this library doesn't implement.
-        RepositoryForkedError
-            If a conversion from the object store layout was interrupted: rerun
-            `convert_to_filesystem_layout`. If the repository is forked, this
-            conversion's change may already have landed: after recovering the
-            fork, run `convert_to_object_store_layout` again.
         """
     async def convert_to_object_store_layout_async(self) -> bool:
         """Convert a repository in the filesystem layout of `filesystem_storage`
@@ -3414,65 +3420,6 @@ class FilesystemStorage(Storage):
             True if this call converted the repository, False if it was in the
             object store layout already.
         """
-    def publish_mirror(self) -> PublishOutcome:
-        """Publish the current version of the repository as the mirror `repo`.
-
-        Every change publishes the mirror before returning, but a process that
-        dies between its change and its publication, or a publication that
-        gives up under contention, leaves it behind. This repairs it without
-        changing the repository, and is safe while writers run.
-
-        It is best effort: it publishes the version it finds, which a change
-        landing meanwhile or a lagging listing can make older than the current
-        one. A change, such as `Repository.set_status` with
-        `RepoAvailability.read_only`, makes the mirror current once every process
-        that changed the repository earlier has finished. Do that before
-        serving a finished repository read-only or copying it.
-
-        Returns
-        -------
-        PublishOutcome
-            Whether `repo` holds the version current in the last listing, and
-            if the publication gave up, the version it left `repo` holding.
-
-        Raises
-        ------
-        StorageError
-            With kind `object-not-found` if there is no repository, or kind
-            `mirror-unreadable` if `repo` can't be read or decoded.
-        RepositoryForkedError
-            If `repo` holds a repo info that is no version of the repository.
-        SessionStateError
-            With kind `layout-conversion-in-progress` if a conversion to the
-            object store layout was interrupted: rerun `convert_to_object_store_layout`.
-        """
-    async def publish_mirror_async(self) -> PublishOutcome:
-        """Publish the current version of the repository as the mirror `repo`
-        (async version).
-
-        See `publish_mirror`.
-
-        Returns
-        -------
-        PublishOutcome
-            Whether `repo` holds the version current in the last listing, and
-            if the publication gave up, the version it left `repo` holding.
-        """
-
-@final
-class PublishOutcome:
-    """What `FilesystemStorage.publish_mirror` did."""
-
-    @property
-    def current(self) -> bool:
-        """True if `repo` holds the version current in the last listing of
-        `repo.d/`, or a newer one. False if the marker kept moving and the
-        publication gave up."""
-    @property
-    def left(self) -> str | None:
-        """When the publication gave up, the version it left `repo` holding,
-        as its file name in `repo.d/` (`<N>.<hash>`); None if it installed
-        none, and when `current` is True."""
 
 @final
 class StorageObjectInfo:
@@ -3890,41 +3837,6 @@ class RebaseFailedError(ConflictError):
         Returns:
             list[Conflict]: The conflicts that occurred during the rebase operation
         """
-
-class RepositoryForkedError(IcechunkError):
-    """The repository is forked: something that doesn't implement the
-    filesystem layout, such as Icechunk 2.3 or older, overwrote its `repo`
-    file, so `repo` and `repo.d/` hold diverging histories.
-
-    Nothing was published or deleted. Recovery is manual: see the filesystem
-    storage guide.
-    """
-
-    def __new__(cls, message: str, kind: str | None = None) -> Self: ...
-
-class UpdateDurableButRepositoryForkedError(RepositoryForkedError):
-    """A change to the repository landed and is durable, but the repository
-    is forked.
-
-    The change, such as a branch, tag, configuration or status change, must
-    not be retried: a retry would make it twice.
-    """
-
-    def __new__(cls, message: str, kind: str | None = None) -> Self: ...
-
-@final
-class CommitDurableButRepositoryForkedError(UpdateDurableButRepositoryForkedError):
-    """A commit or flush landed and is durable, but the repository is forked.
-
-    The commit or flush must not be retried: a retry would write the same
-    changes twice. The session is read-only afterwards, like after any commit
-    or flush.
-    """
-
-    def __new__(cls, message: str, snapshot_id: str, kind: str | None = None) -> Self: ...
-    @property
-    def snapshot_id(self) -> str:
-        """The ID of the snapshot the durable commit or flush made"""
 
 def initialize_logs() -> None:
     """

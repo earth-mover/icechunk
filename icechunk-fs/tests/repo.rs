@@ -14,12 +14,12 @@ use std::{
 };
 
 use futures::TryStreamExt as _;
-use icechunk_fs::{ConversionOutcome, FilesystemStorage, PublishOutcome};
+use icechunk_fs::{ConversionOutcome, FilesystemStorage};
 use icechunk_macros::tokio_test;
 use icechunk_storage::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, GcPhase, Generation,
-    GetModifiedResult, PutCondition, Settings, Storage as _, StorageContext,
-    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
+    PutCondition, Settings, Storage as _, StorageContext, StorageErrorKind,
+    StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncReadExt as _;
@@ -36,7 +36,7 @@ fn now_ms() -> u64 {
 #[expect(dead_code, reason = "shared with tests that use every helper")]
 mod repo_infos;
 
-use repo_infos::{changed_repo_info, featureless_repo_info, repo_info};
+use repo_infos::{featureless_repo_info, repo_info};
 
 fn v0_bytes() -> Vec<u8> {
     repo_info(0)
@@ -220,7 +220,6 @@ async fn create_read_update_read() {
     let v0 = create(&st, &v0_bytes()).await;
     assert!((before..=now_ms()).contains(&generation(&v0)), "{v0:?}");
     assert_eq!(get(&st).await, (v0_bytes(), v0.clone()));
-    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), v0_bytes());
     assert_eq!(get_object(&st, "repo").await.unwrap(), v0_bytes());
     assert_eq!(get_conditional(&st, Some(&v0)).await, None);
 
@@ -231,6 +230,16 @@ async fn create_read_update_read() {
     assert_eq!(get_conditional(&st, Some(&v1)).await, None);
     assert_eq!(get_object(&st, "repo").await.unwrap(), repo_info(1));
     assert_eq!(names(&dir.path().join("repo.d")), settled(&v1));
+}
+
+#[tokio_test]
+async fn create_leaves_no_repo_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = storage(dir.path());
+    let v0 = create(&st, &v0_bytes()).await;
+    assert_eq!(names(dir.path()), BTreeSet::from(["repo.d".to_string()]));
+    assert_updated(update(&st, &repo_info(1), &v0).await);
+    assert_eq!(names(dir.path()), BTreeSet::from(["repo.d".to_string()]));
 }
 
 #[tokio_test]
@@ -637,14 +646,9 @@ async fn an_object_store_repo_must_be_converted() {
     let (bytes, v0) = get(&st).await;
     assert!((before..=now_ms()).contains(&generation(&v0)), "{v0:?}");
     assert!(icechunk_format::layout_v1::lists_feature(&bytes).unwrap());
-    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), bytes);
     assert_eq!(
         names(dir.path()),
-        BTreeSet::from([
-            "overwritten".to_string(),
-            "repo".to_string(),
-            "repo.d".to_string()
-        ])
+        BTreeSet::from(["overwritten".to_string(), "repo.d".to_string()])
     );
     let [backup] =
         Vec::from_iter(names(&dir.path().join("overwritten"))).try_into().unwrap();
@@ -713,7 +717,7 @@ async fn a_repository_converts_to_the_object_store_layout_and_back() {
         names(dir.path()),
         BTreeSet::from(["overwritten".to_string(), "repo".to_string()])
     );
-    let object_store_info = mirror(dir.path());
+    let object_store_info = root_repo_file(dir.path()).unwrap();
     let info = icechunk_format::layout_v1::change_info(&object_store_info).unwrap();
     assert!(!info.lists_feature);
     let attempt = info.attempt.unwrap().id;
@@ -728,7 +732,7 @@ async fn a_repository_converts_to_the_object_store_layout_and_back() {
         st.convert_to_object_store_layout().await.unwrap(),
         ConversionOutcome::NothingToConvert
     );
-    assert_eq!(mirror(dir.path()), object_store_info);
+    assert_eq!(root_repo_file(dir.path()), Some(object_store_info));
 
     let st = storage(dir.path());
     assert_eq!(
@@ -748,11 +752,12 @@ async fn converting_nothing_to_the_object_store_layout_is_not_found() {
 }
 
 /// A conversion from the object store layout interrupted after its directory
-/// rename leaves the original repo info in `$ROOT/repo`, no version of
-/// `repo.d`: converting to the object store layout instead of rerunning it
-/// stops, naming the conversion to rerun, and changes nothing.
+/// rename leaves the original repo info in `$ROOT/repo` next to `repo.d`:
+/// converting to the object store layout instead of rerunning it stops,
+/// naming the conversion to rerun, and changes nothing.
 #[tokio_test]
-async fn converting_to_object_store_during_an_interrupted_conversion_from_it_is_a_fork() {
+async fn converting_to_object_store_during_an_interrupted_conversion_from_it_is_refused()
+{
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
     let object_store_info = featureless_repo_info(0);
@@ -764,26 +769,13 @@ async fn converting_to_object_store_during_an_interrupted_conversion_from_it_is_
     std::fs::write(dir.path().join("repo"), &object_store_info).unwrap();
     let before = tree(dir.path());
 
-    let err = st.convert_to_object_store_layout().await.unwrap_err();
-    assert!(matches!(err.kind, StorageErrorKind::RepositoryForked(_)), "{err}");
+    let message = assert_other_error(st.convert_to_object_store_layout().await);
     assert!(
-        err.to_string().contains("rerunning convert_to_filesystem_layout()"),
-        "{err}"
+        message.contains("convert_to_filesystem_layout(); run it again"),
+        "{message}"
     );
     assert_eq!(tree(dir.path()), before);
-    assert_eq!(mirror(dir.path()), object_store_info);
-}
-
-#[tokio_test]
-async fn converting_to_object_store_refuses_an_unreadable_mirror() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    create(&st, &v0_bytes()).await;
-    plant_mirror(dir.path(), b"");
-    let before = tree(dir.path());
-    let err = st.convert_to_object_store_layout().await.unwrap_err();
-    assert!(matches!(err.kind, StorageErrorKind::MirrorUnreadable(_)), "{err}");
-    assert_eq!(tree(dir.path()), before);
+    assert_eq!(root_repo_file(dir.path()), Some(object_store_info));
 }
 
 #[tokio_test]
@@ -802,8 +794,7 @@ async fn creation_refuses_a_repo_info_without_the_feature() {
 /// Without `repo.d`, opening classifies `$ROOT/repo` and never writes.
 #[tokio_test]
 async fn opening_without_repo_d_names_what_it_found() {
-    let cases: [(Vec<u8>, &[&str]); 3] = [
-        (changed_repo_info(1), &["orphan mirror", "Restore repo.d"]),
+    let cases: [(Vec<u8>, &[&str]); 2] = [
         (UNDECODABLE.to_vec(), &["repo can't be read or decoded"]),
         (Vec::new(), &["repo can't be read or decoded"]),
     ];
@@ -822,22 +813,6 @@ async fn opening_without_repo_d_names_what_it_found() {
         assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), planted);
         assert_eq!(names(dir.path()), BTreeSet::from(["repo".to_string()]));
     }
-}
-
-/// An interrupted creation is no repository, and the next creation replaces
-/// it.
-#[tokio_test]
-async fn an_interrupted_creation_is_not_found_and_is_resumed() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("repo"), repo_info(9)).unwrap();
-    let st = storage(dir.path());
-    let err = try_get_conditional(&st, None).await.err().unwrap();
-    assert!(matches!(err.kind, StorageErrorKind::ObjectNotFound), "{err}");
-
-    let v0 = create(&st, &v0_bytes()).await;
-    assert_eq!(get(&st).await, (v0_bytes(), v0.clone()));
-    assert_eq!(mirror(dir.path()), v0_bytes());
-    assert_eq!(names(&dir.path().join("repo.d")), settled(&v0));
 }
 
 const DATA_DIRS: [&str; 5] =
@@ -927,38 +902,22 @@ async fn without_fsync_there_is_no_data_dir_barrier() {
     create(&st, &v0_bytes()).await;
 }
 
-/// With `repo.d`, a new instance opens whatever `$ROOT/repo` holds: forks
-/// and unreadable mirrors are for the operations that publish to find.
+/// With `repo.d`, a new instance opens and changes the repository whatever
+/// `$ROOT/repo` holds, which stays as it is.
 #[tokio_test]
-async fn opening_with_repo_d_never_reads_the_mirror() {
-    for planted in [Some(UNDECODABLE.to_vec()), Some(featureless_repo_info(1)), None] {
+async fn opening_with_repo_d_ignores_a_repo_file() {
+    for planted in [UNDECODABLE.to_vec(), featureless_repo_info(1)] {
         let dir = tempfile::tempdir().unwrap();
         let v0 = create(&storage(dir.path()), &v0_bytes()).await;
-        match &planted {
-            Some(bytes) => std::fs::write(dir.path().join("repo"), bytes).unwrap(),
-            None => std::fs::remove_file(dir.path().join("repo")).unwrap(),
-        }
+        std::fs::write(dir.path().join("repo"), &planted).unwrap();
 
         let st = storage(dir.path());
         assert_eq!(get(&st).await, (v0_bytes(), v0.clone()), "{planted:?}");
         assert_eq!(get_object(&storage(dir.path()), "repo").await.unwrap(), v0_bytes());
+        let v1 = assert_updated(update(&st, &repo_info(1), &v0).await);
+        assert_eq!(get(&st).await, (repo_info(1), v1));
+        assert_eq!(root_repo_file(dir.path()), Some(planted));
     }
-}
-
-#[tokio_test]
-async fn a_change_publishes_the_mirror_before_returning() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let mut base = create(&st, &v0_bytes()).await;
-    for seq in 1..=3 {
-        base = assert_updated(update(&st, &repo_info(seq), &base).await);
-        assert_eq!(mirror(dir.path()), repo_info(seq));
-        assert_eq!(names(&dir.path().join("repo.d")), settled(&base));
-    }
-    // A missing mirror is published too.
-    std::fs::remove_file(dir.path().join("repo")).unwrap();
-    assert_updated(update(&st, &repo_info(4), &base).await);
-    assert_eq!(mirror(dir.path()), repo_info(4));
 }
 
 /// Bytes without the feature, or that don't decode, are refused before
@@ -976,40 +935,6 @@ async fn a_change_refuses_bytes_without_the_feature() {
     assert!(message.contains("doesn't decode"), "{message}");
     assert_eq!(tree(dir.path()), before);
     assert_eq!(get(&st).await, (v0_bytes(), v0));
-}
-
-/// A fork found by the publication after a change: the change is durable,
-/// and the fork is never overwritten.
-#[tokio_test]
-async fn a_fork_found_after_a_change_is_the_durable_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let v0 = create(&st, &v0_bytes()).await;
-    plant_mirror(dir.path(), &featureless_repo_info(9));
-    let err = update(&st, &repo_info(1), &v0).await.unwrap_err();
-    let StorageErrorKind::RepositoryForkedAfterUpdate { new_version, detail } = &err.kind
-    else {
-        panic!("{err}")
-    };
-    assert_eq!(get(&st).await, (repo_info(1), (**new_version).clone()));
-    assert!(detail.contains("nothing was published"), "{detail}");
-    assert!(err.to_string().contains("durable"), "{err}");
-    assert_eq!(mirror(dir.path()), featureless_repo_info(9));
-}
-
-/// A mirror that can't be read or decoded might be a fork: never
-/// overwritten. The change landed, so it is `Updated`.
-#[tokio_test]
-async fn a_change_leaves_an_unreadable_mirror_alone() {
-    for planted in [Vec::new(), UNDECODABLE.to_vec()] {
-        let dir = tempfile::tempdir().unwrap();
-        let st = storage(dir.path());
-        let v0 = create(&st, &v0_bytes()).await;
-        plant_mirror(dir.path(), &planted);
-        let v1 = assert_updated(update(&st, &repo_info(1), &v0).await);
-        assert_eq!(get(&st).await, (repo_info(1), v1));
-        assert_eq!(mirror(dir.path()), planted);
-    }
 }
 
 /// A range longer than the ideal request size is not split into reads of
@@ -1062,17 +987,13 @@ async fn a_long_ranged_read_of_repo_sees_one_version() {
     writer.await.unwrap();
 }
 
-/// `repo` is listed as the file `$ROOT/repo`, the mirror: no protocol read.
+/// The root listing is physical: the repo info in `repo.d` isn't listed, a
+/// file `$ROOT/repo` is.
 #[tokio_test]
-async fn listing_the_root_shows_the_mirror_as_repo() {
+async fn listing_the_root_is_physical() {
     let dir = tempfile::tempdir().unwrap();
     let st = storage(dir.path());
-    let v0 = create(&st, &v0_bytes()).await;
-    // A mirror lagging behind a longer current version.
-    let longer = changed_repo_info(1);
-    assert!(longer.len() > v0_bytes().len());
-    assert_updated(update(&st, &longer, &v0).await);
-    plant_mirror(dir.path(), &v0_bytes());
+    create(&st, &v0_bytes()).await;
     let settings = Settings::default();
     let ctx = StorageContext::unattributed(&settings);
     st.put_object(
@@ -1092,29 +1013,33 @@ async fn listing_the_root_shows_the_mirror_as_repo() {
     std::fs::write(dir.path().join(format!("repo.stub.{id}")), v0_bytes()).unwrap();
     std::fs::write(dir.path().join(format!("repo.staging.{id}")), v0_bytes()).unwrap();
 
-    let mut listed: Vec<_> = st
-        .list_objects(&ctx, "")
-        .await
-        .unwrap()
-        .map_ok(|info| (info.id, info.size_bytes))
-        .try_collect()
-        .await
-        .unwrap();
-    listed.sort();
+    let listed = || async {
+        let mut listed: Vec<_> = st
+            .list_objects(&ctx, "")
+            .await
+            .unwrap()
+            .map_ok(|info| (info.id, info.size_bytes))
+            .try_collect()
+            .await
+            .unwrap();
+        listed.sort();
+        listed
+    };
     let size = v0_bytes().len() as u64;
     // Names that are no longer protocol names are listed like any object.
-    assert_eq!(
-        listed,
-        [
-            ("chunks/x".to_string(), size),
-            ("repo".to_string(), size),
-            (format!("repo.legacy.{id}"), size),
-            (format!("repo.stub.{id}"), size),
-        ]
-    );
+    let mut expected = vec![
+        ("chunks/x".to_string(), size),
+        (format!("repo.legacy.{id}"), size),
+        (format!("repo.stub.{id}"), size),
+    ];
+    assert_eq!(listed().await, expected);
+
+    std::fs::write(dir.path().join("repo"), featureless_repo_info(1)).unwrap();
+    expected.insert(1, ("repo".to_string(), featureless_repo_info(1).len() as u64));
+    assert_eq!(listed().await, expected);
 }
 
-/// The current version's file, not the mirror, whose time can differ.
+/// The current version's file.
 #[tokio_test]
 async fn last_modified_of_repo_is_the_current_versions() {
     let dir = tempfile::tempdir().unwrap();
@@ -1129,9 +1054,6 @@ async fn last_modified_of_repo_is_the_current_versions() {
     let expected: chrono::DateTime<chrono::Utc> =
         std::fs::metadata(&version_file).unwrap().modified().unwrap().into();
     assert_eq!(modified, expected);
-    let mirror_modified: chrono::DateTime<chrono::Utc> =
-        std::fs::metadata(dir.path().join("repo")).unwrap().modified().unwrap().into();
-    assert_ne!(modified, mirror_modified);
 
     let empty = tempfile::tempdir().unwrap();
     let err = storage(empty.path()).get_object_last_modified(&ctx, "repo").await;
@@ -1237,165 +1159,7 @@ async fn sweep_leftovers_deletes_dead_versions_whatever_their_age() {
     assert_eq!(names(&repo_d), expected);
 }
 
-/// Writes the mirror `repo` directly.
-fn plant_mirror(dir: &Path, bytes: &[u8]) {
-    std::fs::write(dir.join("repo"), bytes).unwrap();
-}
-
-fn mirror(dir: &Path) -> Vec<u8> {
-    std::fs::read(dir.join("repo")).unwrap()
-}
-
-#[tokio_test]
-async fn publish_mirror_repairs_a_lagging_or_missing_mirror() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let v0 = create(&st, &v0_bytes()).await;
-    let v1 = assert_updated(update(&st, &repo_info(1), &v0).await);
-
-    plant_mirror(dir.path(), &v0_bytes());
-    assert_eq!(st.publish_mirror().await.unwrap(), PublishOutcome::Current);
-    assert_eq!(mirror(dir.path()), repo_info(1));
-    assert_eq!(names(&dir.path().join("repo.d")), settled(&v1));
-
-    std::fs::remove_file(dir.path().join("repo")).unwrap();
-    assert_eq!(st.publish_mirror().await.unwrap(), PublishOutcome::Current);
-    assert_eq!(mirror(dir.path()), repo_info(1));
-}
-
-#[tokio_test]
-async fn publish_mirror_refuses_a_fork_or_an_unreadable_mirror() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let v0 = create(&st, &v0_bytes()).await;
-
-    for planted in [featureless_repo_info(1), Vec::new()] {
-        plant_mirror(dir.path(), &planted);
-        let err = st.publish_mirror().await.err().unwrap();
-        match &err.kind {
-            StorageErrorKind::RepositoryForked(_) => assert!(!planted.is_empty()),
-            StorageErrorKind::MirrorUnreadable(_) => assert!(planted.is_empty()),
-            _ => panic!("{err}"),
-        }
-        assert_eq!(mirror(dir.path()), planted);
-        assert_eq!(names(&dir.path().join("repo.d")), settled(&v0));
-    }
-}
-
-#[tokio_test]
-async fn publish_mirror_refuses_a_current_version_without_the_feature() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let v0 = create(&st, &v0_bytes()).await;
-    // What an interrupted conversion to the object store layout leaves.
-    let v1 = plant_version(dir.path(), &featureless_repo_info(1), &v0);
-    let before = mirror(dir.path());
-
-    let err = st.publish_mirror().await.err().unwrap();
-    assert!(matches!(err.kind, StorageErrorKind::LayoutConversionInProgress(_)), "{err}");
-    assert!(err.to_string().contains("convert_to_object_store_layout()"), "{err}");
-    assert_eq!(mirror(dir.path()), before);
-    assert_eq!(names(&dir.path().join("repo.d")), settled(&v1));
-}
-
-#[tokio_test]
-async fn publish_mirror_without_a_repository_is_not_found() {
-    let dir = tempfile::tempdir().unwrap();
-    let err = storage(dir.path()).publish_mirror().await.err().unwrap();
-    assert!(matches!(err.kind, StorageErrorKind::ObjectNotFound), "{err}");
-    assert_eq!(names(dir.path()), BTreeSet::new());
-}
-
-async fn gc_hook(st: &FilesystemStorage, phase: GcPhase<'_>) -> StorageResult<()> {
-    let settings = Settings::default();
-    let ctx = StorageContext::unattributed(&settings);
-    st.gc_hook(&ctx, phase).await
-}
-
-/// Before GC's deletes the hook publishes the version of GC's change; after
-/// them it publishes again, repairing an older version renamed over the
-/// mirror meanwhile, from the listed version or GC's, whichever is newer.
-#[tokio_test]
-async fn gc_hook_publishes_before_and_after_the_deletes() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let v0 = create(&st, &v0_bytes()).await;
-    let gc_change = assert_updated(update(&st, &repo_info(1), &v0).await);
-
-    plant_mirror(dir.path(), &v0_bytes());
-    let changed = Some(&gc_change);
-    gc_hook(&st, GcPhase::BeforeDeletes { changed }).await.unwrap();
-    assert_eq!(mirror(dir.path()), repo_info(1));
-
-    plant_mirror(dir.path(), &v0_bytes());
-    gc_hook(&st, GcPhase::AfterDeletes { changed }).await.unwrap();
-    assert_eq!(mirror(dir.path()), repo_info(1));
-
-    let later = assert_updated(update(&st, &repo_info(2), &gc_change).await);
-    plant_mirror(dir.path(), &v0_bytes());
-    gc_hook(&st, GcPhase::AfterDeletes { changed }).await.unwrap();
-    assert_eq!(mirror(dir.path()), repo_info(2));
-    assert_eq!(names(&dir.path().join("repo.d")), settled(&later));
-}
-
-/// Before the deletes a fork or an unreadable mirror refuses GC, publishing
-/// nothing; after them it is logged, and GC's result stands.
-#[tokio_test]
-async fn gc_hook_refuses_a_fork_or_an_unreadable_mirror_before_the_deletes() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let v0 = create(&st, &v0_bytes()).await;
-    let changed = Some(&v0);
-    for planted in [featureless_repo_info(9), Vec::new()] {
-        plant_mirror(dir.path(), &planted);
-        let err = gc_hook(&st, GcPhase::BeforeDeletes { changed }).await.unwrap_err();
-        match &err.kind {
-            StorageErrorKind::RepositoryForked(_) => assert!(!planted.is_empty()),
-            StorageErrorKind::MirrorUnreadable(_) => assert!(planted.is_empty()),
-            _ => panic!("{err}"),
-        }
-        assert!(err.to_string().contains("deleted nothing"), "{err}");
-        assert_eq!(mirror(dir.path()), planted);
-        gc_hook(&st, GcPhase::AfterDeletes { changed }).await.unwrap();
-        assert_eq!(mirror(dir.path()), planted);
-    }
-}
-
-/// GC on a repository in the filesystem layout always makes a change, so the
-/// hook refuses to run without its version while `repo.d` exists.
-#[tokio_test]
-async fn gc_hook_without_a_change_is_refused_while_repo_d_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    for phase in [
-        GcPhase::BeforeDeletes { changed: None },
-        GcPhase::AfterDeletes { changed: None },
-    ] {
-        gc_hook(&st, phase).await.unwrap();
-    }
-
-    let v0 = create(&st, &v0_bytes()).await;
-    let message =
-        assert_other_error(gc_hook(&st, GcPhase::BeforeDeletes { changed: None }).await);
-    assert!(message.contains("only after GC's change"), "{message}");
-
-    plant_version(dir.path(), &featureless_repo_info(1), &v0);
-    let err = gc_hook(&st, GcPhase::BeforeDeletes { changed: None }).await.unwrap_err();
-    assert!(matches!(err.kind, StorageErrorKind::LayoutConversionInProgress(_)), "{err}");
-    assert!(err.to_string().contains("convert_to_object_store_layout()"), "{err}");
-    assert_eq!(mirror(dir.path()), v0_bytes());
-}
-
-/// A version without a generation: before the deletes GC fails; after them
-/// the failure is only logged, GC's result stands.
-#[tokio_test]
-async fn gc_hook_with_an_invalid_version_fails_only_before_the_deletes() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let v0 = create(&st, &v0_bytes()).await;
-    let invalid = version(&etag(&v0), None);
-    let changed = Some(&invalid);
-    assert_other_error(gc_hook(&st, GcPhase::BeforeDeletes { changed }).await);
-    gc_hook(&st, GcPhase::AfterDeletes { changed }).await.unwrap();
-    assert_eq!(mirror(dir.path()), v0_bytes());
+/// `$ROOT/repo`, if it exists.
+fn root_repo_file(dir: &Path) -> Option<Vec<u8>> {
+    std::fs::read(dir.join("repo")).ok()
 }

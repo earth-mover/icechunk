@@ -2,7 +2,8 @@
 //!
 //! Every regular file under the root goes in, apart from the storage roots,
 //! directories named `storage`. Unless every report passed, each storage
-//! root's `repo`, `repo.d/` and a listing of its files go in too.
+//! root's `repo` (if it has one), `repo.d/` and a listing of its files go in
+//! too.
 
 use std::{
     collections::BTreeSet,
@@ -268,13 +269,19 @@ impl Found {
         }
     }
 
-    /// The storage root `storage`'s `repo` and `repo.d/`.
+    /// The storage root `storage`'s `repo`, if it has one, and `repo.d/`: a
+    /// repository in the filesystem layout has no `repo`.
     fn add_storage_root(&mut self, root: &Path, storage: &Path) {
         match fs::symlink_metadata(root.join(storage)) {
             Ok(meta) => self.entries.push(Entry::Dir(storage.to_owned(), meta)),
             Err(err) => self.skip(storage, err.to_string()),
         }
-        self.add(root, storage.join("repo"));
+        let repo = storage.join("repo");
+        if !fs::symlink_metadata(root.join(&repo))
+            .is_err_and(|err| err.kind() == io::ErrorKind::NotFound)
+        {
+            self.add(root, repo);
+        }
         self.add(root, storage.join("repo.d"));
     }
 

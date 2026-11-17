@@ -24,7 +24,7 @@ mod storage;
 mod write;
 
 #[cfg(unix)]
-pub use repo_d::{convert::ConversionOutcome, mirror::PublishOutcome};
+pub use repo_d::convert::ConversionOutcome;
 #[cfg(unix)]
 pub use storage::{
     FilesystemStorage, new_filesystem_storage, new_filesystem_storage_with,
@@ -46,8 +46,8 @@ pub struct FilesystemSettings {
     /// fsync data files after writes, and their directories before every
     /// change. Turning it off risks losing writes after an OS crash or power
     /// loss; it never affects safety between concurrent writers. The fsyncs of
-    /// the change itself always run: those of `repo.d`, of `repo` and the root
-    /// directory, and of a conversion's backup.
+    /// the change itself always run: those of `repo.d` and the root directory,
+    /// of a conversion's backup and of the `repo` file it writes.
     pub fsync: bool,
 }
 

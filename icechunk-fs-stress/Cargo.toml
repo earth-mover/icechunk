@@ -38,7 +38,7 @@ tracing-subscriber.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-# fault-injection forges malformed writer-feature gates in tests.
+# fault-injection forges stored statuses and writer features in tests.
 icechunk-format = { workspace = true, features = ["fault-injection"] }
 tempfile.workspace = true
 

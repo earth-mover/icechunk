@@ -81,13 +81,12 @@ const DEEP_OPS_LOG_CYCLES: i8 = 100;
 /// [`DEEP_OPS_LOG_PAGE_SIZE`] entries, for checks against older Icechunk
 /// releases (not checked in).
 ///
-/// The history is written in the filesystem layout, where every status change
-/// stores the gate with `underlying`: [`DEEP_OPS_LOG_CYCLES`] cycles of a
-/// commit, three `ReadOnly`/`Online` status-change pairs, a branch created and
-/// deleted and a metadata change. Then it's converted to the object store layout
-/// and `test-feature-v1` is added. `group1/small_chunks` (int8, 5 chunks of 1)
-/// holds the cycle number: 0 on `dev` and the tag `v0`, the last cycle on
-/// `main` and the tag `last`.
+/// The history is written in the filesystem layout: [`DEEP_OPS_LOG_CYCLES`]
+/// cycles of a commit, three `ReadOnly`/`Online` status-change pairs, a branch
+/// created and deleted and a metadata change. Then it's converted to the object
+/// store layout and `test-feature-v1` is added. `group1/small_chunks` (int8, 5
+/// chunks of 1) holds the cycle number: 0 on `dev` and the tag `v0`, the last
+/// cycle on `main` and the tag `last`.
 ///
 /// Does nothing unless the variable is set, so that `just test-integration`
 /// (which runs every ignored test) writes nothing. Refuses an existing

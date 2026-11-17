@@ -63,22 +63,6 @@ pub enum StorageErrorKind {
         "a conversion to the object store layout was interrupted, rerun convert_to_object_store_layout(): {0}"
     )]
     LayoutConversionInProgress(String),
-    /// The fork check found a fork; nothing was published or deleted.
-    #[error(
-        "repository forked, the repo file was overwritten bypassing repo.d: {0}. {FORK_EXPLANATION}"
-    )]
-    RepositoryForked(String),
-    /// The change landed and is durable; its publication found a fork.
-    /// Retrying would make the change twice.
-    #[error(
-        "the change is durable (version {new_version}) and must not be retried, but its publication found a fork, a repo file overwritten bypassing repo.d: {detail}. {FORK_EXPLANATION}"
-    )]
-    RepositoryForkedAfterUpdate { new_version: Box<VersionInfo>, detail: String },
-    /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
-    #[error(
-        "the repo file couldn't be read or decoded, so a fork (a repo file overwritten bypassing repo.d) can't be ruled out: {0}"
-    )]
-    MirrorUnreadable(String),
     /// The repository lists writer features this storage doesn't implement.
     #[error(
         "the repository lists writer features this storage doesn't implement ({}), first implemented in {min_version}; it can be read but not modified",
@@ -88,8 +72,6 @@ pub enum StorageErrorKind {
     #[error("storage error: {0}")]
     Other(String),
 }
-
-pub const FORK_EXPLANATION: &str = "A fork comes from something that doesn't implement the filesystem layout, such as Icechunk 2.3 or older, overwriting the repo file: the repo file and repo.d then hold diverging histories, and recovery is manual. The same check also reports the repo file left by an interrupted conversion from the object store layout, which rerunning convert_to_filesystem_layout() completes, and a copy of a version that a stale listing didn't show, which running the operation again once listings refresh clears";
 
 impl StorageErrorKind {
     pub fn is_throttled(&self) -> bool {
@@ -619,15 +601,6 @@ pub enum RepositoryCreation {
 /// creates or modifies must list.
 pub type StorageWriterFeatures = BTreeSet<WriterFeature>;
 
-/// When garbage collection calls [`Storage::gc_hook`]. On a repository that
-/// lists `filesystem-layout-v1`, GC always makes a change and `changed` is the
-/// version it wrote; on other repositories `changed` is `None`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GcPhase<'a> {
-    BeforeDeletes { changed: Option<&'a VersionInfo> },
-    AfterDeletes { changed: Option<&'a VersionInfo> },
-}
-
 /// Keeps the listed objects whose id starts with one of `id_prefixes`.
 pub fn filter_ids_by_id_prefix<'a>(
     listing: BoxStream<'a, StorageResult<ListInfo<String>>>,
@@ -689,14 +662,6 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// or modifies must list all of them. A storage with any can't hold IC1
     /// repositories, which can't list writer features.
     async fn writer_features(&self) -> StorageResult<StorageWriterFeatures>;
-
-    /// Called by garbage collection before its deletes and after them, never
-    /// by a dry run.
-    async fn gc_hook(
-        &self,
-        ctx: &StorageContext<'_>,
-        phase: GcPhase<'_>,
-    ) -> StorageResult<()>;
 
     /// Whether a repository may be created at this storage location.
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation>;

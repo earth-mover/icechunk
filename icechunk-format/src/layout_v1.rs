@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use crate::{
     IcechunkResult,
     envelope::DEFAULT_COMPRESSION_LEVEL,
-    repo_info::{RepoInfo, UpdateType},
+    repo_info::RepoInfo,
     repo_info_file::{decode, encode},
     writer_features::{FeatureName, WriterFeature},
 };
@@ -111,20 +111,6 @@ fn backup_paths_of(info: &RepoInfo) -> IcechunkResult<BackupPaths> {
     })
 }
 
-/// Whether the repo info is what an interrupted creation leaves: it lists
-/// [`FEATURE`] and its whole ops log is one `RepoInitializedUpdate`.
-pub fn is_interrupted_creation(bytes: &[u8]) -> IcechunkResult<bool> {
-    let info = decode(bytes)?;
-    if !lists(&info)? || info.repo_before_updates()?.is_some() {
-        return Ok(false);
-    }
-    let mut entries = info.latest_updates()?;
-    let first = entries.next().transpose()?;
-    let only_initialized = matches!(first, Some((UpdateType::RepoInitializedUpdate, ..)))
-        && entries.next().transpose()?.is_none();
-    Ok(only_initialized)
-}
-
 /// The repo info file with [`FEATURE`] added or removed, keeping the status,
 /// and a `RepoStatusChangedUpdate` at `now` whose predecessor entry names
 /// `backup_path`, the ops log paged at `num_updates_per_file`.
@@ -173,6 +159,7 @@ mod tests {
         format_constants::SpecVersionBin,
         repo_info::{
             DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE, RepoAvailability, RepoStatus,
+            UpdateType,
         },
         snapshot::SnapshotInfo,
     };
@@ -312,22 +299,7 @@ mod tests {
     }
 
     #[icechunk_macros::test]
-    fn only_a_first_version_with_the_feature_is_an_interrupted_creation() -> TestResult {
-        assert!(is_interrupted_creation(&with_feature()?)?);
-        assert!(!is_interrupted_creation(&featureless()?)?);
-        let removed =
-            convert_default(&with_feature()?, FeatureChange::Remove, "repo.a", 1)?;
-        let added = convert_default(&removed, FeatureChange::Add, "repo.b", 2)?;
-        assert!(lists_feature(&added)?);
-        assert!(!is_interrupted_creation(&added)?);
-        // Paged so that the only entry left is the newest one.
-        let paged = convert(&removed, FeatureChange::Add, "repo.b", at(2)?, 1)?;
-        assert!(!is_interrupted_creation(&paged)?);
-        Ok(())
-    }
-
-    #[icechunk_macros::test]
-    fn convert_changes_only_the_feature_the_gate_and_the_ops_log() -> TestResult {
+    fn convert_changes_only_the_feature_and_the_ops_log() -> TestResult {
         let read_only = RepoStatus {
             availability: RepoAvailability::ReadOnly,
             set_at: at(1)?,
@@ -350,10 +322,7 @@ mod tests {
         )?)?;
         assert_eq!(added.writer_features()?, [FeatureName::new(FEATURE)].into());
         assert_eq!(added.status()?, read_only);
-        assert_eq!(
-            added.raw_status()?.repo_status().availability,
-            RepoAvailability::ReadOnly
-        );
+        assert_eq!(added.raw_status()?, original.raw_status()?);
         let entries: Vec<_> = added.latest_updates()?.collect::<Result<_, _>>()?;
         assert!(
             matches!(&entries[0], (UpdateType::RepoStatusChangedUpdate { .. }, time, None) if *time == now),
@@ -416,7 +385,6 @@ mod tests {
             lists_feature(&bytes).err().ok_or("lists_feature")?;
             change_info(&bytes).err().ok_or("change_info")?;
             backup_paths(&bytes).err().ok_or("backup_paths")?;
-            is_interrupted_creation(&bytes).err().ok_or("is_interrupted_creation")?;
             convert(&bytes, FeatureChange::Add, "repo.a", at(1)?, 10)
                 .err()
                 .ok_or("convert")?;

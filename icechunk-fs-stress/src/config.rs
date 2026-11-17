@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::layout::RunRoot;
 
-pub const RUN_CONFIG_VERSION: u32 = 6;
+pub const RUN_CONFIG_VERSION: u32 = 7;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -51,12 +51,6 @@ pub struct RunConfig {
     /// Repository mode on the filesystem backend: the status toggler.
     #[serde(deserialize_with = "Option::deserialize")]
     pub readonly: Option<ReadOnlyConfig>,
-    /// Filesystem backend: how often each host's sampler reads `$ROOT/repo`.
-    #[serde(with = "option_millis")]
-    pub mirror_sample_every: Option<Duration>,
-    /// Filesystem backend: the fork actor.
-    #[serde(deserialize_with = "Option::deserialize")]
-    pub fork: Option<ForkConfig>,
     /// The storage root when it isn't the run root's `storage/`: a phase of
     /// the conversion scenario names the scenario's shared one. Absolute.
     #[serde(deserialize_with = "Option::deserialize")]
@@ -113,19 +107,15 @@ pub enum PointName {
     BeforeRename,
     Renamed,
     BeforeTidyUp,
-    BeforePublish,
-    MirrorStaged,
-    BeforeMirrorRename,
-    MirrorRenamed,
     /// The conversions' steps, where the conversion scenario kills its
     /// converter; never in a run's fault points.
     FromObjectStoreBackup,
     FromObjectStoreBuild,
     FromObjectStoreRenameDir,
-    FromObjectStorePublish,
-    ToObjectStoreForkCheck,
+    FromObjectStoreRepoUnlinked,
+    ToObjectStoreBeforeChange,
     ToObjectStoreChange,
-    ToObjectStorePublish,
+    ToObjectStoreRepoWritten,
     ToObjectStoreRenameDir,
     ToObjectStoreDeleteDir,
 }
@@ -168,21 +158,6 @@ pub struct ReadOnlyConfig {
     pub hold: Duration,
 }
 
-/// `at` after the go, the fork actor writes a fork: `$ROOT/repo` replaced, as
-/// Icechunk 2.0 to 2.3 replace it, by a repo info without the writer feature.
-/// With `repeat` it forks again 500 ms after each erasure. With `during_gc`
-/// (repository mode with GC, selftest only) the GC worker writes it instead,
-/// once, during the first GC that starts after `at`: right after its change's
-/// publication, before its hook, which must find it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ForkConfig {
-    #[serde(with = "millis")]
-    pub at: Duration,
-    pub repeat: bool,
-    pub during_gc: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RetryConfig {
@@ -213,14 +188,9 @@ pub enum Sabotage {
     LinkAfterRename,
     DeleteWinnerFile,
     AckSupersededWithoutProof,
-    PublishWithoutForkCheck,
-    PublishNonCurrent,
-    CommitWithoutPublish,
-    GcWithoutForkCheck,
-    GcPublishesListed,
     FromObjectStoreWithoutProvenance,
     ToObjectStoreWithoutChange,
-    DeleteDirBeforePublish,
+    DeleteDirBeforeRepoWrite,
 }
 
 const DEFAULT_DURATION: Duration = Duration::from_secs(60);
@@ -233,8 +203,8 @@ const DEFAULT_EXTERNAL_KILL_EVERY: Duration = Duration::from_secs(3);
 const DEFAULT_PAYLOAD_BYTES: usize = 1024;
 const DEFAULT_CHUNK_BYTES: usize = 1024;
 const DEFAULT_GC_EVERY: Duration = Duration::from_secs(5);
-/// Longer than the default pause, so that publications paused before the
-/// hold end within it.
+/// Longer than the default pause, so that changes paused before the hold end
+/// within it.
 pub const DEFAULT_READONLY_HOLD: Duration = Duration::from_secs(3);
 const GC_MARGIN_SLACK: Duration = Duration::from_secs(30);
 /// `init`'s: a commit on a shared filesystem under load can take over a
@@ -261,8 +231,6 @@ impl RunConfig {
             repo_update_retries: RetryConfig::default(),
             sabotage: None,
             readonly: None,
-            mirror_sample_every: None,
-            fork: None,
             storage: None,
         }
     }
@@ -370,17 +338,6 @@ impl RunConfig {
             );
         }
         self.faults.validate()?;
-        if let Some(fork) = &self.fork {
-            ensure!(
-                self.backend == Backend::Filesystem,
-                "the fork actor needs the filesystem backend"
-            );
-            ensure!(fork.at < self.duration, "fork.at must be shorter than duration");
-            ensure!(
-                !fork.during_gc || (self.mode == Mode::Repository && self.gc.is_some()),
-                "fork.during_gc needs a repository-mode run with GC"
-            );
-        }
         if let Some(readonly) = &self.readonly {
             ensure!(
                 self.mode == Mode::Repository && self.backend == Backend::Filesystem,
@@ -401,13 +358,6 @@ impl RunConfig {
         }
         if let Some(storage) = &self.storage {
             ensure!(storage.is_absolute(), "storage must be an absolute path");
-        }
-        if let Some(every) = self.mirror_sample_every {
-            ensure!(
-                self.backend == Backend::Filesystem,
-                "the mirror sampler needs the filesystem backend"
-            );
-            check_period("mirror_sample_every", every)?;
         }
         if self.backend == Backend::LegacyLocal {
             ensure!(
@@ -493,8 +443,6 @@ impl Default for FaultConfig {
                 PointName::Linked,
                 PointName::BeforeRename,
                 PointName::BeforeTidyUp,
-                PointName::BeforePublish,
-                PointName::BeforeMirrorRename,
             ],
             kill_probability: 0.005,
             pause_probability: 0.005,
@@ -559,8 +507,7 @@ impl Default for RetryConfig {
     }
 }
 
-/// The creation's points and the fork check's reads aren't fault points: the
-/// error.
+/// The creation's points aren't fault points: the error.
 impl TryFrom<Point> for PointName {
     type Error = Point;
 
@@ -572,10 +519,6 @@ impl TryFrom<Point> for PointName {
             Point::BeforeRename => Ok(Self::BeforeRename),
             Point::Renamed => Ok(Self::Renamed),
             Point::BeforeTidyUp => Ok(Self::BeforeTidyUp),
-            Point::BeforePublish => Ok(Self::BeforePublish),
-            Point::MirrorStaged => Ok(Self::MirrorStaged),
-            Point::BeforeMirrorRename => Ok(Self::BeforeMirrorRename),
-            Point::MirrorRenamed => Ok(Self::MirrorRenamed),
             Point::Conversion(step) => Ok(match step {
                 FromObjectStore(FromObjectStoreStep::Backup) => {
                     Self::FromObjectStoreBackup
@@ -584,14 +527,16 @@ impl TryFrom<Point> for PointName {
                 FromObjectStore(FromObjectStoreStep::RenameDir) => {
                     Self::FromObjectStoreRenameDir
                 }
-                FromObjectStore(FromObjectStoreStep::Publish) => {
-                    Self::FromObjectStorePublish
+                FromObjectStore(FromObjectStoreStep::RepoUnlinked) => {
+                    Self::FromObjectStoreRepoUnlinked
                 }
-                ToObjectStore(ToObjectStoreStep::ForkCheck) => {
-                    Self::ToObjectStoreForkCheck
+                ToObjectStore(ToObjectStoreStep::BeforeChange) => {
+                    Self::ToObjectStoreBeforeChange
                 }
                 ToObjectStore(ToObjectStoreStep::Change) => Self::ToObjectStoreChange,
-                ToObjectStore(ToObjectStoreStep::Publish) => Self::ToObjectStorePublish,
+                ToObjectStore(ToObjectStoreStep::RepoWritten) => {
+                    Self::ToObjectStoreRepoWritten
+                }
                 ToObjectStore(ToObjectStoreStep::RenameDir) => {
                     Self::ToObjectStoreRenameDir
                 }
@@ -599,7 +544,7 @@ impl TryFrom<Point> for PointName {
                     Self::ToObjectStoreDeleteDir
                 }
             }),
-            Point::Creation(_) | Point::BeforeMirrorRead => Err(point),
+            Point::Creation(_) => Err(point),
         }
     }
 }
@@ -622,14 +567,16 @@ impl TryFrom<PointName> for Point {
             PointName::FromObjectStoreRenameDir => {
                 FromObjectStore(FromObjectStoreStep::RenameDir)
             }
-            PointName::FromObjectStorePublish => {
-                FromObjectStore(FromObjectStoreStep::Publish)
+            PointName::FromObjectStoreRepoUnlinked => {
+                FromObjectStore(FromObjectStoreStep::RepoUnlinked)
             }
-            PointName::ToObjectStoreForkCheck => {
-                ToObjectStore(ToObjectStoreStep::ForkCheck)
+            PointName::ToObjectStoreBeforeChange => {
+                ToObjectStore(ToObjectStoreStep::BeforeChange)
             }
             PointName::ToObjectStoreChange => ToObjectStore(ToObjectStoreStep::Change),
-            PointName::ToObjectStorePublish => ToObjectStore(ToObjectStoreStep::Publish),
+            PointName::ToObjectStoreRepoWritten => {
+                ToObjectStore(ToObjectStoreStep::RepoWritten)
+            }
             PointName::ToObjectStoreRenameDir => {
                 ToObjectStore(ToObjectStoreStep::RenameDir)
             }
@@ -657,18 +604,13 @@ impl From<ProtocolSabotage> for Sabotage {
             ProtocolSabotage::AckSupersededWithoutProof => {
                 Self::AckSupersededWithoutProof
             }
-            ProtocolSabotage::PublishWithoutForkCheck => Self::PublishWithoutForkCheck,
-            ProtocolSabotage::PublishNonCurrent => Self::PublishNonCurrent,
-            ProtocolSabotage::CommitWithoutPublish => Self::CommitWithoutPublish,
-            ProtocolSabotage::GcWithoutForkCheck => Self::GcWithoutForkCheck,
-            ProtocolSabotage::GcPublishesListed => Self::GcPublishesListed,
             ProtocolSabotage::FromObjectStoreWithoutProvenance => {
                 Self::FromObjectStoreWithoutProvenance
             }
             ProtocolSabotage::ToObjectStoreWithoutChange => {
                 Self::ToObjectStoreWithoutChange
             }
-            ProtocolSabotage::DeleteDirBeforePublish => Self::DeleteDirBeforePublish,
+            ProtocolSabotage::DeleteDirBeforeRepoWrite => Self::DeleteDirBeforeRepoWrite,
         }
     }
 }
@@ -690,14 +632,9 @@ impl Sabotage {
                 PointName::BeforeTidyUp
             }
             Self::AckSupersededWithoutProof => PointName::Renamed,
-            Self::PublishWithoutForkCheck => PointName::MirrorStaged,
-            Self::PublishNonCurrent
-            | Self::CommitWithoutPublish
-            | Self::GcWithoutForkCheck
-            | Self::GcPublishesListed => PointName::BeforePublish,
             Self::FromObjectStoreWithoutProvenance => PointName::FromObjectStoreRenameDir,
             Self::ToObjectStoreWithoutChange => PointName::ToObjectStoreChange,
-            Self::DeleteDirBeforePublish => PointName::ToObjectStoreRenameDir,
+            Self::DeleteDirBeforeRepoWrite => PointName::ToObjectStoreRenameDir,
         }
     }
 
@@ -708,7 +645,7 @@ impl Sabotage {
             self,
             Self::FromObjectStoreWithoutProvenance
                 | Self::ToObjectStoreWithoutChange
-                | Self::DeleteDirBeforePublish
+                | Self::DeleteDirBeforeRepoWrite
         )
     }
 }
@@ -797,12 +734,6 @@ mod tests {
             every: Duration::from_secs(10),
             hold: DEFAULT_READONLY_HOLD,
         });
-        repo.mirror_sample_every = Some(Duration::from_millis(25));
-        repo.fork = Some(ForkConfig {
-            at: Duration::from_secs(20),
-            repeat: true,
-            during_gc: true,
-        });
         repo.write_new(&root).unwrap();
         assert_eq!(RunConfig::load(&root).unwrap(), repo);
 
@@ -834,18 +765,18 @@ mod tests {
         assert_eq!(RunConfig::load_resolved(&root).unwrap().0, root);
     }
 
-    /// A `run.json` of version 5, from before `storage`, is another
-    /// version, not a malformed file.
+    /// A `run.json` of an older version, with fields this one lacks, is
+    /// another version, not a malformed file.
     #[test]
     fn an_older_run_json_is_an_unsupported_version() {
         let (_dir, root) = run_root();
         let mut json =
             serde_json::to_value(RunConfig::defaults(Mode::Storage, 1)).unwrap();
-        json.as_object_mut().unwrap().remove("storage");
-        json["version"] = 5.into();
+        json["retired"] = serde_json::Value::Null;
+        json["version"] = 6.into();
         fs::write(root.run_json(), serde_json::to_vec(&json).unwrap()).unwrap();
         let err = format!("{:#}", RunConfig::load(&root).unwrap_err());
-        assert!(err.contains("unsupported version 5, expected 6"), "{err}");
+        assert!(err.contains("unsupported version 6, expected 7"), "{err}");
     }
 
     #[test]
@@ -878,14 +809,12 @@ mod tests {
     fn durations_are_milliseconds_and_every_field_is_required() {
         let config = RunConfig::defaults(Mode::Storage, 2);
         let json = serde_json::to_value(&config).unwrap();
-        assert_eq!(json["version"], 6);
+        assert_eq!(json["version"], 7);
         assert_eq!(json["faults"]["pause"], 2000);
         assert_eq!(json["stall_threshold"], 30_000);
         assert_eq!(json["external_kill_every"], 3000);
         assert_eq!(json["gc"], serde_json::Value::Null);
         assert_eq!(json["readonly"], serde_json::Value::Null);
-        assert_eq!(json["mirror_sample_every"], serde_json::Value::Null);
-        assert_eq!(json["fork"], serde_json::Value::Null);
 
         assert_eq!(json["backend"], "filesystem");
         assert_eq!(
@@ -903,8 +832,6 @@ mod tests {
             "fsync",
             "backend",
             "readonly",
-            "mirror_sample_every",
-            "fork",
             "storage",
         ] {
             let mut json = json.clone();
@@ -946,12 +873,6 @@ mod tests {
             config.validate().unwrap();
             config.gc = Some(GcConfig::defaults(config.faults.pause));
             config.sabotage = Some(Sabotage::SkipLink);
-            config.mirror_sample_every = Some(Duration::from_millis(25));
-            config.fork = Some(ForkConfig {
-                at: Duration::from_secs(5),
-                repeat: true,
-                during_gc: false,
-            });
             config.validate().unwrap();
         }
         let mut config = RunConfig::defaults(Mode::Repository, 1);
@@ -1034,27 +955,6 @@ mod tests {
                     hold: DEFAULT_READONLY_HOLD,
                 });
             }),
-            ("zero sample every", |c| c.mirror_sample_every = Some(Duration::ZERO)),
-            ("fork at the end", |c| {
-                c.fork =
-                    Some(ForkConfig { at: c.duration, repeat: false, during_gc: false });
-            }),
-            ("fork during GC without GC", |c| {
-                c.fork = Some(ForkConfig {
-                    at: Duration::from_secs(1),
-                    repeat: false,
-                    during_gc: true,
-                });
-            }),
-            ("fork during GC in storage mode", |c| {
-                c.mode = Mode::Storage;
-                c.gc = Some(GcConfig::defaults(c.faults.pause));
-                c.fork = Some(ForkConfig {
-                    at: Duration::from_secs(1),
-                    repeat: false,
-                    during_gc: true,
-                });
-            }),
             ("relative storage", |c| c.storage = Some(PathBuf::from("storage"))),
             ("conversion step in the fault points", |c| {
                 c.faults.points = vec![PointName::Linked, PointName::ToObjectStoreChange];
@@ -1101,27 +1001,12 @@ mod tests {
             ("pause", |c| c.faults.pause_probability = 0.1),
             ("sabotage", |c| c.sabotage = Some(Sabotage::AckUnproven)),
         ];
-        let sampler_or_toggler: &[(&str, Mutate)] = &[
-            ("sampler", |c| c.mirror_sample_every = Some(Duration::from_millis(25))),
-            ("fork actor", |c| {
-                c.fork = Some(ForkConfig {
-                    at: Duration::from_secs(1),
-                    repeat: false,
-                    during_gc: false,
-                });
-            }),
-            ("toggler", |c| {
-                c.readonly = Some(ReadOnlyConfig {
-                    every: Duration::from_secs(5),
-                    hold: DEFAULT_READONLY_HOLD,
-                });
-            }),
-        ];
-        for (name, mutate) in sampler_or_toggler {
-            let mut config = legacy(Mode::Repository);
-            mutate(&mut config);
-            assert!(config.validate().is_err(), "{name}");
-        }
+        let mut toggled = legacy(Mode::Repository);
+        toggled.readonly = Some(ReadOnlyConfig {
+            every: Duration::from_secs(5),
+            hold: DEFAULT_READONLY_HOLD,
+        });
+        assert!(toggled.validate().is_err());
         for (name, mutate) in cases {
             for mode in [Mode::Storage, Mode::Repository] {
                 let mut config = legacy(mode);
@@ -1150,16 +1035,9 @@ mod tests {
         assert_eq!(config.stall_threshold, Duration::from_secs(30));
         assert_eq!(
             config.faults.points,
-            [
-                PointName::Linked,
-                PointName::BeforeRename,
-                PointName::BeforeTidyUp,
-                PointName::BeforePublish,
-                PointName::BeforeMirrorRename,
-            ]
+            [PointName::Linked, PointName::BeforeRename, PointName::BeforeTidyUp,]
         );
-        assert_eq!((config.readonly, config.mirror_sample_every), (None, None));
-        assert_eq!(config.fork, None);
+        assert_eq!(config.readonly, None);
     }
 
     #[test]
@@ -1197,14 +1075,6 @@ mod tests {
             (Point::BeforeRename, PointName::BeforeRename, "before_rename"),
             (Point::Renamed, PointName::Renamed, "renamed"),
             (Point::BeforeTidyUp, PointName::BeforeTidyUp, "before_tidy_up"),
-            (Point::BeforePublish, PointName::BeforePublish, "before_publish"),
-            (Point::MirrorStaged, PointName::MirrorStaged, "mirror_staged"),
-            (
-                Point::BeforeMirrorRename,
-                PointName::BeforeMirrorRename,
-                "before_mirror_rename",
-            ),
-            (Point::MirrorRenamed, PointName::MirrorRenamed, "mirror_renamed"),
         ];
         for (point, name, json) in points {
             assert_eq!(PointName::try_from(point), Ok(name));
@@ -1227,15 +1097,18 @@ mod tests {
                 PointName::FromObjectStoreRenameDir,
             ),
             (
-                FromObjectStore(FromObjectStoreStep::Publish),
-                PointName::FromObjectStorePublish,
+                FromObjectStore(FromObjectStoreStep::RepoUnlinked),
+                PointName::FromObjectStoreRepoUnlinked,
             ),
             (
-                ToObjectStore(ToObjectStoreStep::ForkCheck),
-                PointName::ToObjectStoreForkCheck,
+                ToObjectStore(ToObjectStoreStep::BeforeChange),
+                PointName::ToObjectStoreBeforeChange,
             ),
             (ToObjectStore(ToObjectStoreStep::Change), PointName::ToObjectStoreChange),
-            (ToObjectStore(ToObjectStoreStep::Publish), PointName::ToObjectStorePublish),
+            (
+                ToObjectStore(ToObjectStoreStep::RepoWritten),
+                PointName::ToObjectStoreRepoWritten,
+            ),
             (
                 ToObjectStore(ToObjectStoreStep::RenameDir),
                 PointName::ToObjectStoreRenameDir,
@@ -1250,14 +1123,16 @@ mod tests {
             assert_eq!(Point::try_from(name), Ok(Point::Conversion(step)));
             assert!(name.is_conversion_step(), "{name:?}");
         }
-        assert_eq!(
-            serde_json::to_value(PointName::ToObjectStoreDeleteDir).unwrap(),
-            "to_object_store_delete_dir"
-        );
+        for (name, json) in [
+            (PointName::ToObjectStoreDeleteDir, "to_object_store_delete_dir"),
+            (PointName::FromObjectStoreRepoUnlinked, "from_object_store_repo_unlinked"),
+            (PointName::ToObjectStoreBeforeChange, "to_object_store_before_change"),
+            (PointName::ToObjectStoreRepoWritten, "to_object_store_repo_written"),
+        ] {
+            assert_eq!(serde_json::to_value(name).unwrap(), json);
+        }
         let creation = Point::Creation(icechunk_fs::fault_injection::CreationStep::Built);
         assert_eq!(PointName::try_from(creation), Err(creation));
-        let read = Point::BeforeMirrorRead;
-        assert_eq!(PointName::try_from(read), Err(read));
     }
 
     #[test]
@@ -1316,36 +1191,6 @@ mod tests {
                 PointName::Renamed,
             ),
             (
-                P::PublishWithoutForkCheck,
-                S::PublishWithoutForkCheck,
-                "publish_without_fork_check",
-                PointName::MirrorStaged,
-            ),
-            (
-                P::PublishNonCurrent,
-                S::PublishNonCurrent,
-                "publish_non_current",
-                PointName::BeforePublish,
-            ),
-            (
-                P::CommitWithoutPublish,
-                S::CommitWithoutPublish,
-                "commit_without_publish",
-                PointName::BeforePublish,
-            ),
-            (
-                P::GcWithoutForkCheck,
-                S::GcWithoutForkCheck,
-                "gc_without_fork_check",
-                PointName::BeforePublish,
-            ),
-            (
-                P::GcPublishesListed,
-                S::GcPublishesListed,
-                "gc_publishes_listed",
-                PointName::BeforePublish,
-            ),
-            (
                 P::FromObjectStoreWithoutProvenance,
                 S::FromObjectStoreWithoutProvenance,
                 "from_object_store_without_provenance",
@@ -1358,9 +1203,9 @@ mod tests {
                 PointName::ToObjectStoreChange,
             ),
             (
-                P::DeleteDirBeforePublish,
-                S::DeleteDirBeforePublish,
-                "delete_dir_before_publish",
+                P::DeleteDirBeforeRepoWrite,
+                S::DeleteDirBeforeRepoWrite,
+                "delete_dir_before_repo_write",
                 PointName::ToObjectStoreRenameDir,
             ),
         ];

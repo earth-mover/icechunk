@@ -54,8 +54,6 @@ pub struct Preset {
     pub repository_duration: Duration,
     #[serde(with = "millis")]
     pub external_kill_every: Duration,
-    #[serde(with = "millis")]
-    pub mirror_sample_every: Duration,
     /// Repository mode only.
     #[serde(with = "millis")]
     pub readonly_every: Duration,
@@ -65,7 +63,6 @@ pub const PRESET: Preset = Preset {
     storage_duration: Duration::from_secs(5 * 60),
     repository_duration: Duration::from_secs(10 * 60),
     external_kill_every: Duration::from_secs(10),
-    mirror_sample_every: Duration::from_millis(25),
     readonly_every: Duration::from_secs(10),
 };
 
@@ -138,7 +135,6 @@ impl Qualify {
         config.workers_per_host_default = self.workers_per_host;
         config.repo_update_retries.max_backoff_ms = self.max_backoff_ms;
         config.external_kill_every = Some(preset.external_kill_every);
-        config.mirror_sample_every = Some(preset.mirror_sample_every);
         config.duration = match mode {
             Mode::Storage => preset.storage_duration,
             Mode::Repository => preset.repository_duration,
@@ -647,11 +643,10 @@ mod tests {
         let mut expected = RunConfig::defaults(Mode::Storage, 3);
         expected.duration = Duration::from_secs(300);
         expected.external_kill_every = Some(Duration::from_secs(10));
-        expected.mirror_sample_every = Some(Duration::from_millis(25));
         assert_eq!(qualify.run_config(Mode::Storage).unwrap(), expected);
         assert_eq!(expected.workers_per_host_default, 8);
         assert_eq!(expected.fault_floor, FaultFloor::default());
-        assert_eq!((expected.gc, expected.readonly, expected.fork), (None, None, None));
+        assert_eq!((expected.gc, expected.readonly), (None, None));
     }
 
     #[test]
@@ -662,7 +657,6 @@ mod tests {
         expected.workers_per_host_default = 4;
         expected.repo_update_retries.max_backoff_ms = 1000;
         expected.external_kill_every = Some(Duration::from_secs(10));
-        expected.mirror_sample_every = Some(Duration::from_millis(25));
         expected.readonly = Some(ReadOnlyConfig {
             every: Duration::from_secs(10),
             hold: DEFAULT_READONLY_HOLD,
@@ -670,7 +664,6 @@ mod tests {
         expected.gc = Some(GcConfig::run_defaults(expected.faults.pause));
         assert_eq!(qualify.run_config(Mode::Repository).unwrap(), expected);
         assert_eq!(expected.gc.unwrap().margin, Duration::from_secs(186));
-        assert_eq!(expected.fork, None);
     }
 
     #[test]
@@ -769,7 +762,6 @@ mod tests {
                 incarnations_spawned: 1,
                 external_kills: 0,
                 stragglers: 0,
-                sampler_error: None,
             })
         };
         let late = || Err(LateHost { hosts: 2 }.into());

@@ -14,7 +14,7 @@ use crate::{
     format_constants::SpecVersionBin,
     lookup_index_by_key,
     snapshot::{SnapshotInfo, SnapshotProperties},
-    writer_features::{FeatureName, WriterFeature, gate_reason},
+    writer_features::{FeatureName, WriterFeature},
 };
 
 use chrono::{DateTime, Utc};
@@ -49,16 +49,14 @@ pub struct RepoStatus {
     pub limited_availability_reason: Option<String>,
 }
 
-/// A `RepoStatus` table exactly as stored. Notice this needs to be interpreted
-/// according to spec 2.2
+/// A `RepoStatus` table exactly as stored, including availability values this
+/// library never writes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StoredRepoStatus {
     #[serde(serialize_with = "serialize_raw_availability")]
     availability: generated::RepoAvailability,
     set_at: DateTime<Utc>,
     limited_availability_reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    underlying: Option<Box<StoredRepoStatus>>,
 }
 
 fn serialize_raw_availability<S: serde::Serializer>(
@@ -72,52 +70,29 @@ fn serialize_raw_availability<S: serde::Serializer>(
 }
 
 impl StoredRepoStatus {
-    /// Encode `status` in a repo info potentially listing `writer_features`
-    pub(crate) fn new(status: &RepoStatus, writer_features: &[FeatureName]) -> Self {
-        let own = StoredRepoStatus {
+    pub(crate) fn new(status: &RepoStatus) -> Self {
+        StoredRepoStatus {
             availability: status.availability.into(),
             set_at: status.set_at,
             limited_availability_reason: status.limited_availability_reason.clone(),
-            underlying: None,
-        };
-        if writer_features.is_empty() {
-            own
-        } else {
-            StoredRepoStatus {
-                availability: generated::RepoAvailability::ReadOnly,
-                set_at: status.set_at,
-                limited_availability_reason: Some(gate_reason(
-                    writer_features,
-                    status.limited_availability_reason.as_deref(),
-                )),
-                underlying: Some(Box::new(own)),
-            }
         }
     }
 
-    /// Any status as stored, including shapes and values this library never
-    /// writes.
+    /// Any status as stored, including values this library never writes.
     #[cfg(any(test, feature = "fault-injection"))]
     pub fn for_tests(
         availability: generated::RepoAvailability,
         set_at: DateTime<Utc>,
         limited_availability_reason: Option<String>,
-        underlying: Option<StoredRepoStatus>,
     ) -> Self {
-        Self {
-            availability,
-            set_at,
-            limited_availability_reason,
-            underlying: underlying.map(Box::new),
-        }
+        Self { availability, set_at, limited_availability_reason }
     }
 
-    /// The repository's own status: `underlying` when present. `Offline` and
-    /// undefined availabilities read as `ReadOnly`
+    /// The status as read: `Offline` and undefined availabilities read as
+    /// `ReadOnly`
     pub fn repo_status(&self) -> RepoStatus {
-        let own = self.underlying.as_deref().unwrap_or(self);
-        let stored_reason = own.limited_availability_reason.as_deref();
-        let (availability, limited_availability_reason) = match own.availability {
+        let stored_reason = self.limited_availability_reason.as_deref();
+        let (availability, limited_availability_reason) = match self.availability {
             generated::RepoAvailability::Online => {
                 (RepoAvailability::Online, stored_reason.map(String::from))
             }
@@ -141,53 +116,13 @@ impl StoredRepoStatus {
                 (RepoAvailability::ReadOnly, Some(reason))
             }
         };
-        RepoStatus { availability, set_at: own.set_at, limited_availability_reason }
-    }
-
-    fn shape_defects(&self, writer_features: &[FeatureName]) -> Vec<String> {
-        let mut defects = Vec::new();
-        match (&self.underlying, writer_features.is_empty()) {
-            (Some(_), true) => {
-                defects
-                    .push("status.underlying is present without writer features".into());
-            }
-            (None, false) => {
-                defects.push("status.underlying is absent with writer features".into());
-            }
-            _ => {}
-        }
-        if let Some(underlying) = self.underlying.as_deref() {
-            if underlying.underlying.is_some() {
-                defects.push("status.underlying has an underlying of its own".into());
-            }
-            if self.availability != generated::RepoAvailability::ReadOnly {
-                defects.push(format!(
-                    "the gate's availability is {:?}, not ReadOnly",
-                    self.availability
-                ));
-            }
-            if self.set_at != underlying.set_at {
-                defects.push(format!(
-                    "the gate's set_at {} differs from status.underlying.set_at {}",
-                    self.set_at, underlying.set_at
-                ));
-            }
-        }
-        if !writer_features.is_sorted() {
-            defects.push("writer_features is not sorted".into());
-        }
-        if writer_features.iter().collect::<BTreeSet<_>>().len() != writer_features.len()
-        {
-            defects.push("writer_features has duplicates".into());
-        }
-        defects
+        RepoStatus { availability, set_at: self.set_at, limited_availability_reason }
     }
 
     fn to_fb<'bldr>(
         &self,
         builder: &mut flatbuffers::FlatBufferBuilder<'bldr>,
     ) -> WIPOffset<generated::RepoStatus<'bldr>> {
-        let underlying = self.underlying.as_deref().map(|u| u.to_fb(builder));
         let limited_availability_reason =
             self.limited_availability_reason.as_deref().map(|r| builder.create_string(r));
         generated::RepoStatus::create(
@@ -196,10 +131,22 @@ impl StoredRepoStatus {
                 availability: self.availability,
                 set_at: self.set_at.timestamp_micros() as u64,
                 limited_availability_reason,
-                underlying,
             },
         )
     }
+}
+
+/// Why `writer_features`, as stored, makes a repo info malformed: unsorted or
+/// duplicated names.
+fn writer_features_defects(writer_features: &[FeatureName]) -> Vec<String> {
+    let mut defects = Vec::new();
+    if !writer_features.is_sorted() {
+        defects.push("writer_features is not sorted".into());
+    }
+    if writer_features.iter().collect::<BTreeSet<_>>().len() != writer_features.len() {
+        defects.push("writer_features has duplicates".into());
+    }
+    defects
 }
 
 impl TryFrom<generated::RepoStatus<'_>> for StoredRepoStatus {
@@ -212,16 +159,12 @@ impl TryFrom<generated::RepoStatus<'_>> for StoredRepoStatus {
             limited_availability_reason: fb_status
                 .limited_availability_reason()
                 .map(|s| s.to_string()),
-            underlying: fb_status
-                .underlying()
-                .map(|u| u.try_into().map(Box::new))
-                .transpose()?,
         })
     }
 }
 
-/// What every rebuild of a repo info carries over: the writer features exactly
-/// as listed, and the status with its gate.
+/// What every rebuild of a repo info carries over: the writer features and the
+/// status, exactly as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepoHeader {
     writer_features: Vec<FeatureName>,
@@ -237,10 +180,10 @@ impl RepoHeader {
     }
 
     fn from_names(writer_features: Vec<FeatureName>, status: &RepoStatus) -> Self {
-        Self { status: StoredRepoStatus::new(status, &writer_features), writer_features }
+        Self { status: StoredRepoStatus::new(status), writer_features }
     }
 
-    /// The same writer features with a new status, and the gate regenerated.
+    /// The same writer features with a new status.
     fn with_status(self, status: &RepoStatus) -> Self {
         Self::from_names(self.writer_features, status)
     }
@@ -252,22 +195,6 @@ impl RepoHeader {
     pub fn status(&self) -> &StoredRepoStatus {
         &self.status
     }
-}
-
-/// The change [`RepoInfo::check_writable_shape`] checks a repo info for.
-///
-/// The shape is how the status and the writer features are stored: features
-/// sorted and unique, and a `ReadOnly` gate over an underlying status exactly
-/// when features are listed. A malformed shape is readable, but only a
-/// status-only change may write over it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WritableShapeMode {
-    /// Any change but a status-only one: the shape must be well formed.
-    AnyChange,
-    /// A change of the status alone: any shape passes, since the change
-    /// rewrites the status well formed. Checking that every listed feature is
-    /// implemented is the caller's job.
-    StatusOnlyChange,
 }
 
 impl RepoStatus {
@@ -927,13 +854,11 @@ impl RepoInfo {
             .try_collect()
     }
 
-    /// The repository's own status: the gate's `underlying` when present.
-    /// A malformed repo info reads as `ReadOnly`, with a reason naming the
-    /// defects before any other reason.
+    /// The repository status. A malformed repo info reads as `ReadOnly`, with
+    /// a reason naming the defects before any other reason.
     pub fn status(&self) -> IcechunkResult<RepoStatus> {
-        let raw = self.raw_status()?;
-        let status = raw.repo_status();
-        let defects = raw.shape_defects(&self.raw_writer_features()?);
+        let status = self.raw_status()?.repo_status();
+        let defects = writer_features_defects(&self.raw_writer_features()?);
         if defects.is_empty() {
             return Ok(status);
         }
@@ -949,7 +874,7 @@ impl RepoInfo {
         })
     }
 
-    /// The status as stored, the gate when the repo info lists writer features.
+    /// The status as stored.
     pub fn raw_status(&self) -> IcechunkResult<StoredRepoStatus> {
         self.root()?.status().try_into()
     }
@@ -977,22 +902,14 @@ impl RepoInfo {
     }
 
     /// A [`IcechunkFormatErrorKind::MalformedRepoInfo`] error if this repo
-    /// info is malformed, judged on the status and the writer features as
-    /// stored, unless `mode` allows it. A malformed repo info is still
-    /// readable.
-    pub fn check_writable_shape(&self, mode: WritableShapeMode) -> IcechunkResult<()> {
-        match mode {
-            WritableShapeMode::StatusOnlyChange => Ok(()),
-            WritableShapeMode::AnyChange => {
-                let defects =
-                    self.raw_status()?.shape_defects(&self.raw_writer_features()?);
-                if defects.is_empty() {
-                    Ok(())
-                } else {
-                    Err(IcechunkFormatErrorKind::MalformedRepoInfo(defects.join("; ")))
-                        .capture()
-                }
-            }
+    /// info is malformed: its writer features, as stored, are unsorted or
+    /// duplicated. A malformed repo info is readable but not modifiable.
+    pub fn check_writable_shape(&self) -> IcechunkResult<()> {
+        let defects = writer_features_defects(&self.raw_writer_features()?);
+        if defects.is_empty() {
+            Ok(())
+        } else {
+            Err(IcechunkFormatErrorKind::MalformedRepoInfo(defects.join("; "))).capture()
         }
     }
 
@@ -3084,33 +3001,9 @@ mod tests {
         }
     }
 
-    fn assert_gate_shape(info: &RepoInfo) -> Result<(), Box<dyn std::error::Error>> {
-        let features = info.raw_writer_features()?;
-        let raw = info.raw_status()?;
-        if features.is_empty() {
-            assert!(raw.underlying.is_none());
-        } else {
-            let underlying = raw.underlying.as_deref().expect("a gate wraps the status");
-            assert_eq!(raw.availability, generated::RepoAvailability::ReadOnly);
-            assert_eq!(raw.set_at, underlying.set_at);
-            assert!(underlying.underlying.is_none(), "underlying is never nested twice");
-            assert_eq!(
-                raw.limited_availability_reason.as_deref(),
-                Some(
-                    gate_reason(
-                        &features,
-                        underlying.limited_availability_reason.as_deref()
-                    )
-                    .as_str()
-                )
-            );
-        }
-        Ok(())
-    }
-
     /// A repo info listing `filesystem-layout-v1`, with a branch `dev`, a tag
     /// `t` and a `ReadOnly` status with a reason.
-    fn gated_repo() -> Result<(RepoInfo, SnapshotId), Box<dyn std::error::Error>> {
+    fn featured_repo() -> Result<(RepoInfo, SnapshotId), Box<dyn std::error::Error>> {
         let snap1 = a_snapshot_info("snap 1");
         let id1 = snap1.id.clone();
         let repo = RepoInfo::initial(
@@ -3147,11 +3040,9 @@ mod tests {
     type Mutator = Box<dyn Fn(&RepoInfo) -> IcechunkResult<RepoInfo>>;
 
     #[test]
-    fn every_mutator_keeps_writer_features_and_gate()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let (base, id1) = gated_repo()?;
+    fn every_mutator_keeps_writer_features() -> Result<(), Box<dyn std::error::Error>> {
+        let (base, id1) = featured_repo()?;
         assert_eq!(base.raw_writer_features()?, fs_layout());
-        assert_gate_shape(&base)?;
         let v = SpecVersionBin::current();
         let snap2 = SnapshotInfo { parent_id: Some(id1.clone()), ..a_snapshot_info("2") };
         let new_status = RepoStatus {
@@ -3229,7 +3120,6 @@ mod tests {
         for (name, mutate) in mutators {
             let after = RepoInfo::from_buffer(mutate(&base)?.bytes().to_vec())?;
             assert_eq!(after.raw_writer_features()?, fs_layout(), "{name}");
-            assert_gate_shape(&after)?;
             if name == "set_status" {
                 assert_eq!(after.status()?, new_status);
                 assert_eq!(status_entries(&after)?[0], after.raw_status()?);
@@ -3242,8 +3132,14 @@ mod tests {
     }
 
     #[test]
-    fn gate_round_trip_and_raw_shape() -> Result<(), Box<dyn std::error::Error>> {
+    fn writer_features_round_trip_with_a_plain_status()
+    -> Result<(), Box<dyn std::error::Error>> {
         let at = DateTime::from_timestamp_micros(3_000_000).unwrap();
+        let online = RepoStatus {
+            availability: RepoAvailability::Online,
+            set_at: at,
+            limited_availability_reason: None,
+        };
         let plain = RepoInfo::initial(
             SpecVersionBin::current(),
             a_snapshot_info("1"),
@@ -3254,10 +3150,8 @@ mod tests {
         );
         assert!(plain.raw_writer_features()?.is_empty());
         assert!(plain.root()?.writer_features().is_none(), "never an empty vector");
-        assert_eq!(plain.raw_status()?.underlying, None);
-        assert_gate_shape(&plain)?;
 
-        let gated = RepoInfo::initial(
+        let layout = RepoInfo::initial(
             SpecVersionBin::current(),
             a_snapshot_info("1"),
             100,
@@ -3265,35 +3159,26 @@ mod tests {
             Some(at),
             &[WriterFeature::FilesystemLayoutV1],
         );
-        let gated = RepoInfo::from_buffer(gated.bytes().to_vec())?;
-        assert_eq!(gated.raw_writer_features()?, fs_layout());
-        assert_eq!(gated.writer_features()?, fs_layout().into_iter().collect());
-        assert_gate_shape(&gated)?;
-        let raw = gated.raw_status()?;
-        assert_eq!(raw.set_at, at);
-        assert_eq!(
-            raw.underlying.as_deref().map(|u| u.availability),
-            Some(generated::RepoAvailability::Online)
-        );
-        assert_eq!(
-            gated.status()?,
-            RepoStatus {
-                availability: RepoAvailability::Online,
-                set_at: at,
-                limited_availability_reason: None
-            }
-        );
+        let layout = RepoInfo::from_buffer(layout.bytes().to_vec())?;
+        assert_eq!(layout.raw_writer_features()?, fs_layout());
+        assert_eq!(layout.writer_features()?, fs_layout().into_iter().collect());
+        let raw = layout.raw_status()?;
+        assert_eq!(raw.availability, generated::RepoAvailability::Online);
+        assert_eq!(raw.limited_availability_reason, None);
+        assert_eq!(raw.repo_status(), online);
+        assert_eq!(layout.status()?, online);
+        layout.check_writable_shape()?;
         // creation is not a change of writer features
-        assert_eq!(gated.latest_updates()?.count(), 1);
+        assert_eq!(layout.latest_updates()?.count(), 1);
 
-        let gated = gated.set_status(
+        let layout = layout.set_status(
             SpecVersionBin::current(),
             &read_only("why"),
             Some(("b", 100)),
         )?;
-        let gated = RepoInfo::from_buffer(gated.bytes().to_vec())?;
-        assert_eq!(gated.status()?, read_only("why"));
-        assert_gate_shape(&gated)?;
+        let layout = RepoInfo::from_buffer(layout.bytes().to_vec())?;
+        assert_eq!(layout.status()?, read_only("why"));
+        assert_eq!(layout.raw_status()?.repo_status(), read_only("why"));
         Ok(())
     }
 
@@ -3326,7 +3211,7 @@ mod tests {
         let added = RepoInfo::from_buffer(added.bytes().to_vec())?;
         assert_eq!(added.raw_writer_features()?, fs_layout());
         assert_eq!(added.status()?, read_only("r"));
-        assert_gate_shape(&added)?;
+        assert_eq!(added.raw_status()?, repo.raw_status()?);
         let updates: Vec<_> = added.latest_updates()?.try_collect()?;
         assert_eq!(updates.len(), entries_before + 1);
         let (entry, entry_time, entry_backup) = &updates[0];
@@ -3355,7 +3240,6 @@ mod tests {
         let removed = RepoInfo::from_buffer(removed.bytes().to_vec())?;
         assert!(removed.raw_writer_features()?.is_empty());
         assert!(removed.root()?.writer_features().is_none());
-        assert_eq!(removed.raw_status()?.underlying, None);
         assert_eq!(removed.status()?, read_only("r"));
         let updates: Vec<_> = removed.latest_updates()?.try_collect()?;
         assert_eq!(updates.len(), entries_before + 2);
@@ -3397,32 +3281,6 @@ mod tests {
     }
 
     #[test]
-    fn gated_history_survives_unrelated_changes() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let (repo, id1) = gated_repo()?;
-        let v = SpecVersionBin::current();
-        let mut repo = repo.set_status(
-            v,
-            &RepoStatus {
-                availability: RepoAvailability::Online,
-                set_at: DateTime::from_timestamp_micros(6_000_000).unwrap(),
-                limited_availability_reason: None,
-            },
-            Some(("b3", 100)),
-        )?;
-        let history = status_entries(&repo)?;
-        assert_eq!(history.len(), 2);
-        assert!(history.iter().all(|s| s.underlying.is_some()));
-
-        for i in 0..10 {
-            repo = repo.add_branch(v, &format!("br{i}"), &id1, &format!("bk{i}"), 100)?;
-        }
-        let repo = RepoInfo::from_buffer(repo.bytes().to_vec())?;
-        assert_eq!(status_entries(&repo)?, history);
-        Ok(())
-    }
-
-    #[test]
     fn raw_writer_features_are_copied_unchanged() -> Result<(), Box<dyn std::error::Error>>
     {
         let v = SpecVersionBin::current();
@@ -3434,7 +3292,7 @@ mod tests {
             FeatureName::new("a-v1"),
         ];
         let header = RepoHeader {
-            status: StoredRepoStatus::new(&read_only("r"), &raw),
+            status: StoredRepoStatus::new(&read_only("r")),
             writer_features: raw.clone(),
         };
         let repo = RepoInfo::new(
@@ -3516,14 +3374,7 @@ mod tests {
             100,
         )?;
         assert_eq!(with_test.raw_writer_features()?, vec![test_feature]);
-        assert_gate_shape(&with_test)?;
-        assert!(
-            with_test
-                .raw_status()?
-                .limited_availability_reason
-                .unwrap()
-                .contains("require a newer Icechunk")
-        );
+        assert_eq!(with_test.status()?, repo.status()?);
         Ok(())
     }
 
@@ -3535,13 +3386,11 @@ mod tests {
         availability: u8,
         set_at: DateTime<Utc>,
         reason: Option<&str>,
-        underlying: Option<StoredRepoStatus>,
     ) -> StoredRepoStatus {
         StoredRepoStatus::for_tests(
             generated::RepoAvailability(availability),
             set_at,
             reason.map(String::from),
-            underlying,
         )
     }
 
@@ -3584,95 +3433,37 @@ mod tests {
     #[test]
     fn malformed_shapes_are_readable_but_not_writable()
     -> Result<(), Box<dyn std::error::Error>> {
-        let v = SpecVersionBin::current();
         let set_at = at(5_000_000);
-        let online = stored(0, set_at, None, None);
-        let gate = |availability: u8, gate_set_at, underlying| {
-            stored(availability, gate_set_at, Some("gate"), Some(underlying))
-        };
+        let online = stored(0, set_at, None);
         let (a, b) = (FeatureName::new("a-v1"), FeatureName::new("b-v1"));
-        let gated = |features: &[FeatureName]| {
-            StoredRepoStatus::new(&online.repo_status(), features)
-        };
-        let malformed_features = ["unsorted features", "duplicate features"];
-        let rows: Vec<(&str, Vec<FeatureName>, StoredRepoStatus)> = vec![
-            (
-                "underlying without features",
-                vec![],
-                stored(0, set_at, None, Some(online.clone())),
-            ),
-            (
-                "features without underlying",
-                fs_layout(),
-                stored(1, set_at, Some("r"), None),
-            ),
-            (
-                "double nesting",
-                fs_layout(),
-                gate(1, set_at, stored(1, set_at, None, Some(online.clone()))),
-            ),
-            ("gate Online", fs_layout(), gate(0, set_at, online.clone())),
-            ("gate Offline", fs_layout(), gate(2, set_at, online.clone())),
-            ("gate undefined", fs_layout(), gate(9, set_at, online.clone())),
-            ("set_at mismatch", fs_layout(), gate(1, at(6_000_000), online.clone())),
-            (
-                malformed_features[0],
-                vec![b.clone(), a.clone()],
-                gated(&[b.clone(), a.clone()]),
-            ),
-            (
-                malformed_features[1],
-                vec![a.clone(), a.clone()],
-                gated(&[a.clone(), a.clone()]),
-            ),
+        let rows = [
+            ("unsorted features", vec![b.clone(), a.clone()]),
+            ("duplicate features", vec![a.clone(), a.clone()]),
         ];
 
-        for (name, features, status) in rows {
-            let info = plain_repo().with_raw_header_for_tests(features, status)?;
+        for (name, features) in rows {
+            let info =
+                plain_repo().with_raw_header_for_tests(features, online.clone())?;
             let info = RepoInfo::from_buffer(info.bytes().to_vec())?;
             assert_reads_as_malformed(&info, name)?;
             info.raw_status()?;
             info.latest_updates()?.try_collect::<_, Vec<_>, _>()?;
-            assert!(
-                is_malformed(&info.check_writable_shape(WritableShapeMode::AnyChange)),
-                "{name}"
-            );
-            info.check_writable_shape(WritableShapeMode::StatusOnlyChange)?;
-
-            let repaired = info.set_status(v, &read_only("fixed"), Some(("b", 100)))?;
-            let repaired = RepoInfo::from_buffer(repaired.bytes().to_vec())?;
-            assert_gate_shape(&repaired)?;
-            let after = repaired.check_writable_shape(WritableShapeMode::AnyChange);
-            if malformed_features.contains(&name) {
-                // a status-only change copies the features as listed
-                assert!(is_malformed(&after), "{name}");
-                assert_reads_as_malformed(&repaired, name)?;
-                assert!(
-                    repaired
-                        .status()?
-                        .limited_availability_reason
-                        .is_some_and(|r| r.ends_with("; fixed")),
-                    "{name}"
-                );
-            } else {
-                after?;
-                assert_eq!(repaired.status()?, read_only("fixed"), "{name}");
-            }
+            assert!(is_malformed(&info.check_writable_shape()), "{name}");
         }
 
         // the malformed reason comes first, then the Offline one, then the stored one
-        let offline_underlying = plain_repo().with_raw_header_for_tests(
-            vec![],
-            stored(1, set_at, None, Some(stored(2, set_at, Some("down"), None))),
+        let unsorted_offline = plain_repo().with_raw_header_for_tests(
+            vec![b.clone(), a.clone()],
+            stored(2, set_at, Some("down")),
         )?;
         assert_eq!(
-            offline_underlying.status()?,
+            unsorted_offline.status()?,
             RepoStatus {
                 availability: RepoAvailability::ReadOnly,
                 set_at,
                 limited_availability_reason: Some(
-                    "malformed repo info: status.underlying is present without writer \
-                     features; availability Offline (2) is reserved, read as ReadOnly; down"
+                    "malformed repo info: writer_features is not sorted; availability \
+                     Offline (2) is reserved, read as ReadOnly; down"
                         .to_string()
                 ),
             }
@@ -3680,21 +3471,15 @@ mod tests {
 
         let well_formed: Vec<(&str, Vec<FeatureName>, StoredRepoStatus)> = vec![
             ("plain", vec![], online.clone()),
-            ("plain Offline", vec![], stored(2, set_at, None, None)),
-            ("plain undefined", vec![], stored(9, set_at, None, None)),
-            ("gate", fs_layout(), gated(&fs_layout())),
-            ("gate with any reason", fs_layout(), gate(1, set_at, online.clone())),
-            (
-                "gate over Offline",
-                fs_layout(),
-                gate(1, set_at, stored(2, set_at, None, None)),
-            ),
+            ("plain Offline", vec![], stored(2, set_at, None)),
+            ("plain undefined", vec![], stored(9, set_at, None)),
+            ("features", vec![a.clone(), b.clone()], online.clone()),
+            ("features Offline", fs_layout(), stored(2, set_at, None)),
         ];
         for (name, features, status) in well_formed {
             let info = plain_repo().with_raw_header_for_tests(features, status)?;
             let info = RepoInfo::from_buffer(info.bytes().to_vec())?;
-            info.check_writable_shape(WritableShapeMode::AnyChange)
-                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            info.check_writable_shape().unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(
                 !info
                     .status()?
@@ -3726,17 +3511,11 @@ mod tests {
                 set_at,
                 limited_availability_reason: Some(expected.to_string()),
             };
-            let own = stored(raw, set_at, reason, None);
-            let plain = plain_repo().with_raw_header_for_tests(vec![], own.clone())?;
-            let plain = RepoInfo::from_buffer(plain.bytes().to_vec())?;
-            assert_eq!(plain.status()?, expected);
-            assert_eq!(plain.raw_status()?.availability.0, raw);
-
-            let gated = plain_repo().with_raw_header_for_tests(
-                fs_layout(),
-                stored(1, set_at, Some("gate"), Some(own)),
-            )?;
-            assert_eq!(gated.status()?, expected);
+            let info = plain_repo()
+                .with_raw_header_for_tests(vec![], stored(raw, set_at, reason))?;
+            let info = RepoInfo::from_buffer(info.bytes().to_vec())?;
+            assert_eq!(info.status()?, expected);
+            assert_eq!(info.raw_status()?.availability.0, raw);
         }
         Ok(())
     }
@@ -3747,7 +3526,7 @@ mod tests {
         let v = SpecVersionBin::current();
         let set_at = at(5_000_000);
         let offline = plain_repo()
-            .with_raw_header_for_tests(vec![], stored(2, set_at, Some("down"), None))?;
+            .with_raw_header_for_tests(vec![], stored(2, set_at, Some("down")))?;
         let mapped = offline.status()?;
         assert_eq!(mapped.availability, RepoAvailability::ReadOnly);
 
@@ -3761,16 +3540,16 @@ mod tests {
             100,
         )?;
         let added = RepoInfo::from_buffer(added.bytes().to_vec())?;
-        let underlying = added.raw_status()?.underlying.expect("a gate");
-        assert_eq!(underlying.availability, generated::RepoAvailability::ReadOnly);
+        let raw = added.raw_status()?;
+        assert_eq!(raw.availability, generated::RepoAvailability::ReadOnly);
         assert_eq!(
-            underlying.limited_availability_reason,
-            mapped.limited_availability_reason
+            raw.limited_availability_reason.as_deref(),
+            Some("availability Offline (2) is reserved, read as ReadOnly; down")
         );
-        assert_eq!(underlying.set_at, set_at);
+        assert_eq!(raw.set_at, set_at);
         assert_eq!(added.status()?, mapped);
         assert_eq!(status_entries(&added)?[0], added.raw_status()?);
-        added.check_writable_shape(WritableShapeMode::AnyChange)?;
+        added.check_writable_shape()?;
 
         let removed = added.with_writer_features(
             v,
@@ -3925,8 +3704,8 @@ mod tests {
     }
 
     #[test]
-    fn deepest_path_of_a_large_gated_ops_log_verifies()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn deepest_path_of_a_large_ops_log_verifies() -> Result<(), Box<dyn std::error::Error>>
+    {
         let v = SpecVersionBin::current();
         let mut repo = RepoInfo::initial(
             v,
@@ -3951,19 +3730,16 @@ mod tests {
         let entries = status_entries(&repo)?;
         assert_eq!(repo.latest_updates()?.count(), 1000);
         assert_eq!(entries.len(), 999);
-        assert!(entries.iter().all(|s| {
-            s.underlying.as_ref().is_some_and(|u| u.limited_availability_reason.is_some())
-        }));
+        assert!(entries.iter().all(|s| s.limited_availability_reason.is_some()));
 
-        // Repo → Update → RepoStatusChangedUpdate → status → underlying
+        // Repo → Update → RepoStatusChangedUpdate → status
         let depth = |max_depth| {
             let opts = VerifierOptions { max_depth, ..ROOT_OPTIONS };
             flatbuffers::root_with_opts::<generated::Repo<'_>>(&opts, repo.bytes())
                 .is_ok()
         };
-        assert!(depth(5));
-        assert!(!depth(4));
-        assert!(ROOT_OPTIONS.max_depth >= 6, "a malformed double nesting stays readable");
+        assert!(depth(4));
+        assert!(!depth(3));
         Ok(())
     }
 
@@ -4015,7 +3791,7 @@ mod tests {
         let tags = [snapshot_ref(&mut b, "t", tag)];
         let tags = b.create_vector(&tags);
         let deleted_tags = b.create_vector::<flatbuffers::ForwardsUOffset<&str>>(&[]);
-        let status = StoredRepoStatus::new(&read_only("r"), &[]).to_fb(&mut b);
+        let status = StoredRepoStatus::new(&read_only("r")).to_fb(&mut b);
         let up = generated::RepoInitializedUpdate::create(
             &mut b,
             &generated::RepoInitializedUpdateArgs {},

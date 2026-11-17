@@ -23,15 +23,22 @@ use std::{
 };
 
 use anyhow::{Context as _, bail, ensure};
+use chrono::Utc;
 use icechunk::{
-    Repository, format::OVERWRITTEN_FILES_PATH, storage::new_local_filesystem_storage,
+    Repository,
+    format::{
+        OVERWRITTEN_FILES_PATH,
+        envelope::DEFAULT_COMPRESSION_LEVEL,
+        repo_info::{
+            DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE, RepoAvailability, RepoStatus,
+        },
+        repo_info_file,
+    },
+    storage::{StorageErrorKind, new_local_filesystem_storage},
 };
 use icechunk_fs::{
     ConversionOutcome, FilesystemStorage,
-    fault_injection::{
-        ConversionStep, Point, ProtocolHooks, Sabotage as ProtocolSabotage,
-        ToObjectStoreStep,
-    },
+    fault_injection::{ConversionStep, Point, ProtocolHooks, ToObjectStoreStep},
 };
 use rand::{RngExt as _, rngs::StdRng};
 use serde::{Deserialize, Serialize};
@@ -41,7 +48,6 @@ use crate::{
     control::{Control, write_control},
     env_info::{default_tag, host_info},
     faults::{FaultHooks, Trigger},
-    fork::{announce_backup, erased, log_fork, write_fork},
     layout::{RunRoot, SCENARIO_TAG, ScenarioRoot},
     log::{
         Direction, FaultAction, LogName, LogWriter, Op, OpResult, Record, now_ms,
@@ -50,11 +56,10 @@ use crate::{
     oracle::{
         History, Verdict, Violation, Warning,
         conversion::{
-            conversion_defect, deleted_history, end_state_defect,
+            conversion_defect, current_version, deleted_history, end_state_defect,
             left_by_stale_root_listing, object_store_overwritten, writer_defect,
         },
-        fork::check_forks,
-        mirror::check_init_version,
+        layout::check_init_version,
         repo::{check_repo, count_operations},
     },
     progress::Progress,
@@ -85,19 +90,24 @@ pub struct ScenarioConfig {
     #[serde(deserialize_with = "Option::deserialize")]
     pub sabotage: Option<Sabotage>,
     /// Kills the first conversion from the object store layout after its
-    /// directory rename, then replaces `$ROOT/repo` as Icechunk 2.3 writes a
-    /// status change, before the rerun: an object-store-layout write during the
-    /// interrupted conversion, which must stop the rerun.
+    /// directory rename, then replaces `$ROOT/repo` with a status change, as
+    /// an object-store-layout writer makes it, before the rerun: an
+    /// object-store-layout write during the interrupted conversion, which
+    /// must stop the rerun.
     pub plant_object_store_write: bool,
     /// Right after a conversion to the object store layout read the current
-    /// version, a commit lands that publishes nothing: what a stale listing
-    /// that hides it from the conversion shows. The conversion must convert
-    /// it too.
+    /// version, a commit lands, as one that a stale listing hides from the
+    /// conversion. The conversion must convert it too.
     pub late_commit: bool,
-    /// The first run of each conversion is killed: from the object store layout
-    /// at a random step, to it right after its change or its publication,
-    /// with a writer tried during the interruption (C7). The scenario fails
-    /// if no conversion from the object store layout was killed or C7 never ran.
+    /// Kills the first conversion to the object store layout once it
+    /// deleted `repo.d`: after `$ROOT/repo` holds its version, or, if it
+    /// deletes `repo.d` first, with no repository left (C6).
+    pub kill_after_deleting_repo_d: bool,
+    /// The first run of each conversion is killed: from the object store
+    /// layout at a random step, to it right after its change or its write of
+    /// `$ROOT/repo`, with a writer tried during the interruption (C7). The
+    /// scenario fails if no conversion from the object store layout was killed
+    /// or C7 never ran.
     pub guaranteed_kills: bool,
 }
 
@@ -152,7 +162,6 @@ fn converter_slot(direction: Direction) -> &'static str {
 /// The slots of the scenario's other logs in a phase.
 const OBJECT_STORE_SLOT: &str = "object-store";
 const WRITER_SLOT: &str = "writer";
-const PLANT_SLOT: &str = "plant";
 
 /// At most this many runs of one conversion, and at most this many of them
 /// killed.
@@ -190,12 +199,12 @@ fn steps(direction: Direction) -> &'static [PointName] {
             PointName::FromObjectStoreBackup,
             PointName::FromObjectStoreBuild,
             PointName::FromObjectStoreRenameDir,
-            PointName::FromObjectStorePublish,
+            PointName::FromObjectStoreRepoUnlinked,
         ],
         Direction::ToObjectStore => &[
-            PointName::ToObjectStoreForkCheck,
+            PointName::ToObjectStoreBeforeChange,
             PointName::ToObjectStoreChange,
-            PointName::ToObjectStorePublish,
+            PointName::ToObjectStoreRepoWritten,
             PointName::ToObjectStoreRenameDir,
             PointName::ToObjectStoreDeleteDir,
         ],
@@ -214,13 +223,14 @@ struct Kills {
 
 impl Kills {
     /// With `guaranteed`: from the object store layout a random step; to it
-    /// right after its change or its publication, where C7 runs.
+    /// right after its change or its write of `$ROOT/repo`, where C7 runs.
     fn new(direction: Direction, guaranteed: bool, rng: &mut StdRng) -> Self {
         let guaranteed = guaranteed.then(|| {
             let steps = match direction {
                 Direction::FromObjectStore => steps(direction),
                 Direction::ToObjectStore => {
-                    &[PointName::ToObjectStoreChange, PointName::ToObjectStorePublish][..]
+                    &[PointName::ToObjectStoreChange, PointName::ToObjectStoreRepoWritten]
+                        [..]
                 }
             };
             steps[rng.random_range(0..steps.len())]
@@ -247,22 +257,11 @@ impl Kills {
     }
 }
 
-/// Hooks for the late commit: its change returns without publishing, as
-/// the change of a writer whose publication a stale listing hides does.
-#[derive(Debug)]
-struct NoPublication;
-
-impl ProtocolHooks for NoPublication {
-    fn sabotaged(&self, sabotage: ProtocolSabotage) -> bool {
-        sabotage == ProtocolSabotage::CommitWithoutPublish
-    }
-}
-
 /// One run of a conversion in `direction`, the `attempt`th of the `round`,
 /// with `wrap` turning its fault hooks into the storage's: logs an intent
 /// and the outcome to `logs/scenario.<direction>.<attempt>.log`. With
-/// `late_commit`, the trigger at the fork-check step of the conversion to the
-/// object store layout commits once.
+/// `late_commit`, the trigger at the step before the change of the
+/// conversion to the object store layout commits once.
 async fn convert_with(
     root: &ScenarioRoot,
     config: &ScenarioConfig,
@@ -282,7 +281,7 @@ async fn convert_with(
     let mut hooks = FaultHooks::new(faults, config.sabotage, Arc::clone(&log));
     if config.late_commit && direction == Direction::ToObjectStore {
         let point = Point::Conversion(ConversionStep::ToObjectStore(
-            ToObjectStoreStep::ForkCheck,
+            ToObjectStoreStep::BeforeChange,
         ));
         let trigger =
             Arc::new(Trigger::new(point, late_commit(&phase, config, &log, &who)));
@@ -318,8 +317,8 @@ async fn convert_with(
 
 /// The late commit, run by a trigger inside the conversion: on a thread of
 /// its own, with a runtime of its own, as the conversion's thread blocks.
-/// It commits to `main` through a storage whose changes don't publish, and
-/// logs as the converter does.
+/// It commits to `main` through a storage of its own, and logs as the
+/// converter does.
 fn late_commit(
     phase: &RunRoot,
     config: &ScenarioConfig,
@@ -335,9 +334,7 @@ fn late_commit(
             let runtime =
                 tokio::runtime::Builder::new_current_thread().enable_all().build()?;
             runtime.block_on(async {
-                let storage = FilesystemStorage::new(&storage)?
-                    .with_fsync(fsync)
-                    .with_protocol_hooks(Arc::new(NoPublication));
+                let storage = FilesystemStorage::new(&storage)?.with_fsync(fsync);
                 let repo = Repository::open(Arc::new(storage)).execute().await.map_err(
                     |err| anyhow::anyhow!("opening the repository: {}", err.kind()),
                 )?;
@@ -779,6 +776,12 @@ impl Scenario<'_> {
                 && run == 0;
             let kill_at = if plant {
                 Some(PointName::FromObjectStoreRenameDir)
+            } else if self.config.kill_after_deleting_repo_d
+                && direction == Direction::ToObjectStore
+                && round == 1
+                && run == 0
+            {
+                Some(PointName::ToObjectStoreDeleteDir)
             } else if let Some(planned) = self.kill_plan.pop_front() {
                 planned
             } else {
@@ -802,13 +805,13 @@ impl Scenario<'_> {
                         kill_at,
                         Some(
                             PointName::ToObjectStoreChange
-                                | PointName::ToObjectStorePublish
+                                | PointName::ToObjectStoreRepoWritten
                         )
                     ) {
                         self.writer_during_conversion(round).await?;
                     }
                     if plant {
-                        planted = Some(self.plant(round)?);
+                        planted = Some(self.plant()?);
                     }
                     continue;
                 }
@@ -826,14 +829,14 @@ impl Scenario<'_> {
                 Run::Finished(result) => (result, false),
                 Run::NothingToConvert => (OpResult::Ack { snapshot: None }, true),
             };
-            if let Some(fork_hash) = &planted {
-                return self.planted_rerun(round, fork_hash, &result);
+            if let Some(planted) = &planted {
+                return self.planted_rerun(round, planted, &result);
             }
             match result {
-                OpResult::Ack { .. }
-                    if nothing_to_convert
-                        && direction == Direction::ToObjectStore
+                result
+                    if direction == Direction::ToObjectStore
                         && self.network_fs
+                        && missed_repo_d(&result, nothing_to_convert)
                         && left_by_stale_root_listing(&storage)? =>
                 {
                     if stale_root_reruns == STALE_ROOT_RERUNS {
@@ -841,8 +844,8 @@ impl Scenario<'_> {
                             direction,
                             detail: format!(
                                 "repo.d exists: run {attempt} and the {STALE_ROOT_RERUNS} \
-                                 reruns before it returned NothingToConvert, their listing \
-                                 of the storage root missing repo.d; it never refreshed"
+                                 reruns before it missed it in their listing of the \
+                                 storage root, which never refreshed"
                             ),
                         });
                         return Ok(false);
@@ -868,7 +871,7 @@ impl Scenario<'_> {
                     }
                     return Ok(true);
                 }
-                result if self.as_under_stale_listings(&result)? => {
+                result if under_stale_listings(&result) => {
                     self.retried(direction, format!("run {attempt}: {result:?}"));
                 }
                 result => {
@@ -899,41 +902,22 @@ impl Scenario<'_> {
         }
     }
 
-    /// Whether a rerun failed as only stale listings make it fail: relisting
-    /// ran out, or a fork reported while `$ROOT/repo` holds the bytes of a
-    /// version of `repo.d`. icechunk-fs has no error kind for running out of
-    /// relistings (it is `Other`): its messages say "are stale", which a test
-    /// pins against the real error.
-    fn as_under_stale_listings(&self, result: &OpResult) -> anyhow::Result<bool> {
-        Ok(match result {
-            OpResult::Error { message } => message.contains("are stale"),
-            OpResult::Forked { .. } => {
-                let storage = self.root.storage();
-                let mirror = match fs::read(storage.join(REPO_KEY)) {
-                    Ok(bytes) => payload_etag(&bytes),
-                    Err(_) => return Ok(false),
-                };
-                let repo_d = storage.join("repo.d");
-                match fs::read_dir(&repo_d) {
-                    Ok(entries) => entries.filter_map(Result::ok).any(|entry| {
-                        entry
-                            .file_name()
-                            .to_string_lossy()
-                            .ends_with(&format!(".{mirror}"))
-                            && !entry.file_name().to_string_lossy().starts_with("latest.")
-                    }),
-                    Err(_) => false,
-                }
-            }
-            _ => false,
-        })
-    }
-
-    /// C2 and C3 of a finished conversion.
+    /// C2 and C3 of a finished conversion. C2 checks the version it wrote:
+    /// `$ROOT/repo` to the object store layout, the current version of
+    /// `repo.d` from it; C3 reports either missing.
     fn check_converted(&mut self, direction: Direction) -> anyhow::Result<()> {
         let storage = self.root.storage();
-        let mirror = fs::read(storage.join(REPO_KEY)).context("reading repo")?;
-        if let Some(detail) = conversion_defect(direction, &mirror, &storage)? {
+        let converted = match direction {
+            Direction::ToObjectStore => match fs::read(storage.join(REPO_KEY)) {
+                Ok(bytes) => Some(bytes),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+                Err(err) => return Err(err).context("reading repo"),
+            },
+            Direction::FromObjectStore => current_version(&storage)?.ok(),
+        };
+        if let Some(converted) = converted
+            && let Some(detail) = conversion_defect(direction, &converted, &storage)?
+        {
             self.verdict
                 .violations
                 .push(Violation::ConversionMismatch { direction, detail });
@@ -990,56 +974,53 @@ impl Scenario<'_> {
         Ok(())
     }
 
-    /// The planted object-store-layout write: `$ROOT/repo` replaced as Icechunk 2.3
-    /// writes a status change, logged as a fork. Returns its hash.
-    fn plant(&self, round: u32) -> anyhow::Result<String> {
-        let phase = self.root.phase(round);
-        let who = WorkerId {
-            tag: SCENARIO_TAG.to_owned(),
-            slot: PLANT_SLOT.to_owned(),
-            incarnation: next_incarnation(&phase, PLANT_SLOT),
-        };
-        let log = start_worker_log(&phase, &who)?;
-        let fork = write_fork(&phase.storage(), announce_backup(&log)?)?;
-        log_fork(&log, &fork, None);
-        // The rerun's fork check comes after the plant, on this host: F4
-        // counts a read in the millisecond the write ended as possibly
-        // before it, which would excuse the erasure.
-        while now_ms() <= fork.t_after_ms {
-            std::thread::sleep(Duration::from_millis(1));
-        }
+    /// The planted object-store-layout write: `$ROOT/repo` replaced by a
+    /// status change, as an object-store-layout writer makes it, backing up
+    /// what it replaces. Returns the hash of what it wrote.
+    fn plant(&self) -> anyhow::Result<String> {
+        let storage = self.root.storage();
+        let repo = storage.join(REPO_KEY);
+        let base =
+            fs::read(&repo).with_context(|| format!("reading {}", repo.display()))?;
+        let backup = repo_info_file::new_backup_path();
+        let backup_path = storage.join(OVERWRITTEN_FILES_PATH).join(&backup);
+        fs::create_dir_all(storage.join(OVERWRITTEN_FILES_PATH))
+            .and_then(|()| fs::write(&backup_path, &base))
+            .with_context(|| format!("writing {}", backup_path.display()))?;
+        let bytes = status_changed(&base, &backup)?;
+        let staged = storage.join(format!("{REPO_KEY}#{}", rand::random::<u32>()));
+        fs::write(&staged, &bytes)
+            .and_then(|()| fs::rename(&staged, &repo))
+            .with_context(|| format!("replacing {}", repo.display()))?;
         eprintln!("  planted an object-store-layout write in repo");
-        Ok(fork.fork_hash)
+        Ok(payload_etag(&bytes))
     }
 
     /// The rerun after the planted object-store-layout write must have stopped,
     /// leaving it in place; then the scenario can't go on, as recovery is
-    /// manual. An erased planted write is logged as a fork's erasure, for
-    /// F4.
+    /// manual. `planted` is the hash of the planted write.
     fn planted_rerun(
         &mut self,
         round: u32,
-        fork_hash: &str,
+        planted: &str,
         result: &OpResult,
     ) -> anyhow::Result<bool> {
-        let phase = self.root.phase(round);
         let direction = Direction::FromObjectStore;
-        if let Some(found) = erased(&phase.storage(), fork_hash) {
-            let who = WorkerId {
-                tag: SCENARIO_TAG.to_owned(),
-                slot: PLANT_SLOT.to_owned(),
-                incarnation: next_incarnation(&phase, PLANT_SLOT),
-            };
-            start_worker_log(&phase, &who)?.append(&Record::ForkGone {
-                t_ms: now_ms(),
-                fork_hash: fork_hash.to_owned(),
-                found,
-            })?;
+        let repo = self.root.storage().join(REPO_KEY);
+        let found = match fs::read(&repo) {
+            Ok(bytes) => Some(payload_etag(&bytes)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => None,
+            Err(err) => {
+                return Err(err).with_context(|| format!("reading {}", repo.display()));
+            }
+        };
+        if found.as_deref() != Some(planted) {
             self.verdict.violations.push(Violation::ConversionEndState {
                 direction,
                 detail: format!(
-                    "the rerun after an object-store-layout write to repo during the interrupted \
-                     conversion ({result:?}) erased that write"
+                    "the rerun after an object-store-layout write to repo during the \
+                     interrupted conversion ({result:?}) erased that write: repo is {}",
+                    found.as_deref().unwrap_or("missing")
                 ),
             });
         } else if result.landed().is_some() {
@@ -1057,8 +1038,6 @@ impl Scenario<'_> {
                  scenario ends there"
             ));
         }
-        let history = History { logs: read_all_logs(&phase)?, ..History::default() };
-        check_forks(&history, self.network_fs, &mut self.verdict);
         Ok(false)
     }
 
@@ -1218,6 +1197,50 @@ impl Scenario<'_> {
     }
 }
 
+/// Whether a rerun failed as only stale listings make it fail: relisting ran
+/// out. icechunk-fs has no error kind for it (it is `Other`): its messages
+/// say "are stale", which a test pins against the real error.
+fn under_stale_listings(result: &OpResult) -> bool {
+    matches!(result, OpResult::Error { message } if message.contains("are stale"))
+}
+
+/// Whether a run of the conversion to the object store layout ended as one
+/// whose listing of the storage root missed `repo.d`: `NothingToConvert`
+/// next to the `$ROOT/repo` an earlier run wrote, or, before any run wrote
+/// it, no repository.
+fn missed_repo_d(result: &OpResult, nothing_to_convert: bool) -> bool {
+    match result {
+        OpResult::Ack { .. } => nothing_to_convert,
+        OpResult::Error { message } => {
+            *message == StorageErrorKind::ObjectNotFound.to_string()
+        }
+        _ => false,
+    }
+}
+
+/// `base` with its status set `Online` anew, naming `backup` on its newest
+/// ops-log entry: a repo info that differs from `base`, as an
+/// object-store-layout writer's status change makes it.
+pub(crate) fn status_changed(base: &[u8], backup: &str) -> anyhow::Result<Vec<u8>> {
+    let format = |what: &'static str| {
+        move |err: icechunk::format::IcechunkFormatError| {
+            anyhow::anyhow!("{what}: {}", err.kind())
+        }
+    };
+    let info = repo_info_file::decode(base).map_err(format("decoding repo"))?;
+    let spec = info.spec_version().map_err(format("reading the spec version"))?;
+    let online = RepoStatus {
+        availability: RepoAvailability::Online,
+        set_at: Utc::now(),
+        limited_availability_reason: None,
+    };
+    let changed = info
+        .set_status(spec, &online, Some((backup, DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE)))
+        .map_err(format("changing the status"))?;
+    repo_info_file::encode(&changed, spec, DEFAULT_COMPRESSION_LEVEL)
+        .map_err(format("encoding repo"))
+}
+
 /// Adds the sabotages and kills `logs` record to the verdict's fault counts.
 fn count_faults(logs: &BTreeMap<LogName, Vec<Record>>, verdict: &mut Verdict) {
     for record in logs.values().flatten() {
@@ -1249,6 +1272,8 @@ pub(crate) mod tests {
         sync::atomic::{AtomicBool, Ordering},
     };
 
+    use icechunk_fs::fault_injection::Sabotage as ProtocolSabotage;
+
     use super::*;
     use crate::config::write_new_linked;
 
@@ -1267,10 +1292,6 @@ pub(crate) mod tests {
             if Some(point) == self.at && !self.killed.swap(true, Ordering::SeqCst) {
                 std::panic::resume_unwind(Box::new("killed"));
             }
-        }
-
-        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-            self.hooks.rename(from, to)
         }
 
         fn sabotaged(&self, sabotage: ProtocolSabotage) -> bool {
@@ -1350,8 +1371,7 @@ pub(crate) mod tests {
         for task in tasks {
             task.await??;
         }
-        let ms =
-            |t: SystemTime| chrono::DateTime::<chrono::Utc>::from(t).timestamp_millis();
+        let ms = |t: SystemTime| chrono::DateTime::<Utc>::from(t).timestamp_millis();
         let done = HostDone {
             tag: tag.to_owned(),
             go_seen_at_ms: ms(go),
@@ -1360,7 +1380,6 @@ pub(crate) mod tests {
             incarnations_spawned: u64::from(workers),
             external_kills: 0,
             stragglers: 0,
-            sampler_error: None,
         };
         write_new_linked(
             &phase.host_done(tag),
@@ -1420,7 +1439,8 @@ pub(crate) mod tests {
     }
 
     /// Each round kills one conversion run from the object store layout and one
-    /// to it after its change or publication, with a C7 writer, and says so.
+    /// to it after its change or its write of repo, with a C7 writer, and says
+    /// so.
     #[tokio::test]
     async fn every_round_kills_both_conversions_and_runs_c7() {
         let config = ScenarioConfig { guaranteed_kills: true, ..config() };
@@ -1440,7 +1460,7 @@ pub(crate) mod tests {
                 note.contains(&format!(
                     "round {round} to-object-store: to_object_store_change"
                 )) || note.contains(&format!(
-                    "round {round} to-object-store: to_object_store_publish"
+                    "round {round} to-object-store: to_object_store_repo_written"
                 )),
                 "{note}"
             );
@@ -1528,115 +1548,131 @@ pub(crate) mod tests {
         }
     }
 
+    /// Lands a change in `repo_d` before every change of the conversion to
+    /// the object store layout, which then conflicts every time, as under a
+    /// listing that stays stale.
+    #[derive(Debug)]
+    struct ChangeFirst(PathBuf);
+
+    impl ProtocolHooks for ChangeFirst {
+        fn at(&self, point: Point) {
+            let before_change = Point::Conversion(ConversionStep::ToObjectStore(
+                ToObjectStoreStep::BeforeChange,
+            ));
+            if point != before_change {
+                return;
+            }
+            let marker = fs::read_dir(&self.0)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                .find(|name| name.starts_with("latest."))
+                .unwrap();
+            // `latest.<K>.<N>.<h>`; the next version copies this one.
+            let mut parts = marker.splitn(4, '.').skip(2);
+            let n: u64 = parts.next().unwrap().parse().unwrap();
+            let h = parts.next().unwrap();
+            let next = format!("{}.{h}", n + 1);
+            fs::copy(self.0.join(format!("{n}.{h}")), self.0.join(&next)).unwrap();
+            let k = 999_999_999_999_999 - (n + 1);
+            fs::rename(
+                self.0.join(&marker),
+                self.0.join(format!("latest.{k:015}.{next}")),
+            )
+            .unwrap();
+        }
+    }
+
     /// Relisting runs out against the real conversion, whose message is the
     /// signal, and is retried as a warning on a network filesystem and a
-    /// violation on a local one; a fork report is retried only while
-    /// `$ROOT/repo` holds a version file's bytes.
+    /// violation on a local one.
     #[tokio::test]
     async fn reruns_that_fail_as_under_stale_listings_are_retried() {
         let dir = tempfile::tempdir().unwrap();
         let config = ScenarioConfig { rounds: 1, ..config() };
         let root = converted(dir.path(), &config).await;
         let storage = root.storage();
-        let repo_d = storage.join("repo.d");
-        // `$ROOT/repo` holds a version far above the marker, which no
-        // listing shows as current: as when the listings are stale.
-        let marker = fs::read_dir(&repo_d)
+        let hooks = Arc::new(ChangeFirst(storage.join("repo.d")));
+        let err = FilesystemStorage::new(&storage)
             .unwrap()
-            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-            .find(|name| name.starts_with("latest."))
-            .unwrap();
-        let n: u64 = marker.split('.').nth(2).unwrap().parse().unwrap();
-        let ahead = b"a version a stale listing hides";
-        fs::write(repo_d.join(format!("{}.{}", n + 5, payload_etag(ahead))), ahead)
-            .unwrap();
-        fs::write(storage.join(REPO_KEY), ahead).unwrap();
-        let Run::Finished(result) = Converter::InProcess
-            .run(&root, 1, Direction::ToObjectStore, 0, None)
+            .with_protocol_hooks(hooks)
+            .convert_to_object_store_layout()
             .await
-            .unwrap()
-        else {
-            panic!("killed");
-        };
+            .unwrap_err();
+        let result = classify_storage(err.kind());
         assert!(
             matches!(&result, OpResult::Error { message } if message.contains("are stale")),
             "{result:?}"
         );
+        assert!(under_stale_listings(&result));
         for network_fs in [false, true] {
             let mut scenario = scenario(&root, &config, network_fs);
-            assert!(scenario.as_under_stale_listings(&result).unwrap());
             scenario.retried(Direction::ToObjectStore, "run 0".to_owned());
             let (violations, warnings) =
                 (scenario.verdict.violations.len(), scenario.verdict.warnings.len());
             assert_eq!((violations, warnings), if network_fs { (0, 1) } else { (1, 0) });
         }
-
-        let scenario = scenario(&root, &config, false);
-        let forked = OpResult::Forked { message: "fork".to_owned() };
-        assert!(
-            scenario.as_under_stale_listings(&forked).unwrap(),
-            "repo holds a version file"
-        );
-        fs::write(storage.join(REPO_KEY), b"a fork").unwrap();
-        assert!(
-            !scenario.as_under_stale_listings(&forked).unwrap(),
-            "repo is no version file"
-        );
         let other = OpResult::Error { message: "No space left on device".to_owned() };
-        assert!(!scenario.as_under_stale_listings(&other).unwrap());
+        assert!(!under_stale_listings(&other));
     }
 
-    /// The killed run 0 published its version without the feature; the
-    /// runs numbered in `missing` miss `repo.d`. What `convert` returned.
+    /// Run 0 is killed at `killed`: after its change, or after it wrote
+    /// `$ROOT/repo`; the runs numbered in `missing` miss `repo.d`. What
+    /// `convert` returned.
     async fn convert_missing_repo_d(
         root: &ScenarioRoot,
         config: &ScenarioConfig,
         network_fs: bool,
+        killed: PointName,
         missing: std::ops::RangeInclusive<u32>,
     ) -> (bool, Verdict) {
         let converter = Converter::MissingRepoD { attempts: missing };
         let mut scenario =
             Scenario { converter: &converter, ..scenario(root, config, network_fs) };
-        scenario.kill_plan = [Some(PointName::ToObjectStorePublish)].into();
+        scenario.kill_plan = [Some(killed)].into();
         let finished = scenario.convert(1, Direction::ToObjectStore).await.unwrap();
         (finished, scenario.verdict)
     }
 
-    /// A rerun of the conversion to the object store layout whose listing of the
-    /// storage root misses `repo.d` returns `NothingToConvert` and leaves it:
-    /// on a network filesystem a warning, and the conversion runs again; on a
-    /// local one a violation.
+    /// A rerun of the conversion to the object store layout whose listing of
+    /// the storage root misses `repo.d` leaves it, returning
+    /// `NothingToConvert` next to the `$ROOT/repo` run 0 wrote, or no
+    /// repository before run 0 wrote it: on a network filesystem a warning,
+    /// and the conversion runs again; on a local one a violation.
     #[tokio::test]
     async fn a_rerun_that_misses_repo_d_runs_again_on_a_network_filesystem() {
         let config = ScenarioConfig { rounds: 1, ..config() };
-        let dir = tempfile::tempdir().unwrap();
-        let root = converted(dir.path(), &config).await;
-        let (finished, verdict) =
-            convert_missing_repo_d(&root, &config, true, 1..=1).await;
-        assert!(finished);
-        assert_eq!(verdict.violations, []);
-        let first = u64::try_from(FIRST_STALE_ROOT_DELAY.as_millis()).unwrap();
-        assert_eq!(
-            verdict.warnings,
-            [Warning::StaleRootListing { attempt: 1, rerun_after_ms: first }]
-        );
-        assert_eq!(
-            end_state_defect(Direction::ToObjectStore, &root.storage()).unwrap(),
-            None
-        );
+        for killed in
+            [PointName::ToObjectStoreRepoWritten, PointName::ToObjectStoreChange]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let root = converted(dir.path(), &config).await;
+            let (finished, verdict) =
+                convert_missing_repo_d(&root, &config, true, killed, 1..=1).await;
+            assert!(finished, "{killed:?}");
+            assert_eq!(verdict.violations, [], "{killed:?}");
+            let first = u64::try_from(FIRST_STALE_ROOT_DELAY.as_millis()).unwrap();
+            assert_eq!(
+                verdict.warnings,
+                [Warning::StaleRootListing { attempt: 1, rerun_after_ms: first }],
+                "{killed:?}"
+            );
+            assert_eq!(
+                end_state_defect(Direction::ToObjectStore, &root.storage()).unwrap(),
+                None,
+                "{killed:?}"
+            );
 
-        let dir = tempfile::tempdir().unwrap();
-        let root = converted(dir.path(), &config).await;
-        let (_, verdict) = convert_missing_repo_d(&root, &config, false, 1..=1).await;
-        assert!(
-            matches!(
-                &verdict.violations[..],
-                [Violation::ConversionEndState { detail, .. }] if detail == "repo.d exists"
-            ),
-            "{:?}",
-            verdict.violations
-        );
-        assert_eq!(verdict.warnings, []);
+            let dir = tempfile::tempdir().unwrap();
+            let root = converted(dir.path(), &config).await;
+            let (_, verdict) =
+                convert_missing_repo_d(&root, &config, false, killed, 1..=1).await;
+            assert!(
+                matches!(&verdict.violations[..], [Violation::ConversionEndState { .. }]),
+                "{killed:?}: {:?}",
+                verdict.violations
+            );
+            assert_eq!(verdict.warnings, [], "{killed:?}");
+        }
     }
 
     /// Reruns that keep missing `repo.d` end, after a bounded number with
@@ -1646,8 +1682,9 @@ pub(crate) mod tests {
         let config = ScenarioConfig { rounds: 1, ..config() };
         let dir = tempfile::tempdir().unwrap();
         let root = converted(dir.path(), &config).await;
+        let killed = PointName::ToObjectStoreRepoWritten;
         let (finished, verdict) =
-            convert_missing_repo_d(&root, &config, true, 1..=u32::MAX).await;
+            convert_missing_repo_d(&root, &config, true, killed, 1..=u32::MAX).await;
         assert!(!finished);
         // Outside tests the first delay is 500 ms: 79.5 s in all, longer than
         // NFS's default `acdirmax` of 60 s.
@@ -1739,7 +1776,7 @@ pub(crate) mod tests {
             if direction == Direction::ToObjectStore {
                 assert!(matches!(
                     step,
-                    PointName::ToObjectStoreChange | PointName::ToObjectStorePublish
+                    PointName::ToObjectStoreChange | PointName::ToObjectStoreRepoWritten
                 ));
             }
             // Run 0 ended before reaching it: run 1 inherits it.
@@ -1790,6 +1827,7 @@ pub(crate) mod tests {
             sabotage: None,
             plant_object_store_write: false,
             late_commit: false,
+            kill_after_deleting_repo_d: false,
             guaranteed_kills: false,
         }
     }
@@ -1853,8 +1891,7 @@ pub(crate) mod tests {
         config.sabotage = Some(Sabotage::FromObjectStoreWithoutProvenance);
         let (_dir, _root, report) = run(&config).await;
         let kinds = kinds(&report);
-        assert!(kinds.contains(&"ConversionEndState".to_owned()), "{}", report.summary());
-        assert!(kinds.contains(&"SilentForkLoss".to_owned()), "{}", report.summary());
+        assert_eq!(kinds, ["ConversionEndState"], "{}", report.summary());
         assert!(report.verdict.stats.faults["sabotage"] > 0);
     }
 
@@ -1871,9 +1908,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn deleting_repo_d_before_the_publication_is_caught() {
+    async fn deleting_repo_d_before_writing_repo_is_caught() {
         let mut config = config();
-        config.sabotage = Some(Sabotage::DeleteDirBeforePublish);
+        config.kill_after_deleting_repo_d = true;
+        let (_dir, _root, report) = run(&config).await;
+        assert!(report.passed, "{}", report.summary());
+        config.sabotage = Some(Sabotage::DeleteDirBeforeRepoWrite);
         let (_dir, _root, report) = run(&config).await;
         let kinds = kinds(&report);
         assert!(kinds.contains(&"DeletedHistory".to_owned()), "{}", report.summary());
@@ -1931,7 +1971,7 @@ pub(crate) mod tests {
             kill_plan: std::collections::VecDeque::new(),
         };
         assert!(scenario.convert(1, Direction::FromObjectStore).await.unwrap());
-        scenario.kill_plan = [Some(PointName::ToObjectStorePublish)].into();
+        scenario.kill_plan = [Some(PointName::ToObjectStoreRepoWritten)].into();
         let run = Converter::InProcess
             .run(
                 &root,
@@ -1953,8 +1993,8 @@ pub(crate) mod tests {
             )),
             "{writer:?}"
         );
-        // The reruns, the first killed after its publication, which also
-        // tries a writer, finish the conversion.
+        // The reruns, the first killed after it wrote repo, which also tries
+        // a writer, finish the conversion.
         assert!(scenario.convert(1, Direction::ToObjectStore).await.unwrap());
         assert_eq!(scenario.verdict.violations, []);
         assert!(

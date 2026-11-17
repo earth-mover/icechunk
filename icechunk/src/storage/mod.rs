@@ -12,12 +12,12 @@ use crate::storage::redirect::RedirectStorage;
 // Re-export everything from icechunk-storage
 pub use icechunk_storage::{
     Attribution, AttributionError, AttributionLabels, ConcurrencySettings,
-    DeleteObjectsResult, ETag, FORK_EXPLANATION, GcPhase, Generation, GetModifiedResult,
-    ICError, ListInfo, PutCondition, RepositoryCreation, RequestAttribution,
-    RetriesSettings, Settings, Storage, StorageContext, StorageError, StorageErrorKind,
-    StorageInfo, StorageResult, StorageWriterFeatures, TimeoutSettings,
-    UNATTRIBUTED_LABELS, VersionInfo, VersionedUpdateResult, WriteHint,
-    list_objects_filtered_by_id_prefix, root_is_clean_by_listing,
+    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ICError, ListInfo,
+    PutCondition, RepositoryCreation, RequestAttribution, RetriesSettings, Settings,
+    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
+    StorageWriterFeatures, TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo,
+    VersionedUpdateResult, WriteHint, list_objects_filtered_by_id_prefix,
+    root_is_clean_by_listing,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes, tls,
 };
@@ -30,7 +30,7 @@ pub use icechunk_s3::{
 };
 
 #[cfg(all(feature = "fs", unix))]
-pub use icechunk_fs::{ConversionOutcome, FilesystemStorage, PublishOutcome};
+pub use icechunk_fs::{ConversionOutcome, FilesystemStorage};
 #[cfg(feature = "fs")]
 pub use icechunk_fs::{
     FilesystemSettings, new_filesystem_storage, new_filesystem_storage_with,

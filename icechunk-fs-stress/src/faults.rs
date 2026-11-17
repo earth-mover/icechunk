@@ -1,11 +1,9 @@
 //! Faults injected at the commit protocol's points: kills, pauses and, for
 //! the self-test, sabotaged steps and one-shot triggers. The hooks also
-//! record every mirror rename.
+//! record the doubtful outcomes the commits resolve.
 
 use std::{
-    cell::Cell,
-    fmt, fs, io,
-    path::Path,
+    fmt,
     sync::{
         Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
@@ -21,20 +19,7 @@ use rand::{RngExt as _, rngs::StdRng};
 use crate::{
     config::{FaultConfig, PointName, Sabotage},
     log::{FaultAction, LogWriter, Record, now_ms},
-    storage_mode::{REPO_KEY, payload_etag},
 };
-
-thread_local! {
-    /// When the publication on this thread last passed its fork check: the
-    /// protocol calls `at(BeforeMirrorRename)` and the mirror rename on the
-    /// same thread.
-    static FORK_CHECK_PASSED_MS: Cell<Option<i64>> = const { Cell::new(None) };
-    /// When the fork check of this thread's current publication round last
-    /// began reading `$ROOT/repo` (`at(BeforeMirrorRead)`): the read whose
-    /// classification let the round go on to its rename. Cleared when a
-    /// round stages, so a round that read nothing carries `None`.
-    static FORK_CHECK_READ_MS: Cell<Option<i64>> = const { Cell::new(None) };
-}
 
 #[derive(Debug)]
 pub struct FaultHooks {
@@ -139,27 +124,8 @@ pub fn observed_name(what: Observed) -> &'static str {
     }
 }
 
-/// Whether `from` and `to` are a publication's rename of its stage
-/// `repo.d/mirror.<id>` over the mirror `repo` next to `repo.d`.
-fn is_mirror_rename(from: &Path, to: &Path) -> bool {
-    fn name(path: &Path) -> Option<&str> {
-        path.file_name().and_then(|name| name.to_str())
-    }
-    let stage_dir = from.parent();
-    name(to) == Some(REPO_KEY)
-        && name(from).is_some_and(|name| name.starts_with("mirror."))
-        && stage_dir.and_then(name) == Some("repo.d")
-        && stage_dir.and_then(Path::parent) == to.parent()
-}
-
 impl ProtocolHooks for FaultHooks {
     fn at(&self, point: Point) {
-        match point {
-            Point::MirrorStaged => FORK_CHECK_READ_MS.set(None),
-            Point::BeforeMirrorRead => FORK_CHECK_READ_MS.set(Some(now_ms())),
-            Point::BeforeMirrorRename => FORK_CHECK_PASSED_MS.set(Some(now_ms())),
-            _ => {}
-        }
         if let Some(trigger) = &self.trigger {
             trigger.reached(point);
         }
@@ -187,39 +153,6 @@ impl ProtocolHooks for FaultHooks {
             self.record(FaultAction::Sabotage, sabotage.point());
         }
         on
-    }
-
-    /// Records a mirror rename before it, and again once it succeeded, with
-    /// the hash of the bytes it installs: a process killed in between leaves
-    /// only the first record. A stage that can't be read is renamed
-    /// unrecorded: the rename then fails too, unless the stage appeared in
-    /// between.
-    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        if !is_mirror_rename(from, to) {
-            return fs::rename(from, to);
-        }
-        let t_check_ms = FORK_CHECK_PASSED_MS.take();
-        let t_read_ms = FORK_CHECK_READ_MS.take();
-        let hash = fs::read(from).map(|bytes| payload_etag(&bytes));
-        if let Ok(hash) = &hash {
-            let hash = hash.clone();
-            self.append(&Record::MirrorRenaming {
-                t_check_ms,
-                t_read_ms,
-                t_ms: now_ms(),
-                hash,
-            });
-        }
-        fs::rename(from, to)?;
-        if let Ok(hash) = hash {
-            self.append(&Record::MirrorRename {
-                t_check_ms,
-                t_read_ms,
-                t_rename_ms: now_ms(),
-                hash,
-            });
-        }
-        Ok(())
     }
 
     fn observed(&self, what: Observed) {
@@ -335,100 +268,28 @@ mod tests {
     }
 
     #[test]
-    fn mirror_renames_are_recorded_with_the_hash_and_the_fork_check_time() {
-        let dir = tempfile::tempdir().unwrap();
-        let (hooks, path) = hooks(dir.path(), &no_faults(), None);
-        let root = dir.path().join("storage");
-        let repo_d = root.join("repo.d");
-        fs::create_dir_all(&repo_d).unwrap();
-        let stage = repo_d.join("mirror.1");
-        let mirror = root.join(REPO_KEY);
-        let records = || {
-            read_log(&path)
-                .unwrap()
-                .into_iter()
-                .filter_map(|record| match record {
-                    Record::MirrorRename { t_check_ms, t_read_ms, t_rename_ms, hash } => {
-                        Some((t_check_ms, t_read_ms, t_rename_ms, hash))
-                    }
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-        };
-
-        // Not a mirror rename: a content file, or a stage elsewhere.
-        fs::write(repo_d.join("stage.1"), b"v").unwrap();
-        hooks.rename(&repo_d.join("stage.1"), &repo_d.join("1.h")).unwrap();
-        fs::write(root.join("mirror.2"), b"v").unwrap();
-        hooks.rename(&root.join("mirror.2"), &mirror).unwrap();
-        assert_eq!(records(), []);
-
-        // A round whose check read twice, the last read before `reread`.
-        fs::write(&stage, b"v1").unwrap();
-        hooks.at(Point::MirrorStaged);
-        hooks.at(Point::BeforeMirrorRead);
-        std::thread::sleep(Duration::from_millis(2));
-        let reread = now_ms();
-        hooks.at(Point::BeforeMirrorRead);
-        hooks.at(Point::BeforeMirrorRename);
-        let checked = now_ms();
-        hooks.rename(&stage, &mirror).unwrap();
-        // A round that read nothing, after a read of an earlier round.
-        fs::write(&stage, b"v2").unwrap();
-        hooks.at(Point::BeforeMirrorRead);
-        hooks.at(Point::MirrorStaged);
-        hooks.rename(&stage, &mirror).unwrap();
-        // A stage that is gone: the rename fails, unrecorded.
-        assert!(hooks.rename(&stage, &mirror).is_err());
-
-        let recorded = records();
-        let [(Some(t_check), Some(t_read), t_rename, first), (None, None, _, second)] =
-            &recorded[..]
-        else {
-            panic!("{recorded:?}");
-        };
-        assert!(reread <= *t_read && *t_read <= *t_check, "{recorded:?}");
-        assert!(*t_check <= checked && checked <= *t_rename, "{recorded:?}");
-        assert_eq!(*first, payload_etag(b"v1"));
-        assert_eq!(*second, payload_etag(b"v2"));
-        assert_eq!(fs::read(&mirror).unwrap(), b"v2");
-        // Recorded whatever the configured fault points.
-        assert_eq!(faults_of(&path), []);
-        // Each rename of a readable stage is announced first.
-        let announced: Vec<String> = read_log(&path)
-            .unwrap()
-            .into_iter()
-            .filter_map(|record| match record {
-                Record::MirrorRenaming { hash, .. } => Some(hash),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(announced, [payload_etag(b"v1"), payload_etag(b"v2")]);
-    }
-
-    #[test]
     fn a_trigger_runs_once_per_arming_at_its_point() {
         use std::sync::atomic::AtomicUsize;
         let dir = tempfile::tempdir().unwrap();
         let fired = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&fired);
-        let trigger = Arc::new(Trigger::new(Point::MirrorRenamed, move || {
+        let trigger = Arc::new(Trigger::new(Point::Renamed, move || {
             counter.fetch_add(1, Ordering::SeqCst);
         }));
         let (hooks, path) = hooks(dir.path(), &no_faults(), None);
         let hooks = hooks.with_trigger(Arc::clone(&trigger));
-        hooks.at(Point::MirrorRenamed);
+        hooks.at(Point::Renamed);
         assert_eq!(fired.load(Ordering::SeqCst), 0, "disarmed");
         trigger.arm();
-        hooks.at(Point::BeforeMirrorRename);
+        hooks.at(Point::BeforeRename);
         assert_eq!(fired.load(Ordering::SeqCst), 0, "another point");
-        hooks.at(Point::MirrorRenamed);
-        hooks.at(Point::MirrorRenamed);
+        hooks.at(Point::Renamed);
+        hooks.at(Point::Renamed);
         assert_eq!(fired.load(Ordering::SeqCst), 1);
         assert!(!trigger.disarm(), "it ran");
         trigger.arm();
         assert!(trigger.disarm(), "it didn't run");
-        hooks.at(Point::MirrorRenamed);
+        hooks.at(Point::Renamed);
         assert_eq!(fired.load(Ordering::SeqCst), 1);
         assert_eq!(faults(&path), []);
     }
@@ -444,7 +305,7 @@ mod tests {
         };
         let (hooks, path) = hooks(dir.path(), &config, None);
         hooks.at(Point::Conversion(ConversionStep::ToObjectStore(
-            ToObjectStoreStep::ForkCheck,
+            ToObjectStoreStep::BeforeChange,
         )));
         hooks.at(Point::Conversion(ConversionStep::ToObjectStore(
             ToObjectStoreStep::Change,
@@ -458,7 +319,7 @@ mod tests {
         let path = dir.path().join("h.0.0.log");
         let log = Arc::new(LogWriter::create(&path).unwrap());
         let hooks = FaultHooks::sabotage_only(Some(Sabotage::DeleteWinnerFile), log);
-        for point in [Point::Linked, Point::BeforeRename, Point::BeforeMirrorRename] {
+        for point in [Point::Linked, Point::BeforeRename, Point::BeforeTidyUp] {
             hooks.at(point);
         }
         assert!(hooks.sabotaged(ProtocolSabotage::DeleteWinnerFile));

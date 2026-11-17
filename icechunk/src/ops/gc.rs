@@ -9,7 +9,7 @@ use std::{
 use chrono::{DateTime, TimeDelta, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
 use itertools::Itertools as _;
-use tracing::{debug, info, instrument, trace, warn};
+use tracing::{debug, info, instrument, trace};
 
 use crate::{
     asset_manager::AssetManager,
@@ -22,7 +22,6 @@ use crate::{
         manifest::{ChunkPayload, Manifest},
         repo_info::{RepoInfo, UpdateInfo, UpdateType},
         snapshot::{Snapshot, SnapshotInfo},
-        writer_features::{FeatureName, WriterFeature},
     },
     ops::{
         deleter::{
@@ -37,7 +36,7 @@ use crate::{
         warn_on_low_fd_limit,
     },
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, DeleteObjectsResult, GcPhase, ListInfo, VersionInfo},
+    storage::{self, DeleteObjectsResult, ListInfo},
 };
 use icechunk_types::error::ICResultCtxExt as _;
 
@@ -388,14 +387,12 @@ pub async fn find_retained(
 /// 1. Checks that the repository can be modified, and returns early if
 ///    `config` selects nothing.
 /// 2. Finds what to keep: roots, reachability and retention.
-/// 3. Writes GC's change to the repo info, which drops the snapshots it
-///    doesn't keep.
-/// 4. Calls the storage's hook before the deletes.
-/// 5. Sweeps the storage's leftovers.
-/// 6. Deletes the garbage.
-/// 7. Calls the storage's hook after the deletes, even when they failed.
+/// 3. If `config` deletes snapshots, writes GC's change to the repo info,
+///    which drops the snapshots it doesn't keep, even if that is none.
+/// 4. Sweeps the storage's leftovers.
+/// 5. Deletes the garbage.
 ///
-/// A dry run only reports what steps 5 and 6 would delete.
+/// A dry run only reports what steps 4 and 5 would delete.
 pub async fn garbage_collect(
     asset_manager: Arc<AssetManager>,
     config: &GCConfig,
@@ -423,27 +420,7 @@ pub async fn garbage_collect(
         .await
     })
     .await?;
-    if config.dry_run {
-        return sweep_and_delete(asset_manager.as_ref(), config, plan).await;
-    }
-
-    let changed = plan.changed.clone();
-    let storage = asset_manager.storage();
-    let ctx = asset_manager.storage_context();
-    storage.gc_hook(&ctx, GcPhase::BeforeDeletes { changed: changed.as_ref() }).await?;
-    let deleted = sweep_and_delete(asset_manager.as_ref(), config, plan).await;
-    // after a failed delete too: some deletes may have happened
-    let after =
-        storage.gc_hook(&ctx, GcPhase::AfterDeletes { changed: changed.as_ref() }).await;
-    match (deleted, after) {
-        (Ok(summary), Ok(())) => Ok(summary),
-        (Ok(_), Err(err)) => Err(err.into()),
-        (Err(err), Ok(())) => Err(err),
-        (Err(err), Err(hook_err)) => {
-            warn!(error = %hook_err, "Storage hook after GC's deletes failed");
-            Err(err)
-        }
-    }
+    sweep_and_delete(asset_manager.as_ref(), config, plan).await
 }
 
 async fn sweep_and_delete(
@@ -500,9 +477,6 @@ struct GcPlan {
     listed_snaps: Option<HashMap<SnapshotId, (DateTime<Utc>, u64)>>,
     /// The repo info GC's change wrote, or else the one it read; `None` on V1.
     repo_info: Option<Arc<RepoInfo>>,
-    /// The version GC's change wrote, on a repository that lists
-    /// `filesystem-layout-v1`.
-    changed: Option<VersionInfo>,
 }
 
 /// Finds what to keep and makes GC's change: the only step that conflicts
@@ -524,18 +498,8 @@ async fn garbage_collect_one_attempt(
         (GcPlan { repo_info, ..Default::default() }, HashSet::new())
     };
 
-    let layout = FeatureName::from(WriterFeature::FilesystemLayoutV1);
-    let lists_layout = match &plan.repo_info {
-        Some(info) => info.writer_features()?.contains(&layout),
-        None => false,
-    };
-    // A repository in the filesystem layout gets the change even when it
-    // drops nothing, so the storage's hooks get a version.
-    if !config.dry_run
-        && plan.repo_info.is_some()
-        && (config.deletes_snapshots() || lists_layout)
-    {
-        let (written, version) = delete_snapshots_from_repo_info(
+    if !config.dry_run && plan.repo_info.is_some() && config.deletes_snapshots() {
+        let written = delete_snapshots_from_repo_info(
             asset_manager.as_ref(),
             &mut plan.keep_snapshots,
             &drop_snapshots,
@@ -543,7 +507,6 @@ async fn garbage_collect_one_attempt(
         )
         .await?;
         plan.repo_info = Some(written);
-        plan.changed = lists_layout.then_some(version);
     }
     Ok(plan)
 }
@@ -637,14 +600,8 @@ async fn find_garbage(
     );
 
     let drop_snapshots = all_snaps.difference(&keep_snapshots).cloned().collect();
-    let plan = GcPlan {
-        keep_chunks,
-        keep_manifests,
-        keep_snapshots,
-        listed_snaps,
-        repo_info,
-        changed: None,
-    };
+    let plan =
+        GcPlan { keep_chunks, keep_manifests, keep_snapshots, listed_snaps, repo_info };
     Ok((plan, drop_snapshots))
 }
 
@@ -659,7 +616,6 @@ async fn delete_garbage(
         keep_snapshots,
         mut listed_snaps,
         repo_info,
-        changed: _,
     } = plan;
     let mut summary = GCSummary::default();
     let mut earlier_phase_failed = false;
@@ -776,7 +732,7 @@ async fn delete_snapshots_from_repo_info(
     keep_snapshots: &mut HashSet<SnapshotId>,
     drop_snapshots: &HashSet<SnapshotId>,
     num_updates_per_repo_info_file: u16,
-) -> GCResult<(Arc<RepoInfo>, VersionInfo)> {
+) -> GCResult<Arc<RepoInfo>> {
     trace!("deleting snapshots from repo info");
     let mut written_repo_info: Option<Arc<RepoInfo>> = None;
     let do_update = |repo_info: Arc<RepoInfo>, backup_path: &str, _| {
@@ -894,15 +850,14 @@ async fn delete_snapshots_from_repo_info(
             ..Default::default()
         }),
     };
-    let version = asset_manager.update_repo_info(&single_attempt, do_update).await?;
-    let written = written_repo_info
+    asset_manager.update_repo_info(&single_attempt, do_update).await?;
+    written_repo_info
         .ok_or_else(|| {
             RepositoryError::capture(RepositoryErrorKind::Other(
                 "GC's repo info update wrote no repo info".to_string(),
             ))
         })
-        .map_err(GCError::Repository)?;
-    Ok((written, version))
+        .map_err(GCError::Repository)
 }
 
 #[instrument(skip(asset_manager, config, keep_ids), fields(keep_ids.len = keep_ids.len()))]

@@ -1,7 +1,8 @@
 //! What `verify` does to the repository after checking it: a timed recovery
 //! write through whatever the run left behind, then aging and sweeping the
-//! protocol's leftovers, after which the storage root must hold only `repo`
-//! and `repo.d/` only the marker and its version.
+//! protocol's leftovers, after which the storage root must hold only the
+//! data directories and, on the filesystem backend, `repo.d/` with only the
+//! marker and its version, or, on the legacy-local backend, `repo`.
 
 use std::{
     fs::{self, FileType},
@@ -19,14 +20,14 @@ use icechunk::{
         OVERWRITTEN_FILES_PATH, SNAPSHOTS_FILE_PATH, SnapshotId,
         TRANSACTION_LOGS_FILE_PATH, layout_v1,
     },
-    storage::{GcPhase, GetModifiedResult, Settings, StorageContext},
+    storage::{Settings, StorageContext},
 };
 use uuid::Uuid;
 
 use crate::{
     config::{Backend, Mode, RunConfig, WorkerId},
     layout::{RunRoot, VERIFY_TAG},
-    log::{LogWriter, OpResult, Record, read_log, start_worker_log},
+    log::{LogWriter, OpResult, start_worker_log},
     oracle::{Verdict, Violation, Warning},
     repo_mode::{self, RepoWorker},
     storage_mode::{self, Attempt, REPO_KEY, Updater},
@@ -167,63 +168,12 @@ async fn recover_repo(
     Ok(Some(last_error))
 }
 
-/// One write on top of a fork, through a fresh storage without fault hooks:
-/// the attempt's intent id and outcome, or why there was none. `Err` only if
-/// the recovery log can't be written or read.
-pub async fn recovery_write_once(
-    root: &RunRoot,
-    config: &RunConfig,
-) -> anyhow::Result<Result<(Uuid, OpResult), String>> {
-    let who = recovery_worker();
-    let log = Arc::new(start_worker_log(root, &who)?);
-    let result = match config.mode {
-        Mode::Storage => {
-            let storage = storage_mode::storage(root, config, None).await?;
-            let mut updater = Updater::new(storage, &who, config).await?;
-            match updater.attempt(&log).await? {
-                Attempt::Logged(result) => Ok(result),
-                Attempt::Raced => Err("repo changed while it was backed up".to_owned()),
-                Attempt::Failed(err) => Err(err),
-            }
-        }
-        Mode::Repository => match repo_mode::open_repo(root, config, None).await {
-            Ok(repo) => {
-                let mut worker =
-                    RepoWorker::new(repo, Arc::clone(&log), &who, config.chunk_bytes)?;
-                worker.main_commit().await?.ok_or_else(|| {
-                    worker
-                        .prepare_error()
-                        .unwrap_or("preparing the commit failed")
-                        .to_owned()
-                })
-            }
-            Err(err) => Err(format!("{err:#}")),
-        },
-    };
-    let result = match result {
-        Ok(result) => result,
-        Err(why) => return Ok(Err(why)),
-    };
-    let path = root.worker_log(&who.tag, &who.slot, who.incarnation);
-    let id = read_log(&path)?
-        .into_iter()
-        .rev()
-        .find_map(|record| match record {
-            Record::Intent { id, .. } => Some(id),
-            _ => None,
-        })
-        .context("the recovery write logged an outcome without an intent")?;
-    Ok(Ok((id, result)))
-}
-
-pub fn describe(result: &OpResult) -> String {
+fn describe(result: &OpResult) -> String {
     match result {
         OpResult::Ack { .. } => "acknowledged".to_owned(),
         OpResult::Conflict => "conflict".to_owned(),
         OpResult::Error { message }
         | OpResult::ReadOnly { message }
-        | OpResult::Forked { message }
-        | OpResult::DurableButForked { message, .. }
         | OpResult::ConversionInProgress { message } => message.clone(),
     }
 }
@@ -234,8 +184,8 @@ const REPO_D_TMP_PREFIX: &str = "repo.d.tmp.";
 
 /// Sets the mtime of the protocol's leftovers [`AGE`] into the past, so the
 /// sweep treats them as old: every regular file in the storage root other
-/// than `repo` and in `repo.d` (`stage.<id>`, `mirror.<id>`, versions), and
-/// every `repo.d.tmp.*` directory.
+/// than `repo` and in `repo.d` (`stage.<id>`, versions), and every
+/// `repo.d.tmp.*` directory.
 pub fn age_storage_root(root: &RunRoot) -> anyhow::Result<()> {
     let aged = SystemTime::now() - AGE;
     let storage = root.storage();
@@ -300,9 +250,8 @@ fn set_mtime(path: &Path, mtime: SystemTime) -> io::Result<()> {
 }
 
 /// Deletes the protocol's leftovers in the storage root: in storage mode with
-/// the storage's sweep, which on the filesystem backend GC's hook precedes,
-/// as in a GC, with the current version as the one GC's change made; in
-/// repository mode with a GC that also deletes everything unreachable.
+/// the storage's sweep; in repository mode with a GC that also deletes
+/// everything unreachable.
 pub async fn sweep(root: &RunRoot, config: &RunConfig) -> anyhow::Result<()> {
     let now = Utc::now();
     match config.mode {
@@ -310,25 +259,6 @@ pub async fn sweep(root: &RunRoot, config: &RunConfig) -> anyhow::Result<()> {
             let storage = storage_mode::storage(root, config, None).await?;
             let settings = Settings::default();
             let ctx = StorageContext::unattributed(&settings);
-            if config.backend == Backend::Filesystem {
-                let current = match storage
-                    .get_object_conditional(&ctx, REPO_KEY, None)
-                    .await
-                    .context("reading the current version")?
-                {
-                    GetModifiedResult::Modified { new_version, .. } => new_version,
-                    GetModifiedResult::OnLatestVersion => {
-                        anyhow::bail!(
-                            "reading {REPO_KEY} without a version returned no version"
-                        )
-                    }
-                };
-                let phase = GcPhase::BeforeDeletes { changed: Some(&current) };
-                storage
-                    .gc_hook(&ctx, phase)
-                    .await
-                    .context("GC's hook before the sweep")?;
-            }
             storage.sweep_leftovers(&ctx, now, false).await.context("sweeping")?;
         }
         Mode::Repository => {
@@ -470,14 +400,16 @@ pub fn remove_canaries(canaries: &[Canary]) -> anyhow::Result<()> {
     if errors.is_empty() { Ok(()) } else { anyhow::bail!("{}", errors.join("; ")) }
 }
 
-/// The storage root after the sweep: `repo` must exist (or it is broken
-/// history); `*.staging.<id>` files, `object_store`'s `repo#<n>` and
-/// `repo.d.tmp.<id>/` directories are leftovers the sweep should have
-/// deleted; the data directories are allowed, and staging files inside them
-/// are a warning, as no sweep covers them; any other name is unknown, a
-/// warning: the layout never creates it and GC never deletes it. On the
-/// filesystem backend `repo.d` is checked too. `.nfs*` names, which an NFS
-/// client may keep for a while after a deletion, are ignored.
+/// The storage root after the sweep: on the legacy-local backend `repo` must
+/// exist (or it is broken history); on the filesystem backend it must not,
+/// a leftover like the other names a finished operation never leaves there,
+/// and `repo.d` is checked too. `*.staging.<id>` files, `object_store`'s
+/// `repo#<n>` and `repo.d.tmp.<id>/` directories are leftovers the sweep
+/// should have deleted; the data directories are allowed, and staging files
+/// inside them are a warning, as no sweep covers them; any other name is
+/// unknown, a warning: the layout never creates it and GC never deletes it.
+/// `.nfs*` names, which an NFS client may keep for a while after a deletion,
+/// are ignored.
 pub fn check_clean_root(
     root: &RunRoot,
     config: &RunConfig,
@@ -486,14 +418,17 @@ pub fn check_clean_root(
     let layout = config.backend == Backend::Filesystem;
     let (mut leftovers, mut unknown) = (Vec::new(), Vec::new());
     let mut count = 0;
-    let mut mirror = false;
+    let mut repo = false;
     for (name, file_type, path) in entries(&root.storage())? {
         if is_nfs(&name) {
             continue;
         }
         if file_type.is_file() {
             if name == REPO_KEY {
-                mirror = true;
+                repo = true;
+                if layout {
+                    leftovers.push(name);
+                }
             } else if is_staging(&name) || name.starts_with(OBJECT_STORE_TMP_PREFIX) {
                 leftovers.push(name);
             } else {
@@ -511,7 +446,7 @@ pub fn check_clean_root(
             unknown.push(name);
         }
     }
-    if !mirror {
+    if !layout && !repo {
         verdict.violations.push(Violation::BrokenHistory {
             detail: format!("{REPO_KEY} is missing from the storage root"),
         });
@@ -556,8 +491,8 @@ const MAX_N: u64 = 999_999_999_999_999;
 /// `repo.d` after the sweep: exactly one marker `latest.<K>.<N>.<h>` with `K`
 /// the 15-digit complement of `N`, its version `<N>.<h>`, which lists the
 /// layout's writer feature (else a conversion to the object store layout was
-/// interrupted); other versions, `stage.<id>`, `mirror.<id>` and staging
-/// files are leftovers; anything else is unknown. A missing `repo.d`, a
+/// interrupted); other versions, `stage.<id>` and staging files are
+/// leftovers; anything else is unknown. A missing `repo.d`, a
 /// number of markers other than one, or a marker without its version is a
 /// broken history.
 fn check_repo_d(
@@ -616,9 +551,7 @@ fn check_repo_d(
     }
     for name in names.iter().filter(|name| *name != marker && *name != version) {
         let swept = parse_version(name).is_some()
-            || ["stage.", "mirror."]
-                .iter()
-                .any(|prefix| name.strip_prefix(prefix).is_some_and(is_hyphenated_uuid))
+            || name.strip_prefix("stage.").is_some_and(is_hyphenated_uuid)
             || is_staging(name);
         let entry = format!("{REPO_D}/{name}");
         if swept { leftovers.push(entry) } else { unknown.push(entry) }
@@ -844,7 +777,7 @@ mod tests {
         assert!(!left.contains(&crashed[0]) && left.contains(&crashed[1]), "{left:?}");
 
         assert_eq!(age_sweep_and_check(&root, &config).await, Verdict::default());
-        assert_eq!(root_files(&root), BTreeSet::from([REPO_KEY.to_owned()]));
+        assert_eq!(root_files(&root), BTreeSet::new());
         assert_repo_d_is_minimal(&root);
     }
 
@@ -863,12 +796,12 @@ mod tests {
         assert!(parse_commit_message(&ancestry[0].message).is_some(), "{ancestry:?}");
 
         assert_eq!(age_sweep_and_check(&root, &config).await, Verdict::default());
-        assert_eq!(root_files(&root), BTreeSet::from([REPO_KEY.to_owned()]));
+        assert_eq!(root_files(&root), BTreeSet::new());
         assert_repo_d_is_minimal(&root);
     }
 
     #[tokio::test]
-    async fn aging_covers_repo_d_and_root_leftovers_but_not_repo() {
+    async fn aging_covers_repo_d_and_root_leftovers() {
         let (_dir, root, config) = initialized(Mode::Storage).await;
         let storage = root.storage();
         let stage = repo_d(&root).join(format!("stage.{}", Uuid::new_v4()));
@@ -887,7 +820,6 @@ mod tests {
         for path in [&stage, &staging, &tmp, &repo_d(&root).join(format!("{n}.{h}"))] {
             assert!(age(path) >= AGE, "{}", path.display());
         }
-        assert!(age(&storage.join(REPO_KEY)) < AGE);
 
         sweep(&root, &config).await.unwrap();
         assert_eq!(clean_root_verdict(&root, &config), Verdict::default());
@@ -951,21 +883,21 @@ mod tests {
         let staging = format!("repo.staging.{}", Uuid::new_v4());
         let tmp = format!("repo.d.tmp.{}", Uuid::new_v4());
         let stage = format!("stage.{}", Uuid::new_v4());
-        let mirror = format!("mirror.{}", Uuid::new_v4());
         let version_staging = format!("{n}.x.staging.{}", Uuid::new_v4());
         let above = format!("{}.{}", n + 1, payload_etag(b"above"));
         let below = format!("{}.{}", n - 1, payload_etag(b"below"));
         fs::write(storage.join(&staging), b"s").unwrap();
+        fs::write(storage.join(REPO_KEY), b"r").unwrap();
         fs::create_dir_all(storage.join(&tmp)).unwrap();
-        for name in [&stage, &mirror, &version_staging, &above, &below] {
+        for name in [&stage, &version_staging, &above, &below] {
             fs::write(repo_d(&root).join(name), name).unwrap();
         }
         fs::write(storage.join(".nfs0000000000001234"), b"").unwrap();
         fs::write(repo_d(&root).join(".nfs0000000000005678"), b"").unwrap();
 
-        let mut expected = vec![staging, tmp];
+        let mut expected = vec![REPO_KEY.to_owned(), staging, tmp];
         expected.extend(
-            [above, below, mirror, stage, version_staging]
+            [above, below, stage, version_staging]
                 .iter()
                 .map(|name| format!("repo.d/{name}")),
         );
@@ -1010,16 +942,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_mirror_and_inconsistent_markers_are_broken_history() {
-        let (_dir, root, config) = initialized(Mode::Storage).await;
-        fs::remove_file(root.storage().join(REPO_KEY)).unwrap();
-        let verdict = clean_root_verdict(&root, &config);
-        assert!(
-            matches!(&verdict.violations[..], [Violation::BrokenHistory { detail }]
-                if detail.contains("repo is missing")),
-            "{verdict:?}"
-        );
-
+    async fn inconsistent_markers_are_broken_history() {
         let (_dir, root, config) = initialized(Mode::Storage).await;
         let (n, h) = current(&root);
         let marker = |k: u64| repo_d(&root).join(format!("latest.{k:015}.{n}.{h}"));
@@ -1055,21 +978,6 @@ mod tests {
             } if what == "the current version" && detail.contains("interrupted"))),
             "{verdict:?}"
         );
-    }
-
-    /// The storage-mode sweep calls GC's hook first, which publishes the
-    /// current version.
-    #[tokio::test]
-    async fn the_storage_sweep_publishes_the_current_version_first() {
-        let (_dir, root, config) = initialized(Mode::Storage).await;
-        let mirror = root.storage().join(REPO_KEY);
-        let initial = fs::read(&mirror).unwrap();
-        let outcome = recovery_write(&root, &config, RECOVERY_DEADLINE).await.unwrap();
-        assert!(matches!(outcome, RecoveryOutcome::Succeeded { .. }));
-        fs::write(&mirror, &initial).unwrap();
-        sweep(&root, &config).await.unwrap();
-        let (_, h) = current(&root);
-        assert_eq!(payload_etag(&fs::read(&mirror).unwrap()), h);
     }
 
     /// Unrecognized names and non-canonical object ids, aged past every
@@ -1138,8 +1046,17 @@ mod tests {
         let config = RunConfig::defaults(Mode::Storage, 1).with_legacy_local_backend();
         let (_dir, root, config) = initialized_with(config).await;
         assert!(!repo_d(&root).exists());
+        assert_eq!(root_files(&root), BTreeSet::from([REPO_KEY.to_owned()]));
         assert_eq!(clean_root_verdict(&root, &config), Verdict::default());
         assert_eq!(age_sweep_and_check(&root, &config).await, Verdict::default());
+
+        fs::remove_file(root.storage().join(REPO_KEY)).unwrap();
+        let verdict = clean_root_verdict(&root, &config);
+        assert!(
+            matches!(&verdict.violations[..], [Violation::BrokenHistory { detail }]
+                if detail.contains("repo is missing")),
+            "{verdict:?}"
+        );
     }
 
     #[tokio::test]
@@ -1202,9 +1119,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_fresh_repository_root_holds_only_repo() {
+    async fn a_fresh_repository_root_holds_no_repo_file() {
         let (_dir, root, config) = initialized(Mode::Repository).await;
-        assert_eq!(root_files(&root), BTreeSet::from([REPO_KEY.to_owned()]));
+        assert_eq!(root_files(&root), BTreeSet::new());
         assert_repo_d_is_minimal(&root);
         assert_eq!(clean_root_verdict(&root, &config), Verdict::default());
     }

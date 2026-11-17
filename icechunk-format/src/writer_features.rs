@@ -4,7 +4,6 @@
 use std::{collections::BTreeSet, fmt};
 
 use icechunk_types::ICResultExt as _;
-use itertools::Itertools as _;
 use serde::Serialize;
 
 use crate::{IcechunkFormatErrorKind, IcechunkResult, layout_v1};
@@ -22,11 +21,6 @@ impl fmt::Display for IcechunkVersion {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)
     }
 }
-
-/// The first Icechunk version that implements writer features. The status gate
-/// tells users not to change the status with an older one.
-pub const WRITER_FEATURES_SINCE: IcechunkVersion =
-    IcechunkVersion { major: 2, minor: 4, patch: 0 };
 
 /// A writer feature this implementation can write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -169,32 +163,6 @@ pub fn missing_features<'a>(
         .collect()
 }
 
-/// The `limited_availability_reason` of the status gate: one line without
-/// double quotes naming the features and the oldest Icechunk that implements
-/// them all, followed by the repository's own reason, if any.
-pub fn gate_reason(features: &[FeatureName], underlying_reason: Option<&str>) -> String {
-    let names = features.iter().map(FeatureName::as_str).join(", ");
-    let required = match min_version(features) {
-        Some(MinVersion::Icechunk(version)) => format!("Icechunk {version} or later"),
-        Some(MinVersion::Newer) | None => MinVersion::Newer.to_string(),
-    };
-    let mut reason = format!(
-        "This repository uses writer features ({names}) that require {required} to modify it; do not change its status with Icechunk older than {WRITER_FEATURES_SINCE}."
-    );
-    if let Some(underlying) = underlying_reason {
-        reason.push(' ');
-        reason.push_str(underlying);
-    }
-    reason
-        .chars()
-        .map(|c| match c {
-            '"' => '\'',
-            '\n' | '\r' => ' ',
-            c => c,
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,35 +262,5 @@ mod tests {
             min_version(&names(&["filesystem-layout-v1"])).unwrap().to_string(),
             "Icechunk 2.4.0"
         );
-    }
-
-    #[test]
-    fn gate_reason_for_one_and_several_features() {
-        let one = gate_reason(&names(&["filesystem-layout-v1"]), None);
-        assert_eq!(
-            one,
-            "This repository uses writer features (filesystem-layout-v1) that require Icechunk 2.4.0 or later to modify it; do not change its status with Icechunk older than 2.4.0."
-        );
-
-        let several = gate_reason(
-            &names(&["filesystem-layout-v1", "test-feature-v1"]),
-            Some("maintenance"),
-        );
-        assert_eq!(
-            several,
-            "This repository uses writer features (filesystem-layout-v1, test-feature-v1) that require a newer Icechunk to modify it; do not change its status with Icechunk older than 2.4.0. maintenance"
-        );
-    }
-
-    #[test]
-    fn gate_reason_is_one_line_without_double_quotes() {
-        let reason = gate_reason(
-            &names(&["odd\"name-v1"]),
-            Some("moved to \"archive\"\nsee ticket\r\n42"),
-        );
-        assert!(!reason.contains('"'));
-        assert!(!reason.contains('\n'));
-        assert!(!reason.contains('\r'));
-        assert!(reason.ends_with("moved to 'archive' see ticket  42"));
     }
 }

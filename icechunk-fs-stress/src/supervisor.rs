@@ -24,15 +24,12 @@ use crate::{
         write_control,
     },
     env_info::HostDone,
-    fork::FORK_SLOT,
     layout::{INIT_TAG, RunRoot, SCENARIO_TAG, VERIFY_TAG, is_valid_tag},
     log::{
         FaultAction, LogWriter, OpResult, Record, now_ms, read_appended, start_worker_log,
     },
     progress::{BRIEF_EVERY, Progress, RunLabel},
-    repo_mode,
-    sampler::Sampler,
-    storage_mode,
+    repo_mode, storage_mode,
     toggler::TOGGLER_SLOT,
 };
 
@@ -159,9 +156,9 @@ const CONTROL_EVERY: Duration = Duration::from_secs(1);
 const WIND_DOWN_SLACK: Duration = Duration::from_secs(30);
 
 /// Registers this host, waits for the go, and runs `workers` worker processes
-/// (plus the GC worker, the status toggler and the fork actor on the first
-/// participant, if configured, and the mirror sampler thread) until the run's deadline or a
-/// stop. Writes and returns `done/<tag>.json`. A host that
+/// (plus the GC worker and the status toggler on the first participant, if
+/// configured) until the run's deadline or a stop. Writes and returns
+/// `done/<tag>.json`. A host that
 /// missed the go fails with [`LateHost`]. Every `progress_every` (never if
 /// zero) it prints a status line to stderr.
 pub async fn workers(
@@ -221,18 +218,11 @@ pub async fn workers_with_go_after(
         if config.readonly.is_some() {
             slots.push(TOGGLER_SLOT.to_owned());
         }
-        if config.fork.is_some_and(|fork| !fork.during_gc) {
-            slots.push(FORK_SLOT.to_owned());
-        }
     }
     let log_path = root.supervisor_log(&tag);
     let log = LogWriter::create(&log_path)
         .with_context(|| format!("creating {}", log_path.display()))?;
     let stderr = open_workers_stderr(root, &tag)?;
-    let sampler = config
-        .mirror_sample_every
-        .map(|every| Sampler::start(root, &tag, every))
-        .transpose()?;
 
     let mut pool = Pool {
         root,
@@ -310,12 +300,6 @@ pub async fn workers_with_go_after(
         }
         tokio::time::sleep(TICK).await;
     };
-    // After every worker, so it sees their last publications. A sampler
-    // that couldn't log is reported, and the host still finishes.
-    let sampler_error = sampler.and_then(|sampler| sampler.stop().err()).map(|err| {
-        tracing::warn!("the mirror sampler stopped logging: {err:#}");
-        format!("{err:#}")
-    });
 
     let done = HostDone {
         tag: tag.clone(),
@@ -325,7 +309,6 @@ pub async fn workers_with_go_after(
         incarnations_spawned: pool.incarnations_spawned,
         external_kills: pool.external_kills,
         stragglers,
-        sampler_error,
     };
     let path = root.host_done(&tag);
     // `verify` polls for it and reads it as soon as it appears.
@@ -524,7 +507,7 @@ impl Drop for Pool<'_> {
 }
 
 /// The indices of the slots an external kill may pick: all but the status
-/// toggler's, which must finish its holds to judge their publications.
+/// toggler's, which must finish its holds.
 fn external_kill_candidates<'a>(slots: impl IntoIterator<Item = &'a str>) -> Vec<usize> {
     slots
         .into_iter()
@@ -741,8 +724,8 @@ mod tests {
 
     #[test]
     fn external_kills_spare_the_status_toggler() {
-        let slots = ["0", "1", GC_SLOT, TOGGLER_SLOT, FORK_SLOT];
-        assert_eq!(external_kill_candidates(slots), [0, 1, 2, 4]);
+        let slots = ["0", "1", TOGGLER_SLOT, GC_SLOT];
+        assert_eq!(external_kill_candidates(slots), [0, 1, 3]);
         assert!(external_kill_candidates([TOGGLER_SLOT]).is_empty());
         assert!(external_kill_candidates([]).is_empty());
     }

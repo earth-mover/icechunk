@@ -205,15 +205,11 @@ fn format_error(what: &str) -> impl FnOnce(IcechunkFormatError) -> anyhow::Error
     move |err| anyhow::anyhow!("{what}: {}", err.kind())
 }
 
-/// The outcome of a failed storage operation: the layout's refusals and a
-/// durable change whose publication found a fork, or an error.
+/// The outcome of a failed storage operation: the layout's refusal, or an
+/// error.
 pub fn classify_storage(kind: &StorageErrorKind) -> OpResult {
     let message = kind.to_string();
     match kind {
-        StorageErrorKind::RepositoryForked(_) => OpResult::Forked { message },
-        StorageErrorKind::RepositoryForkedAfterUpdate { .. } => {
-            OpResult::DurableButForked { snapshot: None, message }
-        }
         StorageErrorKind::LayoutConversionInProgress(_) => {
             OpResult::ConversionInProgress { message }
         }
@@ -243,7 +239,7 @@ pub async fn storage(
 }
 
 /// The current content of `repo`, read through `storage`: with
-/// `FilesystemStorage` the file `repo` is the mirror, which can lag.
+/// `FilesystemStorage` the current version in `repo.d`.
 pub async fn read_repo(storage: &(dyn Storage + Send + Sync)) -> anyhow::Result<Bytes> {
     let settings = storage.default_settings().await?;
     let ctx = StorageContext::unattributed(&settings);
@@ -543,7 +539,7 @@ mod tests {
     }
 
     /// Checks the log is `Start`, then intents each followed by its outcome
-    /// (ignoring `Observed` and mirror rename records), and returns the
+    /// (ignoring `Observed` records), and returns the
     /// `new` etag of every acknowledged update.
     fn acked(root: &RunRoot, who: &WorkerId) -> Vec<String> {
         let records =
@@ -556,14 +552,7 @@ mod tests {
         );
         let ops: Vec<_> = ops
             .iter()
-            .filter(|record| {
-                !matches!(
-                    record,
-                    Record::Observed { .. }
-                        | Record::MirrorRenaming { .. }
-                        | Record::MirrorRename { .. }
-                )
-            })
+            .filter(|record| !matches!(record, Record::Observed { .. }))
             .cloned()
             .collect();
         assert_eq!(ops.len() % 2, 0, "{ops:?}");
@@ -711,7 +700,7 @@ mod tests {
     }
 
     /// The initial repo info lists the storage's required writer features,
-    /// as icechunk's creation does: `filesystem-layout-v1` and its gate on
+    /// as icechunk's creation does: `filesystem-layout-v1` on
     /// the filesystem backend, nothing on the legacy one.
     #[tokio::test]
     async fn init_lists_the_writer_features_the_storage_requires() {
@@ -728,10 +717,7 @@ mod tests {
             let listed: Vec<&str> = listed.iter().map(|name| name.as_str()).collect();
             assert_eq!(listed, features, "{backend:?}");
             assert_eq!(info.status().unwrap().availability, RepoAvailability::Online);
-            info.check_writable_shape(
-                icechunk::format::repo_info::WritableShapeMode::AnyChange,
-            )
-            .unwrap();
+            info.check_writable_shape().unwrap();
         }
     }
 

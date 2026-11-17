@@ -46,7 +46,7 @@ fn run_root(root: &Path, passed: Option<bool>) {
 fn storage_root(storage: &Path) {
     write(&storage.join("repo"), "repo info");
     write(&storage.join("repo.d/v1"), "version 1");
-    write(&storage.join("repo.d/mirror/v0"), "version 0");
+    write(&storage.join("repo.d/nested/v0"), "version 0");
     for dir in ["chunks", "manifests", "snapshots", "transactions", "overwritten"] {
         write(&storage.join(dir).join("ABC"), "data");
     }
@@ -160,8 +160,8 @@ fn a_failed_run_adds_its_repo_info_and_a_storage_listing() {
             "storage/",
             "storage/repo",
             "storage/repo.d/",
-            "storage/repo.d/mirror/",
-            "storage/repo.d/mirror/v0",
+            "storage/repo.d/nested/",
+            "storage/repo.d/nested/v0",
             "storage/repo.d/v1",
             STORAGE_LISTING,
         ]
@@ -189,8 +189,8 @@ fn a_failed_run_adds_its_repo_info_and_a_storage_listing() {
             "overwritten/ABC",
             "repo",
             "repo.d/",
-            "repo.d/mirror/",
-            "repo.d/mirror/v0",
+            "repo.d/nested/",
+            "repo.d/nested/v0",
             "repo.d/v1",
             "snapshots/",
             "snapshots/ABC",

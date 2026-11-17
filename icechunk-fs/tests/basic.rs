@@ -17,9 +17,8 @@ use icechunk_format::writer_features::WriterFeature;
 use icechunk_fs::{FilesystemStorage, new_filesystem_storage};
 use icechunk_macros::tokio_test;
 use icechunk_storage::{
-    GcPhase, GetModifiedResult, ListInfo, PutCondition, Settings, Storage,
-    StorageContext, StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult,
-    WriteHint,
+    GetModifiedResult, ListInfo, PutCondition, Settings, Storage, StorageContext,
+    StorageErrorKind, StorageResult, VersionInfo, VersionedUpdateResult, WriteHint,
 };
 use tokio::io::AsyncReadExt as _;
 
@@ -496,13 +495,12 @@ async fn concurrent_creates_have_one_winner() {
         get_conditional(&st, "repo", None).await.unwrap(),
         (content.clone(), version.clone())
     );
-    assert_eq!(std::fs::read(dir.path().join("repo")).unwrap(), *content);
     assert_eq!(staging_leftovers(dir.path()), Vec::<std::path::PathBuf>::new());
     let root: BTreeSet<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
-    assert_eq!(root, BTreeSet::from(["repo".to_string(), "repo.d".to_string()]));
+    assert_eq!(root, BTreeSet::from(["repo.d".to_string()]));
 }
 
 async fn list_infos(st: &FilesystemStorage, prefix: &str) -> Vec<ListInfo<String>> {
@@ -534,21 +532,6 @@ async fn implements_and_requires_the_filesystem_layout() {
     let dir = tempfile::tempdir().unwrap();
     let features = storage(dir.path()).writer_features().await.unwrap();
     assert_eq!(features, BTreeSet::from([WriterFeature::FilesystemLayoutV1]));
-}
-
-#[tokio_test]
-async fn gc_hook_without_a_repository_changes_nothing() {
-    let dir = tempfile::tempdir().unwrap();
-    let st = storage(dir.path());
-    let settings = Settings::default();
-    let ctx = StorageContext::unattributed(&settings);
-    for phase in [
-        GcPhase::BeforeDeletes { changed: None },
-        GcPhase::AfterDeletes { changed: None },
-    ] {
-        st.gc_hook(&ctx, phase).await.unwrap();
-    }
-    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
 }
 
 #[tokio_test]

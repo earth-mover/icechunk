@@ -175,15 +175,6 @@ pub enum SessionErrorKind {
     ConcurrencyError(#[from] JoinError),
     #[error("branch update conflict: `({expected_parent:?}) != ({actual_parent:?})`")]
     Conflict { expected_parent: Option<SnapshotId>, actual_parent: Option<SnapshotId> },
-    /// The commit or flush landed, but the storage found the repository forked.
-    #[error(
-        "snapshot {snapshot} is durable (repo info version {new_version}) and must not be retried, but the repository is forked (its repo file was overwritten bypassing repo.d); see the recovery steps for a forked repository in the filesystem storage documentation: {detail}"
-    )]
-    CommitDurableButRepositoryForked {
-        snapshot: SnapshotId,
-        new_version: Box<storage::VersionInfo>,
-        detail: String,
-    },
     #[error("cannot rebase snapshot {snapshot} on top of the branch")]
     RebaseFailed { snapshot: SnapshotId, conflicts: Vec<Conflict> },
     #[error(
@@ -1672,11 +1663,12 @@ impl Session {
             ))
         };
 
-        self.asset_manager
+        let _ = self
+            .asset_manager
             .update_repo_info(self.config.repo_update_retries(), do_update)
             .await
-            .map(|_| ())
-            .map_err(|err| commit_error(err, new_snap.id().clone()))
+            .inject()?;
+        Ok(())
     }
 
     async fn flush_v1(&mut self, _: Arc<Snapshot>) -> SessionResult<()> {
@@ -1767,25 +1759,29 @@ impl Session {
         )
         .await?;
 
-        let res = match (self.spec_version(), register) {
+        match (self.spec_version(), register) {
             (SpecVersionBin::V1, _) => self.flush_v1(Arc::clone(&new_snap)).await,
             (SpecVersionBin::V2, true) => {
                 self.flush_v2(Arc::clone(&new_snap), &required_flags).await
             }
             // unregistered snapshots don't touch the repo info
             (SpecVersionBin::V2, false) => Ok(()),
-        };
-        if let Err(err) = res {
-            self.mark_if_durable(&err);
-            return Err(err);
-        }
+        }?;
 
         info!(
             parent_id=%self.snapshot_id(),
             new_snapshot_id=%new_snap.id(),
             "Flush done"
         );
-        self.mark_committed(new_snap.id().clone());
+        // if the commit was successful, we update the session to be
+        // a read only session pointed at the new snapshot
+        self.change_set = ChangeSet::for_edits();
+        self.snapshot_id = new_snap.id().clone();
+        // Once committed, the session is now read only, which we control
+        // by setting the branch_name to None (you can only write to a branch session)
+        self.read_only = true;
+        self.branch_name = None;
+
         Ok(new_snap.id().clone())
     }
 
@@ -1875,7 +1871,7 @@ impl Session {
             shrinks_array,
         );
 
-        let res = do_commit(
+        let id = do_commit(
             Arc::clone(&self.asset_manager),
             branch_name.as_str(),
             &self.snapshot_id,
@@ -1891,37 +1887,18 @@ impl Session {
             self.config.repo_update_retries(),
             num_updates,
         )
-        .await;
-        let id = match res {
-            Ok(id) => id,
-            Err(err) => {
-                self.mark_if_durable(&err);
-                return Err(err);
-            }
-        };
-        self.mark_committed(id.clone());
-        Ok(id)
-    }
+        .await?;
 
-    /// After a commit or a flush, the session is read only, pointed at the new
-    /// snapshot.
-    /// A commit or flush that landed though its storage found a fork: a
-    /// second one would duplicate it.
-    fn mark_if_durable(&mut self, err: &SessionError) {
-        if let SessionErrorKind::CommitDurableButRepositoryForked { snapshot, .. } =
-            err.kind()
-        {
-            self.mark_committed(snapshot.clone());
-        }
-    }
-
-    fn mark_committed(&mut self, snapshot: SnapshotId) {
+        // if the commit was successful, we update the session to be
+        // a read only session pointed at the new snapshot
         self.change_set = ChangeSet::for_edits();
-        self.snapshot_id = snapshot;
-        // Read only is controlled by setting the branch_name to None (you can
-        // only write to a branch session)
+        self.snapshot_id = id.clone();
+        // Once committed, the session is now read only, which we control
+        // by setting the branch_name to None (you can only write to a branch session)
         self.read_only = true;
         self.branch_name = None;
+
+        Ok(id)
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -3556,29 +3533,7 @@ async fn do_commit(
             kind: RepositoryErrorKind::NoAmendForInitialCommit,
             context,
         }) => Err(ICError { kind: SessionErrorKind::NoAmendForInitialCommit, context }),
-        Err(err) => Err(commit_error(err, new_snapshot_id)),
-    }
-}
-
-/// The error of the repo-info change of a commit or flush of `snapshot`: one
-/// that landed though its storage found a fork names the snapshot.
-fn commit_error(err: RepositoryError, snapshot: SnapshotId) -> SessionError {
-    match err {
-        RepositoryError {
-            kind:
-                RepositoryErrorKind::StorageError(
-                    StorageErrorKind::RepositoryForkedAfterUpdate { new_version, detail },
-                ),
-            context,
-        } => ICError {
-            kind: SessionErrorKind::CommitDurableButRepositoryForked {
-                snapshot,
-                new_version,
-                detail: format!("{detail}. {}", storage::FORK_EXPLANATION),
-            },
-            context,
-        },
-        err => err.inject(),
+        Err(err) => Err(err.inject()),
     }
 }
 

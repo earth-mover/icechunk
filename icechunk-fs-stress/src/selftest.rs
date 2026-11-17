@@ -17,10 +17,7 @@ use anyhow::Context as _;
 use uuid::Uuid;
 
 use crate::{
-    config::{
-        Backend, FaultConfig, FaultFloor, ForkConfig, GcConfig, Mode, PointName,
-        ReadOnlyConfig, RunConfig, Sabotage,
-    },
+    config::{Backend, FaultConfig, FaultFloor, Mode, PointName, RunConfig, Sabotage},
     convert::{Converter, ScenarioConfig, convert_scenario},
     env_info::default_tag,
     layout::{RunRoot, ScenarioRoot},
@@ -31,7 +28,7 @@ use crate::{
     verify::{DEFAULT_DONE_TIMEOUT, verify},
 };
 
-pub const SABOTAGES: [Sabotage; 18] = [
+pub const SABOTAGES: [Sabotage; 13] = [
     Sabotage::SkipLink,
     Sabotage::RenameFromListedMarker,
     Sabotage::TrustRenameEnoent,
@@ -42,14 +39,9 @@ pub const SABOTAGES: [Sabotage; 18] = [
     Sabotage::LinkAfterRename,
     Sabotage::DeleteWinnerFile,
     Sabotage::AckSupersededWithoutProof,
-    Sabotage::PublishWithoutForkCheck,
-    Sabotage::PublishNonCurrent,
-    Sabotage::CommitWithoutPublish,
-    Sabotage::GcWithoutForkCheck,
-    Sabotage::GcPublishesListed,
     Sabotage::FromObjectStoreWithoutProvenance,
     Sabotage::ToObjectStoreWithoutChange,
-    Sabotage::DeleteDirBeforePublish,
+    Sabotage::DeleteDirBeforeRepoWrite,
 ];
 
 /// What a case breaks.
@@ -75,43 +67,20 @@ pub fn detected_by(sabotage: Sabotage) -> &'static [&'static str] {
         Sabotage::AckSupersededWithoutProof | Sabotage::ToObjectStoreWithoutChange => {
             &["LostUpdate"]
         }
-        Sabotage::PublishWithoutForkCheck => &["SilentForkLoss"],
-        Sabotage::PublishNonCurrent => &["MirrorNotAVersion", "MirrorStale"],
-        Sabotage::CommitWithoutPublish => &["ReadOnlyMirrorMismatch"],
-        Sabotage::GcWithoutForkCheck => &["GcAfterFork"],
-        Sabotage::GcPublishesListed => &["MirrorStale", "MirrorDangling"],
-        Sabotage::FromObjectStoreWithoutProvenance => {
-            &["ConversionEndState", "SilentForkLoss"]
-        }
-        Sabotage::DeleteDirBeforePublish => {
+        Sabotage::FromObjectStoreWithoutProvenance => &["ConversionEndState"],
+        Sabotage::DeleteDirBeforeRepoWrite => {
             &["ConversionEndState", "DeletedHistory", "LostUpdate"]
         }
     }
 }
 
 /// The modes a sabotage's case runs in: repository mode alone for those the
-/// status toggler, GC or the conversion scenario detect.
+/// conversion scenario detects.
 pub fn modes(sabotage: Sabotage) -> &'static [Mode] {
-    match sabotage {
-        Sabotage::CommitWithoutPublish
-        | Sabotage::GcWithoutForkCheck
-        | Sabotage::GcPublishesListed
-        | Sabotage::FromObjectStoreWithoutProvenance
-        | Sabotage::ToObjectStoreWithoutChange
-        | Sabotage::DeleteDirBeforePublish => &[Mode::Repository],
-        _ => &[Mode::Storage, Mode::Repository],
-    }
-}
-
-/// Why no oracle can catch `sabotage` on a local filesystem, if none can.
-pub fn undetectable_locally(sabotage: Sabotage) -> Option<&'static str> {
-    match sabotage {
-        Sabotage::GcPublishesListed => Some(
-            "no oracle can catch it on a local filesystem: a listing of repo.d never lags \
-             there, so the version GC's hook lists is never older than the one GC's change \
-             made, and publishing it is correct",
-        ),
-        _ => None,
+    if sabotage.is_conversion() {
+        &[Mode::Repository]
+    } else {
+        &[Mode::Storage, Mode::Repository]
     }
 }
 
@@ -143,8 +112,6 @@ pub struct SelftestOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaseOutcome {
     Detected(String),
-    /// No oracle can catch the case here, and none did: it says why.
-    Undetectable(String),
     /// The run passed, or failed without a detecting violation, or the
     /// sabotage never fired.
     Missed(String),
@@ -167,7 +134,7 @@ pub struct SelftestReport {
 }
 
 impl SelftestReport {
-    /// Every case was detected, or can't be detected here.
+    /// Every case was detected.
     pub fn passed(&self) -> bool {
         self.cases.iter().all(|case| !keep_root(&case.outcome))
     }
@@ -201,7 +168,6 @@ impl SelftestReport {
 fn case_line(case: &SelftestCase) -> String {
     let (result, detail) = match &case.outcome {
         CaseOutcome::Detected(detail) => ("detected", detail),
-        CaseOutcome::Undetectable(detail) => ("undetectable here", detail),
         CaseOutcome::Missed(detail) => ("MISSED", detail),
         CaseOutcome::Error(detail) => ("ERROR", detail),
     };
@@ -238,16 +204,11 @@ pub fn sabotage_name(sabotage: Sabotage) -> &'static str {
         Sabotage::LinkAfterRename => "link-after-rename",
         Sabotage::DeleteWinnerFile => "delete-winner-file",
         Sabotage::AckSupersededWithoutProof => "ack-superseded-without-proof",
-        Sabotage::PublishWithoutForkCheck => "publish-without-fork-check",
-        Sabotage::PublishNonCurrent => "publish-non-current",
-        Sabotage::CommitWithoutPublish => "commit-without-publish",
-        Sabotage::GcWithoutForkCheck => "gc-without-fork-check",
-        Sabotage::GcPublishesListed => "gc-publishes-listed",
         Sabotage::FromObjectStoreWithoutProvenance => {
             "from-object-store-without-provenance"
         }
         Sabotage::ToObjectStoreWithoutChange => "to-object-store-without-change",
-        Sabotage::DeleteDirBeforePublish => "delete-dir-before-publish",
+        Sabotage::DeleteDirBeforeRepoWrite => "delete-dir-before-repo-write",
     }
 }
 
@@ -258,30 +219,12 @@ pub fn case_name(kind: CaseKind) -> &'static str {
     }
 }
 
-/// When a case's fork comes: 30 % of the way in, so that changes before
-/// and after it run.
-fn fork_at(duration: Duration) -> Duration {
-    duration * 3 / 10
-}
-
 /// A one-host run with `sabotage` and no fault floor. Writers pause before
 /// the rename, so that others commit in between and they race on stale
 /// bases. A sabotage that breaks the repository only if the writer dies in
 /// its window also gets kills there, and the supervisor respawns the killed
-/// workers. The cases of forks get the fork actor, `CommitWithoutPublish`
-/// the status toggler and the GC sabotages GC every second.
-///
-/// `PublishNonCurrent` only diverges when a publication's listing shows a
-/// version file above the marker that never becomes current, as a writer
-/// killed after linking leaves until the next commit's tidy-up. A publication
-/// right after its commit lists just after that tidy-up, so the case pauses
-/// publications, briefly so that many do, and kills writers after linking
-/// often.
+/// workers.
 pub fn selftest_config(mode: Mode, sabotage: Sabotage, duration: Duration) -> RunConfig {
-    let (pause_probability, pause) = match sabotage {
-        Sabotage::PublishNonCurrent => (0.15, Duration::from_millis(500)),
-        _ => (0.05, Duration::from_secs(2)),
-    };
     let (points, kill_probability) = match sabotage {
         // Unlinked the base, not yet renamed. Often, because a kill only
         // breaks the repository when no other writer on that base survives
@@ -296,56 +239,25 @@ pub fn selftest_config(mode: Mode, sabotage: Sabotage, duration: Duration) -> Ru
         Sabotage::DeleteAboveMarker => {
             (vec![PointName::BeforeRename, PointName::BeforeTidyUp], 0.0)
         }
-        // Killed writers' versions above the marker, and publications that
-        // list them.
-        Sabotage::PublishNonCurrent => (
-            vec![PointName::Linked, PointName::BeforeRename, PointName::BeforePublish],
-            0.15,
-        ),
         _ => (vec![PointName::BeforeRename], 0.0),
     };
     let mut config = RunConfig::defaults(mode, 1);
     config.duration = duration;
-    config.faults = FaultConfig { points, kill_probability, pause_probability, pause };
+    config.faults = FaultConfig {
+        points,
+        kill_probability,
+        pause_probability: 0.05,
+        pause: Duration::from_secs(2),
+    };
     config.external_kill_every = None;
     config.fault_floor = FaultFloor::ZERO;
     config.sabotage = Some(sabotage);
-    let gc = GcConfig {
-        every: Duration::from_secs(1),
-        ..GcConfig::defaults(config.faults.pause)
-    };
-    match sabotage {
-        Sabotage::PublishWithoutForkCheck => {
-            config.fork = Some(ForkConfig {
-                at: fork_at(duration),
-                repeat: true,
-                during_gc: false,
-            });
-        }
-        // Each ReadOnly change is itself a change that doesn't publish.
-        Sabotage::CommitWithoutPublish => {
-            config.readonly = Some(ReadOnlyConfig {
-                every: Duration::from_secs(3),
-                hold: Duration::from_secs(1),
-            });
-        }
-        // GC's change finds no fork; its hook would.
-        Sabotage::GcWithoutForkCheck => {
-            config.gc = Some(gc);
-            config.fork = Some(ForkConfig {
-                at: fork_at(duration),
-                repeat: false,
-                during_gc: true,
-            });
-        }
-        Sabotage::GcPublishesListed => config.gc = Some(gc),
-        _ => {}
-    }
     config
 }
 
 /// The conversion scenario of a conversion's sabotage: one round without a
-/// stress phase or kills, with the emulation that makes the sabotage matter.
+/// stress phase or random kills, with the emulation that makes the sabotage
+/// matter.
 pub fn scenario_config(sabotage: Sabotage, workers: u32) -> ScenarioConfig {
     ScenarioConfig {
         rounds: 1,
@@ -357,6 +269,7 @@ pub fn scenario_config(sabotage: Sabotage, workers: u32) -> ScenarioConfig {
         sabotage: Some(sabotage),
         plant_object_store_write: sabotage == Sabotage::FromObjectStoreWithoutProvenance,
         late_commit: sabotage == Sabotage::ToObjectStoreWithoutChange,
+        kill_after_deleting_repo_d: sabotage == Sabotage::DeleteDirBeforeRepoWrite,
         guaranteed_kills: false,
     }
 }
@@ -433,16 +346,12 @@ fn retain(root: &Path, outcome: &CaseOutcome) -> Option<PathBuf> {
     Some(root.to_path_buf())
 }
 
-/// The writers of a case: one for the GC sabotages, whose GC updates the
-/// repo info once per attempt and so conflicts under many writers. At most
-/// two for `UnlinkBaseBeforeRename`: a writer killed after unlinking its base
-/// leaves the marker without bytes only until another writer that read that
-/// base renames past it, which under many writers one almost always does.
+/// The writers of a case: at most two for `UnlinkBaseBeforeRename`: a writer
+/// killed after unlinking its base leaves the marker without bytes only until
+/// another writer that read that base renames past it, which under many
+/// writers one almost always does.
 pub fn case_workers(kind: CaseKind, workers: u32) -> u32 {
     match kind {
-        CaseKind::Sabotage(
-            Sabotage::GcWithoutForkCheck | Sabotage::GcPublishesListed,
-        ) => 1,
         CaseKind::Sabotage(Sabotage::UnlinkBaseBeforeRename) => workers.min(2),
         _ => workers,
     }
@@ -517,17 +426,6 @@ pub fn judge(report: &Report, sabotage: Sabotage) -> CaseOutcome {
             "{}; the sabotage fired {fired} times",
             found.join(", ")
         ));
-    }
-    // Only a clean run after the sabotage fired shows it couldn't be seen.
-    if let Some(why) =
-        undetectable_locally(sabotage).filter(|_| fired > 0 && report.passed)
-    {
-        let network = report.hosts.iter().any(|host| host.network_fs);
-        return CaseOutcome::Undetectable(if network {
-            format!("not caught on this network filesystem either; {why}")
-        } else {
-            why.to_owned()
-        });
     }
     if report.passed {
         CaseOutcome::Missed(format!("the run passed; the sabotage fired {fired} times"))
@@ -636,30 +534,9 @@ mod tests {
     /// A violation of `kind`, one of those [`detected_by`] names.
     fn violation(kind: &str) -> Violation {
         let detail = String::new;
-        let id = Uuid::new_v4();
         let violation = match kind {
             "LostUpdate" => lost(),
             "BrokenHistory" => broken(),
-            "SilentForkLoss" => Violation::SilentForkLoss {
-                fork_hash: "f".to_owned(),
-                erased_by: detail(),
-            },
-            "MirrorNotAVersion" => Violation::MirrorNotAVersion {
-                hash: "h".to_owned(),
-                source: crate::oracle::mirror::MirrorSource::Rename,
-                t_ms: 0,
-            },
-            "MirrorStale" => Violation::MirrorStale {
-                expected: "h".to_owned(),
-                found: crate::oracle::mirror::MirrorFound::Missing,
-                after: crate::oracle::mirror::MirrorCheckpoint::FinalPublish,
-            },
-            "MirrorDangling" => Violation::MirrorDangling { detail: detail() },
-            "ReadOnlyMirrorMismatch" => Violation::ReadOnlyMirrorMismatch {
-                version: Some("v".to_owned()),
-                detail: detail(),
-            },
-            "GcAfterFork" => Violation::GcAfterFork { id },
             "ConversionEndState" => Violation::ConversionEndState {
                 direction: Direction::ToObjectStore,
                 detail: detail(),
@@ -688,21 +565,9 @@ mod tests {
                     "{sabotage:?} {kind}"
                 );
             }
-            // A clean run after the sabotage fired is undetectable only for a
-            // case no oracle can catch here; anything else is missed.
-            let clean = judge(&report(vec![], 2), sabotage);
-            match undetectable_locally(sabotage) {
-                Some(_) => assert!(
-                    matches!(clean, CaseOutcome::Undetectable(_)),
-                    "{sabotage:?}: {clean:?}"
-                ),
-                None => assert!(
-                    matches!(clean, CaseOutcome::Missed(_)),
-                    "{sabotage:?}: {clean:?}"
-                ),
-            }
             for (others, fired) in [
                 (vec![], 0),
+                (vec![], 2),
                 (vec![stall()], 2),
                 (vec![Violation::Recovery { detail: "no".to_owned() }], 2),
             ] {
@@ -715,7 +580,7 @@ mod tests {
         }
         // Another sabotage's violation detects nothing.
         let outcome =
-            judge(&report(vec![violation("SilentForkLoss")], 2), Sabotage::SkipLink);
+            judge(&report(vec![violation("DeletedHistory")], 2), Sabotage::SkipLink);
         assert!(
             matches!(outcome, CaseOutcome::Missed(detail) if detail.contains("LostUpdate or BrokenHistory"))
         );
@@ -787,7 +652,6 @@ mod tests {
                 let kill_point = match sabotage {
                     Sabotage::UnlinkBaseBeforeRename => Some(PointName::BeforeRename),
                     Sabotage::LinkAfterRename => Some(PointName::Renamed),
-                    Sabotage::PublishNonCurrent => Some(PointName::Linked),
                     _ => None,
                 };
                 match kill_point {
@@ -802,32 +666,8 @@ mod tests {
                     sabotage == Sabotage::DeleteAboveMarker,
                     "{sabotage:?}"
                 );
-                let fork = config.fork;
-                match sabotage {
-                    Sabotage::PublishWithoutForkCheck => {
-                        assert!(fork.is_some_and(|f| f.repeat
-                            && !f.during_gc
-                            && f.at < duration));
-                    }
-                    Sabotage::GcWithoutForkCheck => {
-                        assert!(fork.is_some_and(|f| f.during_gc));
-                        assert!(config.gc.is_some());
-                    }
-                    _ => assert_eq!(fork, None, "{sabotage:?}"),
-                }
-                assert_eq!(
-                    config.gc.is_some(),
-                    matches!(
-                        sabotage,
-                        Sabotage::GcWithoutForkCheck | Sabotage::GcPublishesListed
-                    ),
-                    "{sabotage:?}"
-                );
-                assert_eq!(
-                    config.readonly.is_some(),
-                    sabotage == Sabotage::CommitWithoutPublish,
-                    "{sabotage:?}"
-                );
+                assert_eq!(config.gc, None, "{sabotage:?}");
+                assert_eq!(config.readonly, None, "{sabotage:?}");
             }
             let config = legacy_config(mode, duration);
             config.validate().unwrap();
@@ -842,17 +682,25 @@ mod tests {
             assert_eq!(config.fault_floor, FaultFloor::ZERO);
             assert_eq!(config.gc, None);
         }
+        let flags = |config: ScenarioConfig| {
+            (
+                config.plant_object_store_write,
+                config.late_commit,
+                config.kill_after_deleting_repo_d,
+            )
+        };
         let plant = scenario_config(Sabotage::FromObjectStoreWithoutProvenance, 8);
-        assert!(plant.plant_object_store_write && !plant.late_commit);
+        assert_eq!(flags(plant), (true, false, false));
         let late = scenario_config(Sabotage::ToObjectStoreWithoutChange, 8);
-        assert!(late.late_commit && !late.plant_object_store_write);
+        assert_eq!(flags(late), (false, true, false));
+        let deleting = scenario_config(Sabotage::DeleteDirBeforeRepoWrite, 8);
+        assert_eq!(flags(deleting), (false, false, true));
     }
 
     #[test]
-    fn gc_and_unlink_base_cases_run_few_writers() {
+    fn unlink_base_cases_run_few_writers() {
         for sabotage in SABOTAGES {
             let expected = match sabotage {
-                Sabotage::GcWithoutForkCheck | Sabotage::GcPublishesListed => 1,
                 Sabotage::UnlinkBaseBeforeRename => 2,
                 _ => 8,
             };
@@ -867,28 +715,6 @@ mod tests {
             1
         );
         assert_eq!(case_workers(CaseKind::LegacyBackend, 8), 8);
-    }
-
-    /// A publication right after its commit lists `repo.d` just after that
-    /// commit's tidy-up deleted the killed writers' version files, so
-    /// `PublishNonCurrent` finds nothing above the marker there: its case
-    /// pauses publications, often and briefly, while writers die after
-    /// linking often.
-    #[test]
-    fn publish_non_current_pauses_publications_while_killed_writers_files_wait() {
-        for mode in [Mode::Storage, Mode::Repository] {
-            let duration = Duration::from_secs(15);
-            let faults =
-                selftest_config(mode, Sabotage::PublishNonCurrent, duration).faults;
-            for point in
-                [PointName::Linked, PointName::BeforeRename, PointName::BeforePublish]
-            {
-                assert!(faults.points.contains(&point), "{point:?} in {faults:?}");
-            }
-            assert!(faults.kill_probability >= 0.15, "{faults:?}");
-            assert!(faults.pause_probability >= 0.15, "{faults:?}");
-            assert!(faults.pause <= Duration::from_millis(500), "{faults:?}");
-        }
     }
 
     #[test]
@@ -928,20 +754,25 @@ mod tests {
                 "link-after-rename",
                 "delete-winner-file",
                 "ack-superseded-without-proof",
-                "publish-without-fork-check",
-                "publish-non-current",
                 "legacy-local",
             ]
         );
         let repository = names(Mode::Repository);
         assert_eq!(repository.len(), SABOTAGES.len() + 1);
-        assert_eq!(repository.last(), Some(&"legacy-local"));
+        assert_eq!(
+            repository[repository.len() - 4..],
+            [
+                "from-object-store-without-provenance",
+                "to-object-store-without-change",
+                "delete-dir-before-repo-write",
+                "legacy-local",
+            ]
+        );
     }
 
     #[test]
-    fn only_detected_and_undetectable_cases_lose_their_root() {
+    fn only_detected_cases_lose_their_root() {
         assert!(!keep_root(&CaseOutcome::Detected("3 LostUpdate".to_owned())));
-        assert!(!keep_root(&CaseOutcome::Undetectable("no stale listings".to_owned())));
         assert!(keep_root(&CaseOutcome::Missed("the run passed".to_owned())));
         assert!(keep_root(&CaseOutcome::Missed("no LostUpdate".to_owned())));
         assert!(keep_root(&CaseOutcome::Error("verify: boom".to_owned())));
@@ -959,18 +790,11 @@ mod tests {
         let all = SelftestReport { cases: cases(Mode::Storage).map(detected).collect() };
         assert_eq!(all.exit_code(), 0);
         let summary = all.summary();
-        assert_eq!(summary.lines().count(), 14, "{summary}");
+        assert_eq!(summary.lines().count(), 12, "{summary}");
         assert!(summary.ends_with("PASS"), "{summary}");
         assert!(summary.contains("storage trust-rename-enoent: detected"), "{summary}");
         assert!(summary.contains("storage legacy-local: detected"), "{summary}");
         assert!(!summary.contains("kept-root"), "{summary}");
-
-        let mut undetectable = all.clone();
-        undetectable.cases[0].outcome = CaseOutcome::Undetectable("why".to_owned());
-        assert_eq!(undetectable.exit_code(), 0);
-        assert!(
-            undetectable.summary().contains("storage skip-link: undetectable here: why")
-        );
 
         let mut missed = all.clone();
         missed.cases[1] = case(

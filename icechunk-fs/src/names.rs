@@ -19,7 +19,6 @@ pub(crate) const REPO: &str = "repo";
 pub(crate) const REPO_D: &str = "repo.d";
 const TMP_DIR_PREFIX: &str = "repo.d.tmp.";
 const STAGE_PREFIX: &str = "stage.";
-const MIRROR_PREFIX: &str = "mirror.";
 const LATEST_PREFIX: &str = "latest.";
 
 /// Lowercase hex sha256 of `bytes`.
@@ -129,15 +128,11 @@ pub(crate) enum RepoDName {
     Content(Version),
     Marker(Marker),
     Stage(Uuid),
-    Mirror(Uuid),
 }
 
 pub(crate) fn parse_repo_d_name(name: &str) -> Option<RepoDName> {
     if let Some(id) = name.strip_prefix(STAGE_PREFIX) {
         return parse_hyphenated_uuid(id).map(RepoDName::Stage);
-    }
-    if let Some(id) = name.strip_prefix(MIRROR_PREFIX) {
-        return parse_hyphenated_uuid(id).map(RepoDName::Mirror);
     }
     match name.strip_prefix(LATEST_PREFIX) {
         Some(rest) => {
@@ -152,11 +147,6 @@ pub(crate) fn parse_repo_d_name(name: &str) -> Option<RepoDName> {
 /// `stage.<id>`
 pub(crate) fn stage_name(id: Uuid) -> String {
     format!("{STAGE_PREFIX}{id}")
-}
-
-/// `mirror.<id>`
-pub(crate) fn mirror_name(id: Uuid) -> String {
-    format!("{MIRROR_PREFIX}{id}")
 }
 
 /// `repo.d.tmp.<id>`
@@ -243,14 +233,6 @@ mod tests {
     }
 
     #[test]
-    fn mirror_names_round_trip() {
-        let id = Uuid::new_v4();
-        let name = mirror_name(id);
-        assert_eq!(name, format!("mirror.{id}"));
-        assert_eq!(parse_repo_d_name(&name), Some(RepoDName::Mirror(id)));
-    }
-
-    #[test]
     fn initial_versions_start_at_n() {
         for n in NS {
             assert_eq!(Version::initial(n, hash()).unwrap(), version(n));
@@ -309,7 +291,8 @@ mod tests {
             format!("1.{H}x"),
             format!("latest.999999999998999.1000.{H}.x"),
             format!("stage.{id}.x"),
-            // bad mirror ids
+            // unknown names
+            format!("mirror.{id}"),
             format!("mirror.{}", id.simple()),
             format!("mirror.{}", id.hyphenated().to_string().to_uppercase()),
             format!("mirror.{}", id.braced()),
@@ -356,10 +339,10 @@ mod tests {
             format!("converted.999999999998999.1000.{H}"),
             format!("frozen.{id}"),
             format!("frozen.999999999998999.1000.{H}"),
-            // names inside repo.d aren't root names
             format!("mirror.{id}"),
-            format!("stage.{id}"),
             format!("repo.mirror.{id}"),
+            // names inside repo.d aren't root names
+            format!("stage.{id}"),
         ] {
             assert_eq!(parse_root_name(&name), None, "{name}");
         }

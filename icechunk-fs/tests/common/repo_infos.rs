@@ -6,7 +6,6 @@ use chrono::{DateTime, Utc};
 use icechunk_format::{
     SnapshotId,
     format_constants::SpecVersionBin,
-    layout_v1::{FeatureChange, convert},
     repo_info::{DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE, RepoInfo, UpdateType},
     repo_info_file,
     snapshot::SnapshotInfo,
@@ -20,24 +19,10 @@ pub(crate) fn repo_info(seq: u32) -> Vec<u8> {
 }
 
 /// Like [`repo_info`] without writer features: what an implementation that
-/// doesn't implement the layout writes (a fork), or the last version of a
-/// conversion to the object store layout.
+/// doesn't implement the layout writes, or the last version of a conversion
+/// to the object store layout.
 pub(crate) fn featureless_repo_info(seq: u32) -> Vec<u8> {
     minimal(seq, &[])
-}
-
-/// Like [`repo_info`] with a change after the creation: what an orphan mirror
-/// holds, unlike an interrupted creation.
-pub(crate) fn changed_repo_info(seq: u32) -> Vec<u8> {
-    let changed_at = at(seq) + chrono::TimeDelta::seconds(1);
-    convert(
-        &featureless_repo_info(seq),
-        FeatureChange::Add,
-        "overwritten/changed",
-        changed_at,
-        DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE,
-    )
-    .unwrap()
 }
 
 /// The repo info after a commit on top of `bytes` by the attempt `attempt`:

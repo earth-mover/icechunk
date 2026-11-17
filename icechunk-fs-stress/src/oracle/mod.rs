@@ -1,10 +1,9 @@
 //! Checks a finished run against what its workers logged.
 
 pub mod conversion;
-pub mod fork;
 pub mod gc_cutoff;
+pub mod layout;
 pub mod liveness;
-pub mod mirror;
 pub mod repo;
 pub mod storage;
 
@@ -18,7 +17,7 @@ use crate::{
     env_info::{HostDone, HostInfo},
     layout::RunRoot,
     log::{Direction, LogName, Op, OpResult, Record},
-    oracle::mirror::{MirrorCheckpoint, MirrorFound, MirrorSource, RunStatuses},
+    oracle::layout::{RunStatuses, check_init_version, check_readonly_holds},
     repo_mode, storage_mode,
 };
 
@@ -69,27 +68,13 @@ pub enum Violation {
     Harness {
         detail: String,
     },
-    /// A mirror a publication installed, or a sample of `$ROOT/repo`, that
-    /// is no version that was current.
-    MirrorNotAVersion {
-        hash: String,
-        source: MirrorSource,
-        t_ms: i64,
-    },
-    /// On a local filesystem, `$ROOT/repo` isn't the current version after a
-    /// publication or change with no other writer.
-    MirrorStale {
-        expected: String,
-        found: MirrorFound,
-        after: MirrorCheckpoint,
-    },
-    /// The mirror references a snapshot file, transaction log or manifest
-    /// that doesn't exist.
-    MirrorDangling {
+    /// M7: the current version references a snapshot file, transaction log
+    /// or manifest that doesn't exist.
+    DanglingReference {
         detail: String,
     },
-    /// A version that was current, or the mirror, without exactly
-    /// `filesystem-layout-v1` and its gate.
+    /// A version that was current without exactly `filesystem-layout-v1`
+    /// and a status the implementation writes.
     FeatureMissing {
         what: String,
         detail: String,
@@ -105,40 +90,14 @@ pub enum Violation {
     DeletedUnrecognized {
         name: String,
     },
-    /// At the end of a hold of the status `ReadOnly`, on a local filesystem,
-    /// `$ROOT/repo` wasn't the `ReadOnly` change's version (`None` if
-    /// unknown) without an older version renamed over it to explain it; or,
-    /// on any filesystem, a change landed during the hold.
-    ReadOnlyMirrorMismatch {
+    /// M4: a change landed during a hold of the status `ReadOnly`, or right
+    /// after the `ReadOnly` change (`version` is `None` then).
+    ChangeDuringReadOnlyHold {
         version: Option<String>,
         detail: String,
     },
-    /// F2, on a local filesystem: an operation that started after a fork and
-    /// ended before its erasure was acknowledged: its change landed, and its
-    /// publication didn't report the fork.
-    UnreportedFork {
-        id: Uuid,
-        op: String,
-    },
-    /// F3, on a local filesystem: a GC after a fork, or with a fork written
-    /// before its hook, was acknowledged: it deleted while a fork was in
-    /// `$ROOT/repo`.
-    GcAfterFork {
-        id: Uuid,
-    },
-    /// F4: a fork was erased by something other than a publication whose
-    /// fork check read `$ROOT/repo` before the fork.
-    SilentForkLoss {
-        fork_hash: String,
-        erased_by: String,
-    },
-    /// F5: after a run whose fork persisted, the fork side can't be
-    /// recovered: `$ROOT/repo`, its backup or its objects are gone.
-    ForkDamaged {
-        detail: String,
-    },
-    /// C2: a conversion changed more than the writer features, the gate and
-    /// the ops log, or didn't back up the repo info it converted.
+    /// C2: a conversion changed more than the writer features and the ops
+    /// log, or didn't back up the repo info it converted.
     ConversionMismatch {
         direction: Direction,
         detail: String,
@@ -167,7 +126,7 @@ pub enum Violation {
         detail: String,
     },
     /// On a local filesystem, a rerun of a conversion failed as only stale
-    /// listings make it fail: relisting ran out, or a false fork.
+    /// listings make it fail: relisting ran out.
     ConversionRetried {
         direction: Direction,
         detail: String,
@@ -188,17 +147,11 @@ impl Violation {
             Self::Leftovers { .. } => "Leftovers",
             Self::DataMismatch { .. } => "DataMismatch",
             Self::Harness { .. } => "Harness",
-            Self::MirrorNotAVersion { .. } => "MirrorNotAVersion",
-            Self::MirrorStale { .. } => "MirrorStale",
-            Self::MirrorDangling { .. } => "MirrorDangling",
+            Self::DanglingReference { .. } => "DanglingReference",
             Self::FeatureMissing { .. } => "FeatureMissing",
             Self::InitialVersion { .. } => "InitialVersion",
             Self::DeletedUnrecognized { .. } => "DeletedUnrecognized",
-            Self::ReadOnlyMirrorMismatch { .. } => "ReadOnlyMirrorMismatch",
-            Self::UnreportedFork { .. } => "UnreportedFork",
-            Self::GcAfterFork { .. } => "GcAfterFork",
-            Self::SilentForkLoss { .. } => "SilentForkLoss",
-            Self::ForkDamaged { .. } => "ForkDamaged",
+            Self::ChangeDuringReadOnlyHold { .. } => "ChangeDuringReadOnlyHold",
             Self::ConversionMismatch { .. } => "ConversionMismatch",
             Self::ConversionEndState { .. } => "ConversionEndState",
             Self::OverwroteObjectStore { .. } => "OverwroteObjectStore",
@@ -243,67 +196,10 @@ pub enum Warning {
         count: u64,
         samples: Vec<String>,
     },
-    /// On a network filesystem, where `publish_mirror()` is best effort,
-    /// `$ROOT/repo` isn't the current version after a publication or change
-    /// with no other writer.
-    MirrorStale {
-        expected: String,
-        found: MirrorFound,
-        after: MirrorCheckpoint,
-    },
     /// Entries of the storage root or `repo.d` that the layout never
     /// creates and GC never deletes: someone else's, or a bug.
     UnknownEntries {
         names: Vec<String>,
-    },
-    /// A host's mirror sampler couldn't log: its samples end there.
-    SamplerFailed {
-        tag: String,
-        error: String,
-    },
-    /// Samples that found no `$ROOT/repo`: the layout never removes it, so on
-    /// a local filesystem a replacement wasn't atomic.
-    MirrorMissing {
-        count: u64,
-    },
-    /// Samples that couldn't read `$ROOT/repo`, with the first few errors.
-    MirrorUnreadable {
-        count: u64,
-        samples: Vec<String>,
-    },
-    /// [`Violation::ReadOnlyMirrorMismatch`]'s mirror mismatch on a network
-    /// filesystem, whose reads of `$ROOT/repo` may be stale.
-    ReadOnlyMirrorMismatch {
-        version: Option<String>,
-        detail: String,
-    },
-    /// [`Violation::UnreportedFork`] on a network filesystem.
-    UnreportedFork {
-        id: Uuid,
-        op: String,
-    },
-    /// [`Violation::GcAfterFork`] on a network filesystem.
-    GcAfterFork {
-        id: Uuid,
-    },
-    /// A fork erased by a publication whose fork check read `$ROOT/repo`
-    /// before it and whose rename came after it, returning
-    /// `landed_ms_after_check` after the check passed, `None` if it was never
-    /// recorded done: the accepted window.
-    ForkErasedInWindow {
-        fork_hash: String,
-        landed_ms_after_check: Option<i64>,
-    },
-    /// [`Violation::SilentForkLoss`] on a network filesystem, where a
-    /// publication whose fork check read `$ROOT/repo` before the fork
-    /// announced renaming the bytes `replaced_by` that erased it, and its
-    /// process was seen dead before the fork was written, while no
-    /// publication whose fork check came after the fork, or that had none,
-    /// may have renamed them since: the kill cancels the wait for the rename
-    /// RPC, not the RPC, which the server may still apply after the death.
-    ForkErasedAfterKilledPublisher {
-        fork_hash: String,
-        replaced_by: String,
     },
     /// [`Violation::ConversionRetried`] on a network filesystem.
     ConversionRetried {
@@ -319,14 +215,6 @@ pub enum Warning {
         attempt: u32,
         rerun_after_ms: u64,
     },
-    /// An undecodable backup that a fork's write announced
-    /// ([`Record::ForkBackup`]) and no fork it wrote names: the emulated old
-    /// writer's interrupted copy of `$ROOT/repo`, which no ops log
-    /// references.
-    ForkActorPartialBackup {
-        backup: String,
-        detail: String,
-    },
     /// The commit `id` started before the cutoff of the GC `gc` by more than
     /// the clock allowance and may still have committed when that GC, which
     /// may have landed, began: the run broke GC's precondition (spec 2.2,
@@ -338,7 +226,7 @@ pub enum Warning {
     /// log, and, only as the failure of its chunk's read-back, the manifest
     /// or chunk the commit wrote that the read-back found missing. M7 still
     /// judges a missing manifest, that one included: when it checks it, it
-    /// reports [`Violation::MirrorDangling`].
+    /// reports [`Violation::DanglingReference`].
     GcCutoffAfterSessionStart {
         id: Uuid,
         snapshot: Option<String>,
@@ -378,18 +266,8 @@ pub struct Stats {
     pub chain_len: u64,
     pub faults: BTreeMap<String, u64>,
     pub external_kills: u64,
-    /// Mirror renames the publications recorded.
-    pub mirror_renames: u64,
-    /// Changes of what the mirror samplers read.
-    pub mirror_samples: u64,
     /// Holds of the status `ReadOnly` the status toggler logged.
     pub readonly_holds: u64,
-    /// Holds that ended with an older version renamed over the `ReadOnly`
-    /// version by a publication still in flight: mirror lag, not a failure.
-    pub readonly_mirror_lags: u64,
-    /// Holds whose `ReadOnly` change logged a storage error, as a failed
-    /// publication does: their mirror isn't judged.
-    pub readonly_publish_errors: u64,
 }
 
 /// Everything a run left under its root, except the repository itself.
@@ -461,15 +339,13 @@ impl History {
 }
 
 /// Checks the run's repository against `history` with the oracle of its
-/// mode, and on the filesystem backend the mirror and writer-feature rules,
-/// returning the hashes of the versions that were current, for M1 on later
-/// publications. `earlier_eras` are the backups the conversion scenario's
-/// earlier eras wrote, which L1 doesn't check.
+/// mode, and on the filesystem backend the writer-feature rule L1, I1 and
+/// M4. `earlier_eras` are the backups the conversion scenario's earlier eras
+/// wrote, which L1 doesn't check.
 /// In storage mode an unreadable `repo` is `BrokenHistory`, and `Err` only
-/// if the storage can't be opened or the backups or the mirror can't be
-/// read; in repository mode `Err` if the repository can't be read, with the
-/// context [`RepositoryUnreadable`]. Both read `repo` through the run's
-/// storage.
+/// if the storage can't be opened or the backups can't be read; in
+/// repository mode `Err` if the repository can't be read, with the context
+/// [`RepositoryUnreadable`]. Both read `repo` through the run's storage.
 pub async fn check_mode(
     root: &RunRoot,
     config: &RunConfig,
@@ -477,8 +353,9 @@ pub async fn check_mode(
     network_fs: bool,
     earlier_eras: &HashSet<String>,
     verdict: &mut Verdict,
-) -> anyhow::Result<Option<HashSet<String>>> {
+) -> anyhow::Result<()> {
     let layout = config.backend == Backend::Filesystem;
+    let statuses = RunStatuses::of(config);
     match config.mode {
         Mode::Storage => {
             let storage = storage_mode::storage(root, config, None).await?;
@@ -498,21 +375,9 @@ pub async fn check_mode(
                 network_fs,
                 verdict,
             );
-            if !layout {
-                return Ok(None);
-            }
-            let was_current =
+            if layout {
                 storage::check_versions(final_repo.as_deref(), &backups, verdict);
-            let statuses = RunStatuses::of(config);
-            mirror::check_layout(
-                &root.storage(),
-                history,
-                &was_current,
-                statuses,
-                network_fs,
-                verdict,
-            )?;
-            Ok(Some(was_current))
+            }
         }
         Mode::Repository => {
             let repo = repo_mode::open_repo(root, config, None)
@@ -521,32 +386,25 @@ pub async fn check_mode(
             repo::check_repo(&repo, history, config, network_fs, verdict)
                 .await
                 .map_err(|err| err.context(RepositoryUnreadable))?;
-            if !layout {
-                return Ok(None);
+            if layout {
+                let current = storage_mode::read_repo(repo.storage().as_ref())
+                    .await
+                    .map_err(|err| err.context(RepositoryUnreadable))?;
+                layout::versions_that_were_current(
+                    &root.storage(),
+                    &current,
+                    statuses,
+                    earlier_eras,
+                    verdict,
+                )?;
             }
-            let current = storage_mode::read_repo(repo.storage().as_ref())
-                .await
-                .map_err(|err| err.context(RepositoryUnreadable))?;
-            let statuses = RunStatuses::of(config);
-            let was_current = mirror::versions_that_were_current(
-                &root.storage(),
-                &current,
-                statuses,
-                earlier_eras,
-                history,
-                verdict,
-            )?;
-            mirror::check_layout(
-                &root.storage(),
-                history,
-                &was_current,
-                statuses,
-                network_fs,
-                verdict,
-            )?;
-            Ok(Some(was_current))
         }
     }
+    if layout {
+        check_readonly_holds(history, verdict);
+        check_init_version(history, verdict);
+    }
+    Ok(())
 }
 
 /// The clock allowance between hosts for rules that compare their times: the
@@ -686,12 +544,12 @@ mod tests {
     fn a_violations_kind_is_its_tag_in_report_json() {
         let violations = [
             Violation::LostUpdate { id: Uuid::nil(), detail: String::new() },
-            Violation::GcAfterFork { id: Uuid::nil() },
+            Violation::DanglingReference { detail: String::new() },
             Violation::ConversionEndState {
                 direction: Direction::ToObjectStore,
                 detail: String::new(),
             },
-            Violation::ReadOnlyMirrorMismatch { version: None, detail: String::new() },
+            Violation::ChangeDuringReadOnlyHold { version: None, detail: String::new() },
         ];
         for violation in violations {
             let json = serde_json::to_value(&violation).unwrap();
@@ -702,12 +560,7 @@ mod tests {
     #[test]
     fn earlier_phases_come_first_with_their_operations_only() {
         let (a, b, c) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-        let renamed = Record::MirrorRename {
-            t_check_ms: None,
-            t_read_ms: None,
-            t_rename_ms: 1,
-            hash: "h".to_owned(),
-        };
+        let renamed = Record::Observed { t_ms: 1, what: "link_existed".to_owned() };
         let first = BTreeMap::from([
             (worker("0"), vec![intent(1, a), renamed.clone()]),
             (name("supervisor", None), vec![renamed.clone()]),

@@ -122,7 +122,7 @@ Icechunk uses a series of linked metadata files to describe the state of the rep
 - **Transaction log files**, an overview of the operations executed during a session, used for rebase and diffs.
 
 !!! tip "For implementers: read path"
-    1. Read `$ROOT/repo` → parse repo info → look up branch → get snapshot id
+    1. Read `$ROOT/repo` (in the [object store layout](#storage-operations)) → parse repo info → look up branch → get snapshot id
     2. Read `$ROOT/snapshots/{id}` → parse snapshot → list nodes
     3. For each array node, inspect its `ManifestRef` list → get manifest ids and extents
     4. Read `$ROOT/manifests/{id}` → parse manifest → look up `ChunkRef` by coordinates
@@ -173,7 +173,7 @@ flowchart TD
 All data and metadata files MUST be stored within a root directory using the following directory structure.
 
 - `$ROOT` base URI (s3, gcs, local directory, etc.)
-- `$ROOT/repo` repo info file, entry point for all operations
+- `$ROOT/repo` repo info file of the object store layout, entry point for all operations
 - `$ROOT/snapshots/` snapshot files
 - `$ROOT/manifests/` chunk manifests
 - `$ROOT/transactions/` transaction log files
@@ -183,7 +183,7 @@ All data and metadata files MUST be stored within a root directory using the fol
 
 Implementations SHOULD NOT create entries in `$ROOT` other than the ones listed above and those defined by the filesystem layout. [Garbage collection](#garbage-collection-and-expiration) never deletes entries it does not recognize.
 
-A repository [migrated from spec version 1](#repositories-migrated-from-spec-version-1) MAY also contain the spec 1 entries `$ROOT/refs/` and `$ROOT/config.yaml`. They are not used. If `$ROOT/repo` exists, the repository is a spec 2.x repository, whether or not spec 1 entries exist.
+A repository [migrated from spec version 1](#repositories-migrated-from-spec-version-1) MAY also contain the spec 1 entries `$ROOT/refs/` and `$ROOT/config.yaml`. They are not used. If `$ROOT/repo` or `$ROOT/repo.d` exists, the repository is a spec 2.x repository, whether or not spec 1 entries exist.
 
 Tools that copy, move or archive a repository MUST include every entry under `$ROOT`, including entries they do not recognize.
 
@@ -249,7 +249,7 @@ With the exception of chunk files, each type of file is encoded using [flatbuffe
 The repo info file is the single entry point for an Icechunk repository and the only mutable object in a V2.x repo. Every read operation starts by fetching it, and every update to the repository (commits, tag creation, configuration changes) replaces it. Where it is stored and how it is replaced depends on the repository's [layout](#storage-operations):
 
 - In the **object store layout**, the repo info MUST be stored at `$ROOT/repo`, and every update is a conditional write on that file.
-- In the **[filesystem layout](./spec-filesystem-layout-v1.md)**, used by repositories that list the `filesystem-layout-v1` [writer feature](#writer-features), the current repo info is a version file in `$ROOT/repo.d/`, and updates are made as that layout describes. `$ROOT/repo` holds a copy of a recent version that MAY lag behind the current one or be missing, and briefly holds other repo infos as the filesystem layout describes.
+- In the **[filesystem layout](./spec-filesystem-layout-v1.md)**, used by repositories that list the `filesystem-layout-v1` [writer feature](#writer-features), the current repo info is a version file in `$ROOT/repo.d/`, and updates are made as that layout describes. `$ROOT/repo` does not exist, except during a [conversion](./spec-filesystem-layout-v1.md#conversions) between the layouts.
 
 The repo info file MUST use the [binary file format](#binary-file-format) with file type `RepoInfo`.
 
@@ -349,23 +349,9 @@ The status says which operations implementations may perform on the repository:
 - `ReadOnly`: reads only. Implementations MUST NOT modify the repository, except to change its status, or to add or remove writer features keeping the status (see [Modify a Repository](#modify-a-repository)).
 - `Offline`: reserved. Implementations MUST NOT write it. Implementations of spec 2.2 that find it MUST treat it as not `Online`: no modifications, except to change the status, or to add or remove writer features keeping the status (see [Modify a Repository](#modify-a-repository)). Icechunk libraries up to 2.3 read it as `Online`.
 
-In this section, `status` is the `Repo.status` field.
+A `RepoStatusChangedUpdate` entry holds the status the update set. A change of writer features also appends a `RepoStatusChangedUpdate` entry, with the status it kept, or `ReadOnly` where it rewrites an `Offline` or undefined status, as the [filesystem layout conversions](./spec-filesystem-layout-v1.md#conversions) do. The entry alone doesn't tell such a change from a change of the status.
 
-When `Repo.writer_features` is non-empty, `status` is a **gate**. It marks the repository `ReadOnly` for implementations that predate writer features, so that they don't modify a repository whose features they don't know. The repository's own status is then in `status.underlying`. Writers MUST maintain the gate as follows:
-
-- `status.underlying` MUST be present when `Repo.writer_features` is non-empty, and absent when it is empty. It MUST NOT itself have an `underlying`.
-- `status.availability` MUST be `ReadOnly`, whatever the underlying availability.
-- `status.limited_availability_reason` MUST be one line without double quotes. It MUST name the writer features and the oldest Icechunk version that implements all of them (the highest "First implemented in" among them in [Writer features](#writer-features)), and MUST tell users not to change the status with Icechunk older than 2.4.0. The underlying reason, if any, follows.
-- `status.set_at` MUST equal `status.underlying.set_at`.
-
-Implementations of spec 2.2 or later MUST use `status.underlying`, when present, as the status of the repository, and change the status by changing `status.underlying`.
-
-In a `RepoStatusChangedUpdate` entry, the status the update set is `status.underlying` when present, otherwise `status`. A change of writer features also appends a `RepoStatusChangedUpdate` entry, with the status it kept, or `ReadOnly` where it rewrites an `Offline` or undefined status, as the [filesystem layout conversions](./spec-filesystem-layout-v1.md#conversions) do. The entry alone doesn't tell such a change from a change of the status.
-
-A repo info is malformed if `status.underlying` is present without writer features or absent with them, if `status.underlying` has an `underlying`, if the gate's `availability` is not `ReadOnly` or its `set_at` differs from `status.underlying.set_at`, or if `Repo.writer_features` is not sorted or has duplicates. The text of `limited_availability_reason` does not make a repo info malformed. An empty `writer_features` vector is not malformed: it is read as absent. Readers MAY read a malformed repo info and MUST then treat the repository as not `Online`. Implementations MUST treat it as a format error when modifying the repository, except for a status-only change by an implementation that implements every listed feature, which writes a well-formed status.
-
-!!! tip "For implementers"
-    Icechunk libraries 2.0 to 2.3 see the status of a repository with writer features as `ReadOnly`: they read the repository and refuse to modify it.
+A repo info is malformed if `Repo.writer_features` is not sorted or has duplicates. An empty `writer_features` vector is not malformed: it is read as absent. Readers MAY read a malformed repo info and MUST then treat the repository as not `Online`. Implementations MUST treat it as a format error when modifying the repository.
 
 ##### Writer features
 
@@ -373,12 +359,11 @@ A _writer feature_ is a format feature that an implementation must implement to 
 
 - An implementation MUST NOT modify a repository that lists a writer feature it does not implement. It MUST report the names of the features it lacks.
 - Each feature's definition says what implementing it requires. Whether an implementation implements a feature can depend on the storage backend it uses; implementations decide it per backend.
-- Writer features never prevent reads. An implementation that does not implement a listed feature can still read the repository.
+- Writer features never prevent reads. An implementation that does not implement a listed feature can still read the repository where it finds the repo info: implementations that do not implement the [filesystem layout](./spec-filesystem-layout-v1.md) find none in a repository that uses it.
 - When rewriting the repo info, implementations MUST copy `writer_features` unchanged, except in the update that adds or removes a feature.
 - The update that first writes data requiring a feature MUST add the feature. A feature MAY be removed only by an update that leaves no data requiring it.
-- Adding the first feature turns on the [status gate](#repostatus), and removing the last one turns it off.
 - The update that adds or removes a feature writes a `RepoStatusChangedUpdate` ops log entry.
-- Implementations that predate writer features can change the status of a repository that lists writer features, which removes `writer_features` and the gate (see the [version policy](./version-policy.md)). Each feature's definition MUST be such that this write leaves either a valid repository without the feature or a state that implementations of the feature detect, at least on a best-effort basis, as the feature's definition specifies.
+- Each feature's definition MUST keep implementations that predate writer features from modifying a repository that uses it. The filesystem layout does so by keeping no `$ROOT/repo`.
 - Later 2.x versions of this specification MUST define a writer feature for every addition that an implementation of an earlier 2.x version would drop or damage when it modifies the repository.
 
 Names defined by this specification use only lowercase ASCII letters, digits and `-`, and end in a version suffix `-v<n>`. Names that contain `.` are reserved for features defined outside this specification, which a later version may allow. Implementations MUST NOT write names that the specification they implement does not define, and MUST treat every name they do not recognize as a feature they do not implement.
@@ -390,6 +375,9 @@ This specification defines these writer features:
 | `filesystem-layout-v1` | The repo info is stored as described in the [filesystem layout, version 1](./spec-filesystem-layout-v1.md). Experimental. | Icechunk 2.4.0 |
 
 An _experimental_ writer feature may be superseded by a later version under a new name, such as `filesystem-layout-v2`. Implementations that don't implement the new version refuse to modify repositories that list it, as for any writer feature. The definition of an existing version doesn't change. Which versions the Icechunk libraries keep writing is set by the [version policy](./version-policy.md#experimental-writer-features).
+
+!!! tip "For implementers"
+    Icechunk libraries 2.0 to 2.3 don't know writer features. They can't open repositories in the [filesystem layout](./spec-filesystem-layout-v1.md).
 
 ##### Feature flags
 
@@ -658,7 +646,7 @@ encoded in paths using Crockford base 32.
 - The initial snapshot MUST have no nodes and no manifests. Its message SHOULD be `Repository initialized`.
 - The initial transaction log MUST have all lists empty.
 - The repo info MUST have a single snapshot, the initial one, a single branch, `main`, pointing to it, and a single ops log entry, `RepoInitializedUpdate`. Its `config` MAY be absent.
-- Its status MUST be `Online`. A repository created in the [filesystem layout](./spec-filesystem-layout-v1.md) lists `filesystem-layout-v1` in `Repo.writer_features`, so its status is the [gate](#repostatus), with `underlying` `Online`. Creating a repository is not a change of writer features: `RepoInitializedUpdate` is still the only entry.
+- Its status MUST be `Online`. A repository created in the [filesystem layout](./spec-filesystem-layout-v1.md) lists `filesystem-layout-v1` in `Repo.writer_features`. Creating a repository is not a change of writer features: `RepoInitializedUpdate` is still the only entry.
 
 ### Read from Repository
 
@@ -732,7 +720,6 @@ A tag can be created from any snapshot.
 ## Changes from spec version 2.1 to 2.2
 
 - Added writer features.
-- Added the [status gate](#repostatus): a repository that lists writer features stores `ReadOnly` as its status, with a reason naming the features, so that Icechunk libraries before 2.4.0 read it but refuse to modify it. Its own status moves to `status.underlying`.
 - Defined the `filesystem-layout-v1` writer feature (experimental) and the [filesystem layout, version 1](./spec-filesystem-layout-v1.md).
 - Defined what modifying a repository means, and the checks required before it.
 - Reserved the `Offline` status.
@@ -741,7 +728,7 @@ A tag can be created from any snapshot.
 - Reserved the `extra` fields for this specification.
 - Froze the flatbuffers enums and unions, and the header values, for all of spec 2.x; tables can still gain fields.
 - Clarified existing behavior: the header values, the repository status, the ops log and its backups, the configuration fields needed to interoperate, feature flags, relative virtual chunk locations and compressed locations, the consistency of `manifest_files_v2` and `SnapshotInfo` with the snapshot file, repository initialization, repositories migrated from spec version 1, and the cases where a transaction log is missing or lists a node more than once. These clarifications describe repositories written under spec versions 2 and 2.1 as well; they do not claim that every older implementation followed the algorithms in [Garbage collection and expiration](#garbage-collection-and-expiration).
-- The change is backwards compatible. Every 2.x library can read a spec 2.2 repository. Libraries before 2.4.0 cannot modify a repository that lists writer features.
+- Repositories in the object store layout stay readable and writable by every 2.x library. Repositories in the filesystem layout have no `$ROOT/repo`, so only implementations of that layout open them, Icechunk 2.4.0 and later with `filesystem_storage`; other libraries and backends can't.
 
 ## Changes from spec version 2 to 2.1
 

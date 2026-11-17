@@ -10,10 +10,7 @@
 use std::{
     collections::VecDeque,
     num::{NonZeroU16, NonZeroUsize},
-    sync::{
-        Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -37,15 +34,14 @@ use icechunk::{
     session::{Session, SessionError, SessionErrorKind},
     storage::RetriesSettings,
 };
-use icechunk_fs::fault_injection::{Point, ProtocolHooks};
+use icechunk_fs::fault_injection::ProtocolHooks;
 use rand::{RngExt as _, rngs::StdRng};
 use uuid::Uuid;
 
 use crate::{
     config::{RetryConfig, RunConfig, WorkerId},
     control::StopCheck,
-    faults::{FaultHooks, Trigger},
-    fork::{announce_backup, log_fork, write_fork},
+    faults::FaultHooks,
     layout::{RunRoot, is_valid_slot, is_valid_tag},
     log::{LogWriter, Op, OpResult, Record, now_ms, start_worker_log},
     storage_mode,
@@ -149,12 +145,6 @@ pub fn classify(err: &SessionError) -> OpResult {
     match err.kind() {
         SessionErrorKind::Conflict { .. } | SessionErrorKind::RebaseFailed { .. } => {
             OpResult::Conflict
-        }
-        kind @ SessionErrorKind::CommitDurableButRepositoryForked { snapshot, .. } => {
-            OpResult::DurableButForked {
-                snapshot: Some(snapshot.to_string()),
-                message: kind.to_string(),
-            }
         }
         SessionErrorKind::RepositoryError(kind) => repository_outcome(kind),
         SessionErrorKind::StorageError(kind) => storage_mode::classify_storage(kind),
@@ -554,8 +544,7 @@ const GC_TICK: Duration = Duration::from_millis(100);
 
 /// The GC worker: every `gc.every`, expires the snapshots and garbage
 /// collects what is older than `gc.margin`, with fault hooks like any
-/// worker. With `fork.during_gc`, the first GC that starts `fork.at` after
-/// the go writes a fork once its change is published, before its hook.
+/// worker.
 pub async fn gc_worker(
     root: &RunRoot,
     config: &RunConfig,
@@ -565,15 +554,8 @@ pub async fn gc_worker(
     let gc = config.gc.context("the run has no gc configuration")?;
     let margin = TimeDelta::from_std(gc.margin).context("gc.margin is too long")?;
     let log = Arc::new(start_worker_log(root, who)?);
-    let fork = config.fork.filter(|fork| fork.during_gc).map(|fork| {
-        let go = until.checked_sub(config.duration).unwrap_or(until);
-        (go + fork.at, ForkDuringGc::new(root, Arc::clone(&log)))
-    });
-    let mut hooks = FaultHooks::new(&config.faults, config.sabotage, Arc::clone(&log));
-    if let Some((_, fork)) = &fork {
-        hooks = hooks.with_trigger(Arc::clone(&fork.trigger));
-    }
-    let hooks: Arc<dyn ProtocolHooks> = Arc::new(hooks);
+    let hooks: Arc<dyn ProtocolHooks> =
+        Arc::new(FaultHooks::new(&config.faults, config.sabotage, Arc::clone(&log)));
     let mut stop = StopCheck::new(root, until);
     let Some(repo) = open_until_stopped(root, config, &hooks, &mut stop).await else {
         return Ok(());
@@ -604,70 +586,13 @@ pub async fn gc_worker(
         let id = Uuid::new_v4();
         let op = Op::Gc { older_than_ms: Some(older_than_ms) };
         log.append(&Record::Intent { t_ms: now_ms(), id, op })?;
-        let armed = fork
-            .as_ref()
-            .filter(|(at, _)| SystemTime::now() >= *at)
-            .map(|(_, fork)| fork);
-        if let Some(fork) = armed {
-            fork.arm(id);
-        }
         let result = match collect_garbage(&repo, config, cutoff).await {
             Ok(_) => OpResult::Ack { snapshot: None },
             Err(err) => classify_gc(&err),
         };
-        if let Some(fork) = armed {
-            fork.disarm();
-        }
         log.append(&Record::Outcome { t_ms: now_ms(), id, result })?;
     }
     Ok(())
-}
-
-/// The GC worker's fork, written by the trigger at the mirror rename of the
-/// publication of a GC's change: between that publication's fork check and
-/// GC's hook before its deletes, which must find it. Written once.
-#[derive(Debug)]
-struct ForkDuringGc {
-    trigger: Arc<Trigger>,
-    gc: Arc<Mutex<Option<Uuid>>>,
-    written: Arc<AtomicBool>,
-}
-
-impl ForkDuringGc {
-    fn new(root: &RunRoot, log: Arc<LogWriter>) -> Self {
-        let gc = Arc::new(Mutex::new(None));
-        let written = Arc::new(AtomicBool::new(false));
-        let storage = root.storage();
-        let trigger = {
-            let (gc, written) = (Arc::clone(&gc), Arc::clone(&written));
-            Trigger::new(Point::MirrorRenamed, move || {
-                let fork = announce_backup(&log)
-                    .map_err(anyhow::Error::from)
-                    .and_then(|backup| write_fork(&storage, backup));
-                match fork {
-                    Ok(fork) => {
-                        written.store(true, Ordering::SeqCst);
-                        let id = *gc.lock().unwrap_or_else(PoisonError::into_inner);
-                        log_fork(&log, &fork, id);
-                    }
-                    Err(err) => tracing::warn!("writing a fork during GC: {err:#}"),
-                }
-            })
-        };
-        Self { trigger: Arc::new(trigger), gc, written }
-    }
-
-    /// Arms the trigger for the GC `id`, unless the fork was written.
-    fn arm(&self, id: Uuid) {
-        if !self.written.load(Ordering::SeqCst) {
-            *self.gc.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
-            self.trigger.arm();
-        }
-    }
-
-    fn disarm(&self) {
-        self.trigger.disarm();
-    }
 }
 
 /// Expires the snapshots flushed before `older_than_ms`, keeping every
@@ -864,24 +789,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn classify_maps_refusals_and_durable_forks() {
+    fn classify_maps_refusals() {
         use icechunk::{
             ops::gc::GCError,
             storage::{StorageError, StorageErrorKind},
         };
         let session = |kind| classify(&SessionError::capture(kind));
         let repository = |kind| classify_repository(&RepositoryError::capture(kind));
-        let snapshot = SnapshotId::random();
-        let new_version = || Box::new(icechunk::storage::VersionInfo::for_creation());
         let read_only = || RepositoryErrorKind::ReadonlyRepository("held".to_owned());
-        let durable = || {
-            RepositoryErrorKind::StorageError(
-                StorageErrorKind::RepositoryForkedAfterUpdate {
-                    new_version: new_version(),
-                    detail: "fork".to_owned(),
-                },
-            )
-        };
         let converting =
             || StorageErrorKind::LayoutConversionInProgress("rerun".to_owned());
 
@@ -890,21 +805,8 @@ pub(crate) mod tests {
             session(SessionErrorKind::RepositoryError(read_only())),
             OpResult::ReadOnly { .. }
         ));
-        assert!(matches!(
-            repository(durable()),
-            OpResult::DurableButForked { snapshot: None, .. }
-        ));
-        let commit = session(SessionErrorKind::CommitDurableButRepositoryForked {
-            snapshot: snapshot.clone(),
-            new_version: new_version(),
-            detail: "fork".to_owned(),
-        });
-        assert_eq!(commit.landed(), Some(Some(snapshot.to_string().as_str())));
-        assert!(matches!(commit, OpResult::DurableButForked { .. }));
-        let kinds: [fn() -> StorageErrorKind; 2] = [
-            || StorageErrorKind::RepositoryForked("fork".to_owned()),
-            || StorageErrorKind::LayoutConversionInProgress("rerun".to_owned()),
-        ];
+        let kinds: [fn() -> StorageErrorKind; 1] =
+            [|| StorageErrorKind::LayoutConversionInProgress("rerun".to_owned())];
         for kind in kinds {
             for result in [
                 session(SessionErrorKind::StorageError(kind())),
@@ -913,11 +815,10 @@ pub(crate) mod tests {
                 assert!(
                     matches!(
                         (&result, kind()),
-                        (OpResult::Forked { .. }, StorageErrorKind::RepositoryForked(_))
-                            | (
-                                OpResult::ConversionInProgress { .. },
-                                StorageErrorKind::LayoutConversionInProgress(_)
-                            )
+                        (
+                            OpResult::ConversionInProgress { .. },
+                            StorageErrorKind::LayoutConversionInProgress(_)
+                        )
                     ),
                     "{:?}: {result:?}",
                     kind()

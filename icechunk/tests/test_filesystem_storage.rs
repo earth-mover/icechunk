@@ -23,15 +23,14 @@ use icechunk::{
         repo_info::{RepoAvailability, RepoInfo, RepoStatus, StoredRepoStatus},
         repo_info_file,
         snapshot::ArrayShape,
-        writer_features::{FeatureName, MinVersion, gate_reason},
+        writer_features::{FeatureName, MinVersion},
     },
     new_in_memory_storage, new_local_filesystem_storage,
     ops::{
         GCError,
-        gc::{GCConfig, GCSummary, garbage_collect},
+        gc::{Action, GCConfig, GCSummary, garbage_collect},
     },
     repository::{RepositoryErrorKind, VersionInfo},
-    session::SessionErrorKind,
     storage::{
         ConversionOutcome, FilesystemStorage, GetModifiedResult, PutCondition,
         StorageContext, StorageError, StorageErrorKind, VersionedUpdateResult, WriteHint,
@@ -270,18 +269,15 @@ async fn a_crashed_attempt_blocks_nobody() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// A repository created through `FilesystemStorage` reads through
-/// `local_filesystem_storage` and through an in-memory copy of its files, via
-/// the mirror `repo`. Neither implements `filesystem-layout-v1`, so neither
-/// can modify it.
+/// A repository created through `FilesystemStorage` has no `repo` file:
+/// `local_filesystem_storage` and an in-memory copy of its files can't open
+/// it, and refuse to create one over it.
 #[tokio_test]
-async fn other_backends_read_the_mirror_and_cannot_write() -> Result<(), Box<dyn Error>> {
+async fn other_backends_cant_open() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let repo =
         Repository::create(new_filesystem_storage(dir.path()).await?).execute().await?;
     commit_group(&repo, "/group").await?;
-    FilesystemStorage::new(dir.path())?.publish_mirror().await?;
-    let ancestry = main_ancestry(&repo).await?;
 
     let copy = new_in_memory_storage().await?;
     let settings = copy.default_settings().await?;
@@ -292,20 +288,25 @@ async fn other_backends_read_the_mirror_and_cannot_write() -> Result<(), Box<dyn
     }
 
     for storage in [new_local_filesystem_storage(dir.path()).await?, copy] {
-        let other = Repository::open(storage).execute().await?;
-        assert_eq!(main_ancestry(&other).await?, ancestry);
-        let err = other.writable_session("main").await.err().ok_or("writable")?;
+        assert!(!Repository::exists(Arc::clone(&storage), None).await?);
+        let err = Repository::open(Arc::clone(&storage)).execute().await.err();
         assert!(
             matches!(
-                err.kind,
-                RepositoryErrorKind::StorageError(
-                    StorageErrorKind::MissingWriterFeatures { .. }
-                )
+                err.as_ref().map(|e| &e.kind),
+                Some(RepositoryErrorKind::RepositoryDoesntExist)
             ),
             "{err:?}"
         );
-        assert!(err.to_string().contains("filesystem-layout-v1"), "{err}");
+        let err = Repository::create(storage).execute().await.err();
+        assert!(
+            matches!(
+                err.as_ref().map(|e| &e.kind),
+                Some(RepositoryErrorKind::ParentDirectoryNotClean)
+            ),
+            "{err:?}"
+        );
     }
+    assert!(!dir.path().join("repo").exists());
     Ok(())
 }
 
@@ -395,11 +396,10 @@ fn sorted_files(root: &std::path::Path) -> Result<Files, Box<dyn Error>> {
 }
 
 /// A repository in the object store layout listing a writer feature
-/// `FilesystemStorage` doesn't implement, or with a malformed shape, is
-/// refused before anything is written.
+/// `FilesystemStorage` doesn't implement is refused before anything is
+/// written.
 #[tokio_test]
-async fn conversion_refuses_unimplemented_features_and_malformed_repo_infos()
--> Result<(), Box<dyn Error>> {
+async fn conversion_refuses_unimplemented_features() -> Result<(), Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     Repository::create(new_local_filesystem_storage(dir.path()).await?).execute().await?;
     rewrite_repo(dir.path(), |info| {
@@ -426,35 +426,6 @@ async fn conversion_refuses_unimplemented_features_and_malformed_repo_infos()
         kind => panic!("{kind:?}"),
     }
     assert_eq!(sorted_files(dir.path())?, before);
-
-    let dir = tempfile::tempdir()?;
-    Repository::create(new_local_filesystem_storage(dir.path()).await?).execute().await?;
-    let set_at = Utc::now();
-    // A gate without features.
-    rewrite_repo(dir.path(), |info| {
-        Ok(info.with_raw_header_for_tests(
-            vec![],
-            StoredRepoStatus::for_tests(
-                generated::RepoAvailability::ReadOnly,
-                set_at,
-                None,
-                Some(StoredRepoStatus::for_tests(
-                    generated::RepoAvailability::Online,
-                    set_at,
-                    None,
-                    None,
-                )),
-            ),
-        )?)
-    })?;
-    let before = sorted_files(dir.path())?;
-    let err = FilesystemStorage::new(dir.path())?
-        .convert_to_filesystem_layout()
-        .await
-        .err()
-        .ok_or("converted")?;
-    assert_malformed(&err, &["status.underlying is present without writer features"]);
-    assert_eq!(sorted_files(dir.path())?, before);
     Ok(())
 }
 
@@ -471,11 +442,10 @@ fn assert_malformed(err: &StorageError, defects: &[&str]) {
 
 /// Writers commit between a crash after the conversion's directory rename and
 /// its rerun. That state is the converted repository with the original repo
-/// info back in `$ROOT/repo`, which a writer's publication reports as a fork:
-/// its commit is durable and the original `$ROOT/repo` stays. With one update
-/// per ops-log file, the rerun finds the conversion's backup after one commit
-/// and publishes; after two, it is past the three files the provenance check
-/// reads and the rerun stops.
+/// info still in `$ROOT/repo`, which commits leave alone. With one update per
+/// ops-log file, the rerun finds the conversion's backup after one commit and
+/// unlinks `$ROOT/repo`; after two, it is past the three files the provenance
+/// check reads and the rerun stops.
 #[tokio_test]
 async fn commits_before_the_rerun_of_an_interrupted_conversion()
 -> Result<(), Box<dyn Error>> {
@@ -500,24 +470,19 @@ async fn commits_before_the_rerun_of_an_interrupted_conversion()
         let repo =
             Repository::open(new_filesystem_storage(dir.path()).await?).execute().await?;
         for commit in 0..commits {
-            let snapshot =
-                commit_reporting_a_fork(&repo, &format!("/commit_{commit}")).await?;
+            let snapshot = commit_group(&repo, &format!("/commit_{commit}")).await?;
             assert_eq!(main_ancestry(&reopen(dir.path()).await?).await?[0], snapshot);
-            assert_eq!(std::fs::read(dir.path().join("repo"))?, object_store_info);
+            assert_eq!(root_repo_file(dir.path()), Some(object_store_info.clone()));
         }
-        let (n, h) = repo_version(&repo).await?;
-        let current = std::fs::read(dir.path().join("repo.d").join(format!("{n}.{h}")))?;
 
         let rerun = converter.convert_to_filesystem_layout().await;
         if found {
             assert_eq!(rerun?, ConversionOutcome::Converted);
-            assert_eq!(std::fs::read(dir.path().join("repo"))?, current);
-            assert!(layout_v1::lists_feature(&current)?);
-            let mirror =
-                Repository::open(new_local_filesystem_storage(dir.path()).await?)
-                    .execute()
-                    .await?;
-            assert_eq!(main_ancestry(&mirror).await?, main_ancestry(&repo).await?);
+            assert_eq!(root_repo_file(dir.path()), None);
+            assert_eq!(
+                main_ancestry(&reopen(dir.path()).await?).await?,
+                main_ancestry(&repo).await?
+            );
         } else {
             let err = rerun.err().ok_or("converted")?;
             assert!(
@@ -630,23 +595,6 @@ async fn reopen(root: &std::path::Path) -> Result<Repository, Box<dyn Error>> {
     Ok(Repository::open(new_filesystem_storage(root).await?).execute().await?)
 }
 
-/// A commit that lands and whose publication finds a fork: the commit is
-/// durable, and its error says so with its snapshot id.
-async fn commit_reporting_a_fork(
-    repo: &Repository,
-    path: &str,
-) -> Result<SnapshotId, Box<dyn Error>> {
-    let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::from_trusted(path), Bytes::new()).await?;
-    let err = session.commit("commit").execute().await.err().ok_or("committed")?;
-    match err.kind {
-        SessionErrorKind::CommitDurableButRepositoryForked { snapshot, .. } => {
-            Ok(snapshot)
-        }
-        kind => Err(format!("not a durable commit that found a fork: {kind}").into()),
-    }
-}
-
 /// The bytes of the current version, read from `repo.d`.
 async fn current_bytes(
     repo: &Repository,
@@ -656,8 +604,13 @@ async fn current_bytes(
     Ok(std::fs::read(root.join("repo.d").join(format!("{n}.{h}")))?)
 }
 
-fn mirror(root: &std::path::Path) -> Result<Vec<u8>, Box<dyn Error>> {
-    Ok(std::fs::read(root.join("repo"))?)
+/// `$ROOT/repo`, if it exists.
+fn root_repo_file(root: &std::path::Path) -> Option<Vec<u8>> {
+    match std::fs::read(root.join("repo")) {
+        Ok(bytes) => Some(bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => panic!("reading $ROOT/repo: {err}"),
+    }
 }
 
 async fn gc(repo: &Repository) -> Result<GCSummary, GCError> {
@@ -721,159 +674,6 @@ fn read_only() -> RepoStatus {
         set_at: Utc::now(),
         limited_availability_reason: None,
     }
-}
-
-/// Every change publishes its version as the mirror before returning:
-/// creation, a commit, GC's change and setting the status `ReadOnly`, after
-/// which commits and GC refuse and the mirror stays the `ReadOnly` version.
-#[tokio_test]
-async fn the_mirror_is_the_current_version_after_every_change()
--> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let root = dir.path();
-    let repo = Repository::create(new_filesystem_storage(root).await?).execute().await?;
-    assert_eq!(mirror(root)?, current_bytes(&repo, root).await?);
-    commit_group(&repo, "/a").await?;
-    assert_eq!(mirror(root)?, current_bytes(&repo, root).await?);
-    make_garbage(&repo).await?;
-    let (before_gc, _) = repo_version(&repo).await?;
-    assert!(gc(&repo).await?.snapshots_deleted > 0);
-    let (after_gc, _) = repo_version(&repo).await?;
-    assert!(after_gc > before_gc, "GC's change");
-    assert_eq!(mirror(root)?, current_bytes(&repo, root).await?);
-
-    let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::from_trusted("/b"), Bytes::new()).await?;
-    repo.set_status(&read_only()).await?;
-    let read_only_version = current_bytes(&repo, root).await?;
-    assert_eq!(mirror(root)?, read_only_version);
-    session.commit("refused").execute().await.err().ok_or("committed")?;
-    gc(&repo).await.err().ok_or("collected")?;
-    assert_eq!(current_bytes(&repo, root).await?, read_only_version);
-    assert_eq!(mirror(root)?, read_only_version);
-    Ok(())
-}
-
-/// A fork in `$ROOT/repo`: the next commit lands and reports it, durable with
-/// its snapshot id, and the fork stays. GC's change reports it too and GC
-/// deletes nothing; once the fork is moved aside and the mirror published, GC
-/// deletes.
-#[tokio_test]
-async fn a_fork_makes_commits_durable_errors_and_gc_delete_nothing()
--> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let root = dir.path();
-    let repo = Repository::create(new_filesystem_storage(root).await?).execute().await?;
-    commit_group(&repo, "/a").await?;
-    make_garbage(&repo).await?;
-    let fork = layout_v1::convert(
-        &mirror(root)?,
-        FeatureChange::Remove,
-        "fork",
-        Utc::now(),
-        100,
-    )?;
-    std::fs::write(root.join("repo"), &fork)?;
-
-    let snapshot = commit_reporting_a_fork(&repo, "/b").await?;
-    assert_eq!(main_ancestry(&reopen(root).await?).await?[0], snapshot);
-    assert_eq!(mirror(root)?, fork);
-
-    let before = data_files(root)?;
-    let err = gc(&repo).await.err().ok_or("collected")?;
-    assert!(
-        matches!(
-            &err,
-            GCError::Repository(err)
-                if matches!(
-                    err.kind,
-                    RepositoryErrorKind::StorageError(
-                        StorageErrorKind::RepositoryForkedAfterUpdate { .. }
-                    )
-                )
-        ),
-        "{err:?}"
-    );
-    assert_eq!(data_files(root)?, before);
-    assert_eq!(mirror(root)?, fork);
-
-    std::fs::rename(root.join("repo"), root.join("fork"))?;
-    FilesystemStorage::new(root)?.publish_mirror().await?;
-    assert!(gc(&repo).await?.snapshots_deleted > 0);
-    Ok(())
-}
-
-/// A flush whose publication finds a fork: its detached snapshot is durable,
-/// the error carries its id, and the session is done as after a flush.
-#[tokio_test]
-async fn a_fork_makes_a_flush_a_durable_error_with_its_snapshot()
--> Result<(), Box<dyn Error>> {
-    let dir = tempfile::tempdir()?;
-    let root = dir.path();
-    let repo = Repository::create(new_filesystem_storage(root).await?).execute().await?;
-    let tip = commit_group(&repo, "/a").await?;
-    let fork = layout_v1::convert(
-        &mirror(root)?,
-        FeatureChange::Remove,
-        "fork",
-        Utc::now(),
-        100,
-    )?;
-    std::fs::write(root.join("repo"), &fork)?;
-
-    let mut session = repo.writable_session("main").await?;
-    session.add_group(Path::from_trusted("/b"), Bytes::new()).await?;
-    let err =
-        session.commit("flush").anonymous().execute().await.err().ok_or("flushed")?;
-    let msg = err.kind.to_string();
-    let SessionErrorKind::CommitDurableButRepositoryForked { snapshot, .. } = err.kind
-    else {
-        panic!("not a durable flush that found a fork: {msg}");
-    };
-    assert!(msg.starts_with(&format!("snapshot {snapshot} is durable")), "{msg}");
-    assert_eq!(mirror(root)?, fork);
-
-    let reopened = reopen(root).await?;
-    reopened.asset_manager().fetch_snapshot(&snapshot).await?;
-    let (info, _) = reopened.asset_manager().fetch_repo_info().await?;
-    assert_eq!(info.find_snapshot(&snapshot)?.parent_id, Some(tip.clone()));
-    assert_eq!(reopened.lookup_branch("main").await?, tip);
-
-    assert!(session.read_only());
-    assert_eq!(session.snapshot_id(), &snapshot);
-    assert!(!session.has_uncommitted_changes());
-    let write = session.add_group(Path::from_trusted("/c"), Bytes::new()).await;
-    assert!(
-        matches!(write.err().map(|e| e.kind), Some(SessionErrorKind::ReadOnlySession)),
-        "the session is still writable"
-    );
-    Ok(())
-}
-
-/// A zero-byte `$ROOT/repo` might be a fork being written: a commit lands,
-/// leaves it alone and succeeds; GC refuses before deleting anything.
-#[tokio_test]
-async fn an_unreadable_mirror_is_left_alone_and_refuses_gc() -> Result<(), Box<dyn Error>>
-{
-    let dir = tempfile::tempdir()?;
-    let root = dir.path();
-    let repo = Repository::create(new_filesystem_storage(root).await?).execute().await?;
-    make_garbage(&repo).await?;
-    std::fs::write(root.join("repo"), b"")?;
-
-    let snapshot = commit_group(&repo, "/a").await?;
-    assert_eq!(main_ancestry(&reopen(root).await?).await?[0], snapshot);
-    assert_eq!(mirror(root)?, b"");
-
-    let before = data_files(root)?;
-    let err = gc(&repo).await.err().ok_or("collected")?;
-    assert!(
-        matches!(&err, GCError::StorageError(err) if matches!(err.kind, StorageErrorKind::MirrorUnreadable(_))),
-        "{err:?}"
-    );
-    assert_eq!(data_files(root)?, before);
-    assert_eq!(mirror(root)?, b"");
-    Ok(())
 }
 
 /// A current version without the feature, as an interrupted conversion to the
@@ -985,7 +785,7 @@ async fn conversion_to_the_object_store_layout_keeps_the_repository()
     let outcome = FilesystemStorage::new(root)?.convert_to_object_store_layout().await?;
     assert_eq!(outcome, ConversionOutcome::Converted);
     assert!(!root_names(root)?.iter().any(|name| name.starts_with("repo.d")));
-    let object_store_info = mirror(root)?;
+    let object_store_info = root_repo_file(root).ok_or("no repo file")?;
     let attempt =
         layout_v1::change_info(&object_store_info)?.attempt.ok_or("no attempt")?.id;
     assert_eq!(std::fs::read(root.join("overwritten").join(attempt))?, current);
@@ -1024,19 +824,13 @@ async fn conversion_to_the_object_store_layout_persists_offline_as_read_only()
     let repo = Repository::create(new_filesystem_storage(root).await?).execute().await?;
     let set_at = Utc::now();
     let features = vec![FeatureName::new(layout_v1::FEATURE)];
-    let gate = StoredRepoStatus::for_tests(
-        generated::RepoAvailability::ReadOnly,
+    let status = StoredRepoStatus::for_tests(
+        generated::RepoAvailability::Offline,
         set_at,
-        Some(gate_reason(&features, Some("down"))),
-        Some(StoredRepoStatus::for_tests(
-            generated::RepoAvailability::Offline,
-            set_at,
-            Some("down".to_string()),
-            None,
-        )),
+        Some("down".to_string()),
     );
     let offline = repo_info_file::decode(&current_bytes(&repo, root).await?)?
-        .with_raw_header_for_tests(features, gate)?;
+        .with_raw_header_for_tests(features, status)?;
     let offline = repo_info_file::encode(&offline, SpecVersionBin::current(), 3)?;
     plant_current_version(&repo, root, &offline).await?;
     let read_as = repo_info_file::decode(&offline)?.status()?;
@@ -1044,7 +838,8 @@ async fn conversion_to_the_object_store_layout_persists_offline_as_read_only()
 
     let outcome = FilesystemStorage::new(root)?.convert_to_object_store_layout().await?;
     assert_eq!(outcome, ConversionOutcome::Converted);
-    let object_store_info = repo_info_file::decode(&mirror(root)?)?;
+    let object_store_info =
+        repo_info_file::decode(&root_repo_file(root).ok_or("no repo file")?)?;
     assert_eq!(object_store_info.status()?, read_as);
     assert_eq!(
         object_store_info.raw_status()?,
@@ -1052,7 +847,6 @@ async fn conversion_to_the_object_store_layout_persists_offline_as_read_only()
             generated::RepoAvailability::ReadOnly,
             read_as.set_at,
             read_as.limited_availability_reason.clone(),
-            None,
         )
     );
     assert!(read_as.limited_availability_reason.is_some_and(|reason| {
@@ -1080,7 +874,6 @@ async fn conversion_to_the_object_store_layout_refuses_unimplemented_features()
     )?;
     let bytes = repo_info_file::encode(&with_test_feature, SpecVersionBin::current(), 3)?;
     plant_current_version(&repo, root, &bytes).await?;
-    std::fs::write(root.join("repo"), &bytes)?;
     let before = sorted_files(root)?;
 
     let err = FilesystemStorage::new(root)?
@@ -1108,7 +901,6 @@ async fn conversion_to_the_object_store_layout_refuses_a_malformed_repo_info()
     let root = dir.path();
     let repo = Repository::create(new_filesystem_storage(root).await?).execute().await?;
     let feature = FeatureName::new(layout_v1::FEATURE);
-    // Duplicate features and no gate.
     let malformed = repo_info_file::decode(&current_bytes(&repo, root).await?)?
         .with_raw_header_for_tests(
             vec![feature.clone(), feature],
@@ -1116,12 +908,10 @@ async fn conversion_to_the_object_store_layout_refuses_a_malformed_repo_info()
                 generated::RepoAvailability::Online,
                 Utc::now(),
                 None,
-                None,
             ),
         )?;
     let bytes = repo_info_file::encode(&malformed, SpecVersionBin::current(), 3)?;
     plant_current_version(&repo, root, &bytes).await?;
-    std::fs::write(root.join("repo"), &bytes)?;
     let before = sorted_files(root)?;
 
     let err = FilesystemStorage::new(root)?
@@ -1129,13 +919,7 @@ async fn conversion_to_the_object_store_layout_refuses_a_malformed_repo_info()
         .await
         .err()
         .ok_or("converted")?;
-    assert_malformed(
-        &err,
-        &[
-            "status.underlying is absent with writer features",
-            "writer_features has duplicates",
-        ],
-    );
+    assert_malformed(&err, &["writer_features has duplicates"]);
     assert_eq!(sorted_files(root)?, before);
     Ok(())
 }
@@ -1156,8 +940,7 @@ async fn an_interrupted_conversion_to_the_object_store_layout_refuses_changes_un
     let mut session = repo.writable_session("main").await?;
     session.add_group(Path::from_trusted("/b"), Bytes::new()).await?;
 
-    // The publication can't rename onto `$ROOT/repo`: the conversion stops
-    // after its change.
+    // `$ROOT/repo` can't be written: the conversion stops after its change.
     std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o555))?;
     let interrupted =
         FilesystemStorage::new(root)?.convert_to_object_store_layout().await;
@@ -1188,5 +971,109 @@ async fn an_interrupted_conversion_to_the_object_store_layout_refuses_changes_un
         Repository::open(new_local_filesystem_storage(root).await?).execute().await?;
     assert_eq!(main_ancestry(&local).await?[0], first);
     commit_group(&local, "/d").await?;
+    Ok(())
+}
+
+/// GC on a repository whose conversion to the object store layout stopped
+/// after its change is refused as a conversion in progress before deleting
+/// anything: GC that drops snapshots, and GC that keeps them and so makes no
+/// change. Once the rerun finishes, GC in the object store layout deletes that
+/// garbage.
+#[tokio_test]
+async fn gc_during_an_interrupted_conversion_to_the_object_store_layout_is_refused()
+-> Result<(), Box<dyn Error>> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir()?;
+    let root = dir.path();
+    let repo = Repository::create(new_filesystem_storage(root).await?).execute().await?;
+    commit_group(&repo, "/a").await?;
+    make_garbage_with_chunks(&repo).await?;
+
+    // `$ROOT/repo` can't be written: the conversion stops after its change.
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o555))?;
+    let interrupted =
+        FilesystemStorage::new(root)?.convert_to_object_store_layout().await;
+    std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o755))?;
+    // Root writes anyway: nothing to test.
+    if interrupted.is_ok() {
+        return Ok(());
+    }
+    let snapshots_and_chunks = |root| -> Result<BTreeSet<String>, Box<dyn Error>> {
+        Ok(data_files(root)?
+            .into_iter()
+            .filter(|key| key.starts_with("snapshots/") || key.starts_with("chunks/"))
+            .collect())
+    };
+    let before = snapshots_and_chunks(root)?;
+
+    let now = Utc::now();
+    let chunks_only = GCConfig::new(
+        HashSet::new(),
+        Action::DeleteIfCreatedBefore(now),
+        Action::Keep,
+        Action::Keep,
+        Action::Keep,
+        Action::Keep,
+        Action::Keep,
+        NonZeroU16::new(50).unwrap(),
+        NonZeroUsize::new(512 * 1024 * 1024).unwrap(),
+        NonZeroUsize::new(4 * 1024 * 1024 * 1024).unwrap(),
+        NonZeroU16::new(500).unwrap(),
+        NonZeroU16::new(10).unwrap(),
+        NonZeroU16::new(50).unwrap(),
+        None,
+        false,
+    );
+    let repo = reopen(root).await?;
+    for config in [clean_all(false), chunks_only] {
+        let err = garbage_collect(Arc::clone(repo.asset_manager()), &config, None, 100)
+            .await
+            .err()
+            .ok_or("collected")?;
+        assert!(
+            matches!(
+                &err,
+                GCError::Repository(e) if matches!(
+                    e.kind,
+                    RepositoryErrorKind::StorageError(
+                        StorageErrorKind::LayoutConversionInProgress(_)
+                    )
+                )
+            ),
+            "{err}"
+        );
+        assert_eq!(snapshots_and_chunks(root)?, before);
+    }
+
+    let outcome = FilesystemStorage::new(root)?.convert_to_object_store_layout().await?;
+    assert_eq!(outcome, ConversionOutcome::Converted);
+    let local =
+        Repository::open(new_local_filesystem_storage(root).await?).execute().await?;
+    let summary = gc(&local).await?;
+    assert_eq!((summary.snapshots_deleted, summary.chunks_deleted), (1, 2));
+    Ok(())
+}
+
+/// Two chunk objects as garbage: one in a snapshot that only a deleted branch
+/// reached, one written by a session that never committed.
+async fn make_garbage_with_chunks(repo: &Repository) -> Result<(), Box<dyn Error>> {
+    let tip = repo.lookup_branch("main").await?;
+    repo.create_branch("garbage", &tip).await?;
+    let mut session = repo.writable_session("garbage").await?;
+    let array = Path::from_trusted("/garbage");
+    let shape = ArrayShape::new(vec![(1, 1)]).ok_or("invalid shape")?;
+    session.add_array(array.clone(), shape, None, Bytes::new()).await?;
+    let index = ChunkIndices(vec![0]);
+    // above the inline threshold, so each chunk is its own object
+    let write_chunk = |session: &icechunk::session::Session| {
+        session
+            .get_chunk_writer(&array, &index)
+            .map(|writer| writer(Bytes::from(vec![1; 1024])))
+    };
+    let chunk = write_chunk(&session)?.await?;
+    session.set_chunk_ref(array.clone(), index.clone(), Some(chunk)).await?;
+    write_chunk(&session)?.await?;
+    session.commit("garbage").execute().await?;
+    repo.delete_branch("garbage").await?;
     Ok(())
 }

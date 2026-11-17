@@ -85,12 +85,6 @@ usage examples.
 
 ::: icechunk.StorageError
 
-::: icechunk.RepositoryForkedError
-
-::: icechunk.UpdateDurableButRepositoryForkedError
-
-::: icechunk.CommitDurableButRepositoryForkedError
-
 ::: icechunk.FormatError
 
 ::: icechunk.InternalError

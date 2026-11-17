@@ -1,5 +1,5 @@
-//! A change: stage the bytes, link them as the next version, rename the
-//! marker from the base to it, then publish the mirror. See "Change" in
+//! A change: stage the bytes, link them as the next version, then rename the
+//! marker from the base to it. See "Change" in
 //! design-docs/020-filesystem-storage.md.
 
 use std::{fs, io, path::Path};
@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     hooks::{Observed, Point, Sabotage},
-    names::{Hash, Marker, REPO, RepoDName, Version, stage_name},
+    names::{Hash, Marker, RepoDName, Version, stage_name},
     nudge::nudge,
     path::key_path,
     storage::is_missing,
@@ -30,39 +30,22 @@ pub(crate) enum UpdateOutcome {
     NotOnLatestVersion,
 }
 
-/// What an attempt of a change did, before its publication.
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct Attempted {
-    pub(crate) outcome: UpdateOutcome,
-    /// The current version the lost-reply check read, if it ran.
-    pub(crate) read: Option<Version>,
-}
-
-impl From<UpdateOutcome> for Attempted {
-    fn from(outcome: UpdateOutcome) -> Self {
-        Self { outcome, read: None }
-    }
-}
-
-/// What the lost-reply check proved about the attempt, with the current
-/// version it read, if any.
+/// What the lost-reply check proved about the attempt.
 enum Checked {
-    /// An ops log names the attempt.
+    /// An ops log names the attempt; the current version it read.
     Landed(Version),
     /// A version above the base has an ops log that provably omits it.
-    Lost(Version),
+    Lost,
     /// Neither: whether it landed is unknown.
-    Unknown(Option<Version>),
+    Unknown,
 }
 
 impl Checked {
-    fn attempted(self, new: Version) -> Attempted {
-        let (outcome, read) = match self {
-            Self::Landed(read) => (UpdateOutcome::Updated(new), Some(read)),
-            Self::Lost(read) => (UpdateOutcome::NotOnLatestVersion, Some(read)),
-            Self::Unknown(read) => (UpdateOutcome::NotOnLatestVersion, read),
-        };
-        Attempted { outcome, read }
+    fn outcome(self, new: Version) -> UpdateOutcome {
+        match self {
+            Self::Landed(_) => UpdateOutcome::Updated(new),
+            Self::Lost | Self::Unknown => UpdateOutcome::NotOnLatestVersion,
+        }
     }
 }
 
@@ -117,71 +100,23 @@ impl ChangeBytes {
 }
 
 impl RepoD<'_> {
-    /// Changes version `base` to `change`, if `base` is current, then
-    /// publishes the new version as the mirror before returning. A change
-    /// that landed returns `Updated` whatever its publication did, logging
-    /// what went wrong, except when the publication found a fork:
-    /// [`ProtocolError::ForkedAfterUpdate`].
+    /// Steps 2 to 4 of a change: changes version `base` to `change`, if
+    /// `base` is current. The fsyncs here always run: a marker naming
+    /// truncated bytes is the one state nothing recovers from. The conversion
+    /// to the object store layout is the only caller that writes bytes
+    /// without the feature.
     pub(crate) fn change(
         &self,
         change: &ChangeBytes,
         base: &Version,
     ) -> Result<UpdateOutcome, ProtocolError> {
-        let Attempted { outcome, read } = self.attempt_change(change, base)?;
-        let UpdateOutcome::Updated(new) = outcome else {
-            return Ok(outcome);
-        };
-        if self.hooks.sabotaged(Sabotage::CommitWithoutPublish) {
-            return Ok(UpdateOutcome::Updated(new));
-        }
-        let known: Vec<Hash> =
-            [base, &new].into_iter().chain(&read).map(|v| v.hash().clone()).collect();
-        let mirror = self.root.join(REPO);
-        let failed = match self.publish(&new, Some(&change.bytes), &known) {
-            Ok(_) => None,
-            Err(ProtocolError::Forked(detail)) => {
-                return Err(ProtocolError::ForkedAfterUpdate {
-                    detail: format!("{detail}; nothing was published"),
-                    new,
-                });
-            }
-            Err(ProtocolError::MirrorUnreadable(_)) => Some(
-                "it couldn't be read or decoded, so a fork (a repo file overwritten bypassing \
-                 repo.d) can't be ruled out"
-                    .to_string(),
-            ),
-            Err(err) => Some(format!("{err:?}")),
-        };
-        if let Some(why) = failed {
-            tracing::error!(
-                root = %self.root.display(),
-                version = new.file_name(),
-                "The change landed as version {} but publishing the mirror {} failed: \
-                 {why}. The next change or GC publishes it; \
-                 FilesystemStorage::publish_mirror() repairs it",
-                new.file_name(),
-                mirror.display(),
-            );
-        }
-        Ok(UpdateOutcome::Updated(new))
-    }
-
-    /// Steps 2 to 4 of a change, without the publication. The fsyncs here
-    /// always run: a marker naming truncated bytes is the one state nothing
-    /// recovers from. The conversion to the object store layout calls it directly:
-    /// it is the only caller that writes bytes without the feature.
-    pub(super) fn attempt_change(
-        &self,
-        change: &ChangeBytes,
-        base: &Version,
-    ) -> Result<Attempted, ProtocolError> {
         let new_bytes = &change.bytes;
         let new = base.next(Hash::of(new_bytes))?;
         let dir = self.dir();
         let stage = dir.join(stage_name(Uuid::new_v4()));
         match write_fresh(&stage, new_bytes, true) {
             Err(err) if is_missing(&err) => {
-                return Ok(UpdateOutcome::NotOnLatestVersion.into());
+                return Ok(UpdateOutcome::NotOnLatestVersion);
             }
             written => written?,
         }
@@ -199,7 +134,7 @@ impl RepoD<'_> {
                 }
                 // The staging file was swept, or `repo.d` is gone.
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                    return Ok(UpdateOutcome::NotOnLatestVersion.into());
+                    return Ok(UpdateOutcome::NotOnLatestVersion);
                 }
                 Err(err) => {
                     remove_stage(&stage);
@@ -233,11 +168,11 @@ impl RepoD<'_> {
                 fsync_dir(&dir)?;
                 self.hooks.at(Point::BeforeTidyUp);
                 self.tidy_up(&new, base);
-                Ok(UpdateOutcome::Updated(new).into())
+                Ok(UpdateOutcome::Updated(new))
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound => {
                 if self.hooks.sabotaged(Sabotage::TrustRenameEnoent) {
-                    return Ok(UpdateOutcome::Updated(new).into());
+                    return Ok(UpdateOutcome::Updated(new));
                 }
                 self.after_failed_rename(change.attempt.as_ref(), base, new)
             }
@@ -246,8 +181,7 @@ impl RepoD<'_> {
         }
     }
 
-    /// [`RepoD::attempt_change`]'s outcome, for tests of the protocol that
-    /// don't involve the mirror.
+    /// [`RepoD::change`] without the check of step 1, for tests.
     #[cfg(test)]
     pub(crate) fn conditional_update(
         &self,
@@ -256,7 +190,7 @@ impl RepoD<'_> {
     ) -> Result<UpdateOutcome, ProtocolError> {
         let change = ChangeBytes::unchecked(Bytes::copy_from_slice(new_bytes))
             .map_err(|err| ProtocolError::Other(err.to_string()))?;
-        Ok(self.attempt_change(&change, base)?.outcome)
+        self.change(&change, base)
     }
 
     /// The marker was not at our base, or our rename landed and its reply
@@ -269,7 +203,7 @@ impl RepoD<'_> {
         attempt: Option<&Attempt>,
         base: &Version,
         new: Version,
-    ) -> Result<Attempted, ProtocolError> {
+    ) -> Result<UpdateOutcome, ProtocolError> {
         let dir = self.dir();
         let ack_unproven = || self.hooks.sabotaged(Sabotage::AckUnproven);
         match self.marker_past(base)? {
@@ -277,7 +211,7 @@ impl RepoD<'_> {
                 self.hooks.observed(Observed::RenameLanded);
                 fsync_dir(&dir)?;
                 self.tidy_up(&new, base);
-                Ok(UpdateOutcome::Updated(new).into())
+                Ok(UpdateOutcome::Updated(new))
             }
             // Lost the race for `N+1`.
             Some(marker) if marker.version.n() == new.n() => {
@@ -289,7 +223,7 @@ impl RepoD<'_> {
                 };
                 self.unlink_version(dead);
                 self.discard_backup(attempt);
-                Ok(UpdateOutcome::NotOnLatestVersion.into())
+                Ok(UpdateOutcome::NotOnLatestVersion)
             }
             // Superseded, whether or not our rename landed: our version file
             // is dead either way.
@@ -298,32 +232,32 @@ impl RepoD<'_> {
                 if ack_unproven()
                     || self.hooks.sabotaged(Sabotage::AckSupersededWithoutProof)
                 {
-                    return Ok(UpdateOutcome::Updated(new).into());
+                    return Ok(UpdateOutcome::Updated(new));
                 }
                 let checked = self.lost_reply_check(attempt, base, &new);
                 self.unlink_version(&new);
                 let checked = checked?;
-                if let Checked::Lost(_) = checked {
+                if let Checked::Lost = checked {
                     self.discard_backup(attempt);
                 }
-                Ok(checked.attempted(new))
+                Ok(checked.outcome(new))
             }
             // Unproven: unless the check reads our version as current, our
             // version file is left to the sweep.
             None => {
                 self.hooks.observed(Observed::RenameUnproven);
                 if ack_unproven() {
-                    return Ok(UpdateOutcome::Updated(new).into());
+                    return Ok(UpdateOutcome::Updated(new));
                 }
                 let checked = self.lost_reply_check(attempt, base, &new)?;
                 if matches!(&checked, Checked::Landed(read) if *read == new) {
                     fsync_dir(&dir)?;
                     self.tidy_up(&new, base);
                 }
-                if let Checked::Lost(_) = checked {
+                if let Checked::Lost = checked {
                     self.discard_backup(attempt);
                 }
-                Ok(checked.attempted(new))
+                Ok(checked.outcome(new))
             }
         }
     }
@@ -399,7 +333,7 @@ impl RepoD<'_> {
             None => (last, false),
         };
         let Some(Current { bytes, version }) = current else {
-            return Ok(Checked::Unknown(None));
+            return Ok(Checked::Unknown);
         };
         let search = if version == *new {
             Search::Named
@@ -413,8 +347,8 @@ impl RepoD<'_> {
         };
         Ok(match search {
             Search::Named => Checked::Landed(version),
-            Search::Absent if fresh => Checked::Lost(version),
-            Search::Absent | Search::Undecided => Checked::Unknown(Some(version)),
+            Search::Absent if fresh => Checked::Lost,
+            Search::Absent | Search::Undecided => Checked::Unknown,
         })
     }
 
@@ -479,7 +413,7 @@ impl RepoD<'_> {
             .into_iter()
             .filter_map(|name| match name {
                 RepoDName::Content(version) => Some(version),
-                RepoDName::Marker(_) | RepoDName::Stage(_) | RepoDName::Mirror(_) => None,
+                RepoDName::Marker(_) | RepoDName::Stage(_) => None,
             })
             .filter(|version| {
                 is_dead(version, new) || (delete_above && version.n() > new.n())
@@ -531,8 +465,6 @@ mod tests {
         fs, io,
         path::{Path, PathBuf},
     };
-
-    use tracing::Level;
 
     use super::{super::testing::*, UpdateOutcome::*, *};
     use crate::hooks::{NoHooks, Point, Sabotage};
@@ -875,8 +807,8 @@ mod tests {
         hooks: &TestHooks,
         bytes: &[u8],
         base: &Version,
-    ) -> Result<Attempted, ProtocolError> {
-        RepoD { root, hooks }.attempt_change(&change_bytes(bytes), base)
+    ) -> Result<UpdateOutcome, ProtocolError> {
+        RepoD { root, hooks }.change(&change_bytes(bytes), base)
     }
 
     /// Commits from `base`, made by other writers without hooks: each one's
@@ -939,7 +871,7 @@ mod tests {
         });
         let attempted = attempt(root.path(), &hooks, &ours, &v0).unwrap();
         let v2 = version(2, &committed_repo_info(&ours, "other.0", 100, PER_FILE));
-        assert_eq!(attempted, Attempted { outcome: Updated(v1), read: Some(v2.clone()) });
+        assert_eq!(attempted, Updated(v1));
         assert_eq!(hooks.observed(), [Observed::RenameSuperseded]);
         assert_eq!(names(&repo_d(root.path())), current(&v2));
         assert!(backup.exists());
@@ -960,8 +892,7 @@ mod tests {
             Err(io::ErrorKind::NotFound.into())
         });
         let attempted = attempt(root.path(), &hooks, &ours, &v0).unwrap();
-        assert_eq!(attempted.outcome, NotOnLatestVersion);
-        assert_eq!(attempted.read.map(|v| v.n()), Some(2));
+        assert_eq!(attempted, NotOnLatestVersion);
         assert_eq!(hooks.observed(), [Observed::RenameSuperseded]);
         // Our version file is dead: deleted.
         assert_eq!(names(&repo_d(root.path())).len(), 2);
@@ -989,7 +920,7 @@ mod tests {
             Err(io::ErrorKind::NotFound.into())
         });
         let attempted = attempt(root.path(), &hooks, &ours, &base).unwrap();
-        assert_eq!(attempted.outcome, NotOnLatestVersion);
+        assert_eq!(attempted, NotOnLatestVersion);
         assert_eq!(hooks.observed(), [Observed::RenameSuperseded]);
         assert!(!backup.exists());
     }
@@ -1017,8 +948,7 @@ mod tests {
             Err(io::ErrorKind::NotFound.into())
         });
         let attempted = attempt(root.path(), &hooks, &ours, &base).unwrap();
-        assert_eq!(attempted.outcome, NotOnLatestVersion);
-        assert_eq!(attempted.read.map(|v| v.n()), Some(base.n() + 2));
+        assert_eq!(attempted, NotOnLatestVersion);
         assert_eq!(hooks.observed(), [Observed::RenameSuperseded]);
         assert!(!backup.exists());
     }
@@ -1037,7 +967,7 @@ mod tests {
                 commit_on_top(root.path(), (&v0, &v0_bytes()), 1, PER_FILE);
             },
         );
-        assert_eq!(result.unwrap().outcome, NotOnLatestVersion);
+        assert_eq!(result.unwrap(), NotOnLatestVersion);
         assert!(!backup.exists());
         assert!(root.path().join("overwritten/other.0").exists());
     }
@@ -1058,7 +988,7 @@ mod tests {
                 commit_on_top(root.path(), (&v0, &v0_bytes()), 1, PER_FILE);
             },
         );
-        assert_eq!(result.unwrap().outcome, NotOnLatestVersion);
+        assert_eq!(result.unwrap(), NotOnLatestVersion);
         assert!(backup.is_dir());
     }
 
@@ -1095,10 +1025,7 @@ mod tests {
             let backup = back_up(root.path(), "ours", &v0_bytes());
             let ours = committed_repo_info(&v0_bytes(), "ours", 1, PER_FILE);
             let attempted = attempt(root.path(), &hooks(root.path(), &v0), &ours, &v0);
-            assert!(
-                !matches!(&attempted, Ok(Attempted { outcome: Updated(_), .. })),
-                "{case}: {attempted:?}"
-            );
+            assert!(!matches!(&attempted, Ok(Updated(_))), "{case}: {attempted:?}");
             assert!(backup.exists(), "{case}");
         }
     }
@@ -1123,7 +1050,7 @@ mod tests {
             });
             let attempted = attempt(root.path(), &hooks, &ours, &v0).unwrap();
             let expected = if landed { Updated(v1) } else { NotOnLatestVersion };
-            assert_eq!(attempted.outcome, expected, "{commits} commits on top");
+            assert_eq!(attempted, expected, "{commits} commits on top");
             assert!(backup.exists(), "{commits} commits on top");
         }
     }
@@ -1157,10 +1084,7 @@ mod tests {
         let v1 = version(1, &ours);
         let hooks = hiding_the_marker(root.path(), latest(&v1));
         let attempted = attempt(root.path(), &hooks, &ours, &v0).unwrap();
-        assert_eq!(
-            attempted,
-            Attempted { outcome: Updated(v1.clone()), read: Some(v1.clone()) }
-        );
+        assert_eq!(attempted, Updated(v1.clone()));
         assert_eq!(hooks.observed(), [Observed::RenameUnproven]);
         // The dead base is gone.
         assert_eq!(names(&repo_d(root.path())), current(&v1));
@@ -1195,10 +1119,7 @@ mod tests {
                 }
             });
         let attempted = attempt(root.path(), &hooks, &ours, &v0).unwrap();
-        assert_eq!(
-            attempted,
-            Attempted { outcome: NotOnLatestVersion, read: Some(theirs) }
-        );
+        assert_eq!(attempted, NotOnLatestVersion);
         assert_eq!(hooks.observed(), [Observed::RenameUnproven]);
         assert!(!backup.exists());
     }
@@ -1214,10 +1135,7 @@ mod tests {
         let ours = committed_repo_info(&v0_bytes(), "ours", 1, PER_FILE);
         let hooks = hiding_the_marker(root.path(), latest(&v0));
         let attempted = attempt(root.path(), &hooks, &ours, &v0).unwrap();
-        assert_eq!(
-            attempted,
-            Attempted { outcome: NotOnLatestVersion, read: Some(v0.clone()) }
-        );
+        assert_eq!(attempted, NotOnLatestVersion);
         assert_eq!(hooks.observed(), [Observed::RenameUnproven]);
         let mut expected = current(&v0);
         expected.insert(version(1, &ours).file_name());
@@ -1243,105 +1161,6 @@ mod tests {
         assert!(matches!(&err, ProtocolError::NoConsistentView(_)), "{err:?}");
     }
 
-    // ── The publication after a change ──────────────────────────────────────
-
-    fn change(
-        root: &Path,
-        hooks: &TestHooks,
-        bytes: &[u8],
-        base: &Version,
-    ) -> Result<UpdateOutcome, ProtocolError> {
-        RepoD { root, hooks }.change(&change_bytes(bytes), base)
-    }
-
-    fn mirror(root: &Path) -> Option<Vec<u8>> {
-        fs::read(root.join(REPO)).ok()
-    }
-
-    #[test]
-    fn a_change_publishes_the_mirror_before_returning() {
-        let root = tempfile::tempdir().unwrap();
-        let v0 = seed(root.path());
-        let hooks = TestHooks::default();
-        let v1 = version(1, &v1_bytes());
-        assert_eq!(change(root.path(), &hooks, &v1_bytes(), &v0).unwrap(), Updated(v1));
-        assert_eq!(mirror(root.path()), Some(v1_bytes()));
-        let mut expected = ALL_POINTS.to_vec();
-        expected.extend([
-            Point::BeforePublish,
-            Point::MirrorStaged,
-            Point::BeforeMirrorRead,
-            Point::BeforeMirrorRename,
-            Point::MirrorRenamed,
-        ]);
-        assert_eq!(hooks.reached(), expected);
-    }
-
-    #[test]
-    fn a_conflict_publishes_nothing() {
-        let root = tempfile::tempdir().unwrap();
-        let v0 = seed(root.path());
-        update_plain(root.path(), &v1_bytes(), &v0);
-        let hooks = TestHooks::default();
-        assert_eq!(
-            change(root.path(), &hooks, &other_bytes(), &v0).unwrap(),
-            NotOnLatestVersion
-        );
-        assert_eq!(mirror(root.path()), None);
-        assert!(!hooks.reached().contains(&Point::BeforePublish));
-    }
-
-    #[test]
-    fn a_fork_found_after_a_change_is_the_durable_error() {
-        let root = tempfile::tempdir().unwrap();
-        let v0 = seed(root.path());
-        let fork = featureless_repo_info(9);
-        fs::write(root.path().join(REPO), &fork).unwrap();
-        let err =
-            change(root.path(), &TestHooks::default(), &v1_bytes(), &v0).unwrap_err();
-        let v1 = version(1, &v1_bytes());
-        assert!(
-            matches!(&err, ProtocolError::ForkedAfterUpdate { new, detail }
-                if *new == v1 && detail.contains("nothing was published")),
-            "{err:?}"
-        );
-        assert_eq!(names(&repo_d(root.path())), current(&v1));
-        assert_eq!(mirror(root.path()), Some(fork));
-    }
-
-    /// An unreadable mirror and an I/O error of the publication: the change
-    /// landed, so it is `Updated`, with the failure logged.
-    #[test]
-    fn a_landed_change_whose_publication_failed_is_updated_and_logged() {
-        let unreadable = (TestHooks::default(), Some(Vec::new()));
-        let failing_rename = (
-            TestHooks::default().rename(|from, to| {
-                if to.ends_with(REPO) {
-                    Err(io::Error::other("mirror rename failed"))
-                } else {
-                    fs::rename(from, to)
-                }
-            }),
-            None,
-        );
-        for (hooks, planted) in [unreadable, failing_rename] {
-            let root = tempfile::tempdir().unwrap();
-            let v0 = seed(root.path());
-            if let Some(planted) = &planted {
-                fs::write(root.path().join(REPO), planted).unwrap();
-            }
-            let (changed, errors) =
-                logged(Level::ERROR, || change(root.path(), &hooks, &v1_bytes(), &v0));
-            let v1 = version(1, &v1_bytes());
-            assert_eq!(changed.unwrap(), Updated(v1.clone()));
-            assert_eq!(mirror(root.path()), planted);
-            let [error] = errors.as_slice() else { panic!("one error: {errors:?}") };
-            assert!(error.contains(&v1.file_name()), "{error}");
-            assert!(error.contains("FilesystemStorage::publish_mirror()"), "{error}");
-            assert_eq!(names(&repo_d(root.path())), current(&v1));
-        }
-    }
-
     #[test]
     fn a_change_refuses_bytes_without_the_feature() {
         let err = check_change_bytes(featureless_repo_info(1).into()).unwrap_err();
@@ -1352,17 +1171,6 @@ mod tests {
     }
 
     // ── Sabotages: each breaks the protocol in its own way ──────────────────
-
-    #[test]
-    fn sabotage_commit_without_publish_leaves_the_mirror_behind() {
-        let root = tempfile::tempdir().unwrap();
-        let v0 = seed(root.path());
-        fs::write(root.path().join(REPO), v0_bytes()).unwrap();
-        let hooks = TestHooks::default().sabotage(Sabotage::CommitWithoutPublish);
-        let v1 = version(1, &v1_bytes());
-        assert_eq!(change(root.path(), &hooks, &v1_bytes(), &v0).unwrap(), Updated(v1));
-        assert_eq!(mirror(root.path()), Some(v0_bytes()));
-    }
 
     /// The acknowledged attempt is in no ops log: a change that didn't land.
     #[test]
@@ -1379,7 +1187,7 @@ mod tests {
             })
             .sabotage(Sabotage::AckSupersededWithoutProof);
         let attempted = attempt(root.path(), &hooks, &ours, &v0).unwrap();
-        assert_eq!(attempted.outcome, Updated(version(1, &ours)));
+        assert_eq!(attempted, Updated(version(1, &ours)));
         let current =
             RepoD { root: root.path(), hooks: &NoHooks }.read_latest().unwrap().unwrap();
         let named = layout_v1::backup_paths(&current.bytes).unwrap();

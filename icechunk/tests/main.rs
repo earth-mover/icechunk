@@ -16,8 +16,6 @@ mod test_filesystem_storage;
 mod test_flaky_connections;
 mod test_gc;
 mod test_key_layout;
-#[cfg(feature = "object-store-fs")]
-mod test_local_filesystem_guard;
 #[cfg(feature = "shuttle")]
 mod test_shuttle;
 mod test_stats;

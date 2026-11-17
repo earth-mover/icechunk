@@ -27,10 +27,9 @@ Commands:
                       the run root if it passed, keep it otherwise
   matrix [--modes "MODE..."] [NET...] MOUNT... [-- ARGS...]
                       `run` for each MOUNT and mode (default modes: storage
-                      repository), one at a time, then a table; with the
-                      mirror sampler on (--mirror-sample-every 25ms) and, in
-                      repository mode, the status toggler (--readonly-every
-                      10s), unless ARGS say otherwise
+                      repository), one at a time, then a table; in
+                      repository mode with the status toggler
+                      (--readonly-every 10s), unless ARGS say otherwise
   selftest MOUNT [ARGS...]
                       `fs-stress selftest` on the first host
   net-clean [--net-host N]
@@ -392,7 +391,7 @@ cmd_matrix() {
     for mode in "${modes[@]}"; do
       echo "=== $mount $mode" >&2
       # Before ARGS: fs-stress takes the last of a repeated flag.
-      local observers=(--mirror-sample-every 25ms)
+      local observers=()
       if [ "$mode" = repository ]; then
         observers+=(--readonly-every 10s)
       fi

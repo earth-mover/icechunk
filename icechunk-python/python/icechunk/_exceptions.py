@@ -26,26 +26,17 @@ The tree::
     ├── InvalidInputError             (also a ValueError)
     ├── SessionStateError
     ├── StorageError
-    ├── RepositoryForkedError
-    │   └── UpdateDurableButRepositoryForkedError
-    │       └── CommitDurableButRepositoryForkedError
     ├── FormatError
     └── InternalError
 """
 
 from enum import StrEnum
 
-from icechunk._icechunk_python import (
-    CommitDurableButRepositoryForkedError,
-    IcechunkError,
-    RepositoryForkedError,
-    UpdateDurableButRepositoryForkedError,
-)
+from icechunk._icechunk_python import IcechunkError
 
 # the Rust classifier looks every raised class up in this module
 __all__ = [
     "AlreadyExistsError",
-    "CommitDurableButRepositoryForkedError",
     "ErrorKind",
     "FormatError",
     "IcechunkError",
@@ -55,12 +46,10 @@ __all__ = [
     "NotFoundError",
     "ReadOnlyError",
     "RefNotFoundError",
-    "RepositoryForkedError",
     "RepositoryNotFoundError",
     "SessionStateError",
     "SnapshotNotFoundError",
     "StorageError",
-    "UpdateDurableButRepositoryForkedError",
 ]
 
 
@@ -157,10 +146,6 @@ class ErrorKind(StrEnum):
     TAG_ERROR = "tag-error"
     INVALID_REPOSITORY_MIGRATION = "invalid-repository-migration"
     LAYOUT_CONVERSION_IN_PROGRESS = "layout-conversion-in-progress"
-    # forks
-    REPOSITORY_FORKED = "repository-forked"
-    UPDATE_DURABLE_BUT_REPOSITORY_FORKED = "update-durable-but-repository-forked"
-    COMMIT_DURABLE_BUT_REPOSITORY_FORKED = "commit-durable-but-repository-forked"
     # storage / environment
     OBJECT_NOT_FOUND = "object-not-found"
     OBJECT_STORE = "object-store"
@@ -174,7 +159,6 @@ class ErrorKind(StrEnum):
     VIRTUAL_CHUNK_FETCH = "virtual-chunk-fetch"
     VIRTUAL_CHUNK_MODIFIED = "virtual-chunk-modified"
     INVALID_OBJECT_SIZE = "invalid-object-size"
-    MIRROR_UNREADABLE = "mirror-unreadable"
     # format
     SERIALIZATION = "serialization"
     DESERIALIZATION = "deserialization"

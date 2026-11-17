@@ -54,7 +54,7 @@ use crate::{
             self, FileHeader, FileTypeBin, SpecVersionBin, parse_file_header,
         },
         manifest::Manifest,
-        repo_info::{RepoInfo, WritableShapeMode},
+        repo_info::RepoInfo,
         repo_info_file,
         serializers::{
             deserialize_manifest, deserialize_snapshot, deserialize_transaction_log,
@@ -736,11 +736,6 @@ impl AssetManager {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn cached_repo_info(&self) -> Option<(Arc<RepoInfo>, VersionInfo)> {
-        self.repo_cache.read().ok()?.clone()
-    }
-
     pub fn fail_unless_spec_at_least(
         &self,
         minimum_spec_version: SpecVersionBin,
@@ -992,8 +987,7 @@ impl AssetManager {
     }
 
     /// For changes of the status alone: skips the check that the status is
-    /// `Online`, and accepts a malformed shape (the change writes a well-formed
-    /// status). The writer-feature checks still apply.
+    /// `Online`. The writer-feature and shape checks still apply.
     ///
     /// # Safety
     ///
@@ -1104,24 +1098,7 @@ impl AssetManager {
                     tokio::time::sleep(delay).await;
                     attempts += 1;
                 }
-                Err(err) => {
-                    // A change that landed though its storage found a fork:
-                    // cache it, and never retry it.
-                    if let RepositoryErrorKind::StorageError(
-                        StorageErrorKind::RepositoryForkedAfterUpdate {
-                            new_version, ..
-                        },
-                    ) = &err.kind
-                        && self.use_repo_info_cache
-                    {
-                        *self
-                            .repo_cache
-                            .write()
-                            .map_err(|_| RepositoryErrorKind::PoisonLock)
-                            .capture()? = Some((new_repo, (**new_version).clone()));
-                    }
-                    return Err(err);
-                }
+                Err(err) => return Err(err),
             }
         }
     }
@@ -1925,11 +1902,7 @@ pub fn check_modifiable(
         )));
     }
 
-    let shape_mode = match modification {
-        Modification::Any => WritableShapeMode::AnyChange,
-        Modification::StatusOnly => WritableShapeMode::StatusOnlyChange,
-    };
-    repo_info.check_writable_shape(shape_mode).inject()?;
+    repo_info.check_writable_shape().inject()?;
 
     if modification == Modification::Any {
         let status = repo_info.status().inject()?;

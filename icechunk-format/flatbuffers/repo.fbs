@@ -59,12 +59,6 @@ table RepoStatus {
     // Non-leap microseconds since Jan 1, 1970 UTC.
     set_at: uint64;
     limited_availability_reason: string;
-
-    // Spec 2.2. The repository's own status, present exactly when
-    // Repo.writer_features is non-empty, and never with an underlying
-    // of its own. The enclosing status is then the read-only gate shown
-    // to implementations that predate writer features.
-    underlying: RepoStatus;
 }
 // --8<-- [end:repo_status]
 
@@ -189,8 +183,7 @@ table Repo {
   // MUST be sorted in ascending byte order of SnapshotInfo.id.
   snapshots: [SnapshotInfo] (required);
 
-  // The repository status, or the status gate when writer_features is
-  // non-empty.
+  // The repository status.
   status: RepoStatus (required);
 
   // Repository-level metadata (user attributes).

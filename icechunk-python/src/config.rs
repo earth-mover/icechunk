@@ -3049,24 +3049,6 @@ impl PyFilesystemStorage {
             converted(filesystem.convert_to_object_store_layout().await)
         })
     }
-
-    fn publish_mirror(&self, py: Python<'_>) -> PyResult<PyPublishOutcome> {
-        let filesystem = Arc::clone(&self.filesystem);
-        py.detach(move || {
-            pyo3_async_runtimes::tokio::get_runtime()
-                .block_on(async move { published(filesystem.publish_mirror().await) })
-        })
-    }
-
-    fn publish_mirror_async<'py>(
-        &self,
-        py: Python<'py>,
-    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
-        let filesystem = Arc::clone(&self.filesystem);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            published(filesystem.publish_mirror().await)
-        })
-    }
 }
 
 /// Whether the call converted the repository.
@@ -3076,62 +3058,6 @@ fn converted(
 ) -> PyResult<bool> {
     let outcome = outcome.map_err(PyIcechunkStoreError::StorageError)?;
     Ok(matches!(outcome, storage::ConversionOutcome::Converted))
-}
-
-#[cfg(unix)]
-fn published(
-    outcome: storage::StorageResult<storage::PublishOutcome>,
-) -> PyResult<PyPublishOutcome> {
-    let outcome = outcome.map_err(PyIcechunkStoreError::StorageError)?;
-    Ok(match outcome {
-        storage::PublishOutcome::Current => {
-            PyPublishOutcome { current: true, left: None }
-        }
-        storage::PublishOutcome::GaveUp { left } => PyPublishOutcome {
-            current: false,
-            left: left.as_ref().and_then(version_name),
-        },
-    })
-}
-
-/// A version of `repo.d` by its file name, `<N>.<h>`.
-#[cfg(unix)]
-fn version_name(version: &storage::VersionInfo) -> Option<String> {
-    let storage::Generation(n) = version.generation.as_ref()?;
-    Some(format!("{n}.{}", version.etag()?))
-}
-
-/// What `FilesystemStorage.publish_mirror` did.
-#[pyclass(name = "PublishOutcome", frozen, eq)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PyPublishOutcome {
-    #[pyo3(get)]
-    current: bool,
-    #[pyo3(get)]
-    left: Option<String>,
-}
-
-impl PyRepr for PyPublishOutcome {
-    const EXECUTABLE: bool = false;
-    fn cls_name() -> &'static str {
-        "icechunk.storage.PublishOutcome"
-    }
-    fn fields(&self, _mode: ReprMode) -> Vec<(&str, String)> {
-        vec![("current", py_bool(self.current)), ("left", py_option_str(&self.left))]
-    }
-}
-
-#[pymethods]
-impl PyPublishOutcome {
-    fn __repr__(&self) -> String {
-        <Self as PyRepr>::__repr__(self)
-    }
-    fn __str__(&self) -> String {
-        <Self as PyRepr>::__str__(self)
-    }
-    fn _repr_html_(&self) -> String {
-        <Self as PyRepr>::_repr_html_(self)
-    }
 }
 
 /// Effective `(read, write)` extra-header vecs.

@@ -4793,7 +4793,6 @@ pub mod generated {
         pub const VT_AVAILABILITY: ::flatbuffers::VOffsetT = 4;
         pub const VT_SET_AT: ::flatbuffers::VOffsetT = 6;
         pub const VT_LIMITED_AVAILABILITY_REASON: ::flatbuffers::VOffsetT = 8;
-        pub const VT_UNDERLYING: ::flatbuffers::VOffsetT = 10;
 
         #[inline]
         pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -4811,9 +4810,6 @@ pub mod generated {
         ) -> ::flatbuffers::WIPOffset<RepoStatus<'bldr>> {
             let mut builder = RepoStatusBuilder::new(_fbb);
             builder.add_set_at(args.set_at);
-            if let Some(x) = args.underlying {
-                builder.add_underlying(x);
-            }
             if let Some(x) = args.limited_availability_reason {
                 builder.add_limited_availability_reason(x);
             }
@@ -4854,18 +4850,6 @@ pub mod generated {
                 )
             }
         }
-        #[inline]
-        pub fn underlying(&self) -> Option<RepoStatus<'a>> {
-            // Safety:
-            // Created from valid Table for this object
-            // which contains a valid value in this slot
-            unsafe {
-                self._tab.get::<::flatbuffers::ForwardsUOffset<RepoStatus>>(
-                    RepoStatus::VT_UNDERLYING,
-                    None,
-                )
-            }
-        }
     }
 
     impl ::flatbuffers::Verifiable for RepoStatus<'_> {
@@ -4886,11 +4870,6 @@ pub mod generated {
                     Self::VT_LIMITED_AVAILABILITY_REASON,
                     false,
                 )?
-                .visit_field::<::flatbuffers::ForwardsUOffset<RepoStatus>>(
-                    "underlying",
-                    Self::VT_UNDERLYING,
-                    false,
-                )?
                 .finish();
             Ok(())
         }
@@ -4899,7 +4878,6 @@ pub mod generated {
         pub availability: RepoAvailability,
         pub set_at: u64,
         pub limited_availability_reason: Option<::flatbuffers::WIPOffset<&'a str>>,
-        pub underlying: Option<::flatbuffers::WIPOffset<RepoStatus<'a>>>,
     }
     impl<'a> Default for RepoStatusArgs<'a> {
         #[inline]
@@ -4908,7 +4886,6 @@ pub mod generated {
                 availability: RepoAvailability::Online,
                 set_at: 0,
                 limited_availability_reason: None,
-                underlying: None,
             }
         }
     }
@@ -4941,16 +4918,6 @@ pub mod generated {
             );
         }
         #[inline]
-        pub fn add_underlying(
-            &mut self,
-            underlying: ::flatbuffers::WIPOffset<RepoStatus<'b>>,
-        ) {
-            self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<RepoStatus>>(
-                RepoStatus::VT_UNDERLYING,
-                underlying,
-            );
-        }
-        #[inline]
         pub fn new(
             _fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
         ) -> RepoStatusBuilder<'a, 'b, A> {
@@ -4970,7 +4937,6 @@ pub mod generated {
             ds.field("availability", &self.availability());
             ds.field("set_at", &self.set_at());
             ds.field("limited_availability_reason", &self.limited_availability_reason());
-            ds.field("underlying", &self.underlying());
             ds.finish()
         }
     }

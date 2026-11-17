@@ -7,7 +7,6 @@ from icechunk._icechunk_python import (
     FilesystemStorage,
     GcsBearerCredential,
     ObjectStoreConfig,
-    PublishOutcome,
     S3Options,
     S3StaticCredentials,
     Storage,
@@ -28,7 +27,6 @@ __all__ = [
     "ChunkType",
     "FilesystemStorage",
     "ObjectStoreConfig",
-    "PublishOutcome",
     "S3Options",
     "Storage",
     "StorageConcurrencySettings",
@@ -93,22 +91,15 @@ def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
     rename.
 
     It stores the repository info in the filesystem layout: `repo.d/` holds
-    its versions, and `repo` is the mirror, a copy of a version that was
-    current, published by every change. The repository lists the writer
-    feature `filesystem-layout-v1`, so other storage backends and Icechunk
-    before 2.4.0 read it through the mirror and can't modify it. The mirror
-    can lag after crashes or under contention: setting the status to
-    `RepoAvailability.read_only` makes it current once every process that
-    changed the repository earlier has finished, and
-    `FilesystemStorage.publish_mirror` repairs it on a best-effort basis.
+    its versions, and the root has no `repo` object. The repository lists the
+    writer feature `filesystem-layout-v1`. Other storage backends and Icechunk
+    before 2.4.0 can't open it: to use it with them, convert it to
+    the object store layout with
+    `FilesystemStorage.convert_to_object_store_layout`, in place or on a copy.
     Everything else is the same as in `local_filesystem_storage`.
 
-    Never let anything else write `repo`: Icechunk before 2.4.0 changing the
-    status, or other tools, fork the repository.
-
-    Repositories in the object store layout are refused until converted, with
+    Repositories in the object store layout are refused until converted with
     `FilesystemStorage.convert_to_filesystem_layout`.
-    `FilesystemStorage.convert_to_object_store_layout` converts back.
 
     It is only available on Unix platforms; elsewhere it raises an error.
     Icechunk 1 repositories are refused: migrate them to Icechunk 2 with
@@ -122,8 +113,8 @@ def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
         Whether to fsync data files after writes, and their directories before
         each change. Turning it off risks losing writes after an OS crash or
         power loss; it never affects safety between concurrent writers. The
-        fsyncs of the change itself always run: those of the repository info,
-        its mirror and a conversion's backup.
+        fsyncs of the change itself always run: those of the repository info
+        and a conversion's backup.
     """
     return Storage.new_filesystem(path, fsync=fsync)
 

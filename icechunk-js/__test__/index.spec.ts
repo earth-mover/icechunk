@@ -1,7 +1,7 @@
 import test from 'ava'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { cp, mkdtemp, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -482,67 +482,6 @@ nativeUnixOnly('filesystem storage converts between the object store and filesys
   }
 })
 
-// The version file the marker of repo.d names.
-async function currentVersion(dir: string): Promise<string> {
-  const [marker] = (await readdir(join(dir, 'repo.d'))).filter((name) => name.startsWith('latest.'))
-  const [, , n, h] = marker.split('.')
-  return join(dir, 'repo.d', `${n}.${h}`)
-}
-
-nativeUnixOnly('filesystem storage publishes a missing mirror', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
-  try {
-    const storage = await Storage.newFilesystem(dir)
-    await Repository.create(storage)
-    await unlink(join(dir, 'repo'))
-    const outcome = await storage.publishMirror()
-    assert.equal(outcome.current, true)
-    assert.equal(outcome.left ?? null, null)
-    assert.deepEqual(await readFile(join(dir, 'repo')), await readFile(await currentVersion(dir)))
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-
-  t.pass()
-})
-
-nativeUnixOnly('filesystem storage reports forks, unreadable mirrors and durable commits', async (t) => {
-  const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
-  try {
-    const root = join(dir, 'root')
-    const other = join(dir, 'other')
-    const storage = await Storage.newFilesystem(root)
-    const repo = await Repository.create(storage)
-
-    await writeFile(join(root, 'repo'), 'not a repo info')
-    await t.throwsAsync(
-      async () => { await storage.publishMirror() },
-      { message: /couldn't be read or decoded/ },
-    )
-
-    await Repository.create(await Storage.newLocalFilesystem(other))
-    await writeFile(join(root, 'repo'), await readFile(join(other, 'repo')))
-    await t.throwsAsync(
-      async () => { await storage.publishMirror() },
-      { message: /repository forked/ },
-    )
-
-    const session = await repo.writableSession('main')
-    await session.store.set('zarr.json', new TextEncoder().encode(JSON.stringify({
-      zarr_format: 3,
-      node_type: 'group',
-    })))
-    const err = await t.throwsAsync(async () => { await session.commit('lands, then finds the fork') })
-    assert(err)
-    const snapshot = await repo.lookupBranch('main')
-    assert.match(err.message, new RegExp(`snapshot ${snapshot} is durable`))
-    assert.match(err.message, /must not be retried/)
-    assert.match(err.message, /repository is forked/)
-  } finally {
-    await rm(dir, { recursive: true, force: true })
-  }
-})
-
 nativeUnixOnly('filesystem storage refuses writes during an interrupted conversion to the object store layout', async (t) => {
   const dir = await mkdtemp(join(tmpdir(), 'icechunk-js-fs-'))
   try {
@@ -567,10 +506,6 @@ nativeUnixOnly('filesystem storage refuses writes during an interrupted conversi
       async () => { await repo.createBranch('dev', await repo.lookupBranch('main')) },
       { message: /conversion to the object store layout was interrupted, rerun convert_to_object_store_layout/ },
     )
-    await t.throwsAsync(
-      async () => { await storage.publishMirror() },
-      { message: /rerun convert_to_object_store_layout/ },
-    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -578,7 +513,7 @@ nativeUnixOnly('filesystem storage refuses writes during an interrupted conversi
 
 nativeOnly('repository operations of filesystem storage fail on other storage', async (t) => {
   const storage = await Storage.newInMemory()
-  for (const method of ['convertToFilesystemLayout', 'convertToObjectStoreLayout', 'publishMirror'] as const) {
+  for (const method of ['convertToFilesystemLayout', 'convertToObjectStoreLayout'] as const) {
     await t.throwsAsync(
       async () => { await storage[method]() },
       { message: `${method} is only available on storage created with Storage.newFilesystem` },

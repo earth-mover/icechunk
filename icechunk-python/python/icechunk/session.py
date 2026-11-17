@@ -446,9 +446,6 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
-        icechunk.CommitDurableButRepositoryForkedError
-            If the commit landed but the repository is forked. The commit is
-            durable and must not be retried; the error carries its snapshot ID.
         icechunk.SessionStateError
             With kind `no-changes-to-commit` if there are no changes to commit
             and allow_empty is False.
@@ -499,9 +496,6 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
-        icechunk.CommitDurableButRepositoryForkedError
-            If the commit landed but the repository is forked. The commit is
-            durable and must not be retried; the error carries its snapshot ID.
         icechunk.SessionStateError
             With kind `no-changes-to-commit` if there are no changes to commit
             and allow_empty is False.
@@ -551,9 +545,6 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
-        icechunk.CommitDurableButRepositoryForkedError
-            If the commit landed but the repository is forked. The commit is
-            durable and must not be retried; the error carries its snapshot ID.
         """
         return self._session.amend(message, metadata, allow_empty=allow_empty)
 
@@ -594,9 +585,6 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
-        icechunk.CommitDurableButRepositoryForkedError
-            If the commit landed but the repository is forked. The commit is
-            durable and must not be retried; the error carries its snapshot ID.
         """
         return await self._session.amend_async(message, metadata, allow_empty=allow_empty)
 
@@ -622,12 +610,6 @@ class Session:
         -------
         str
             The ID of the new snapshot.
-
-        Raises
-        ------
-        icechunk.CommitDurableButRepositoryForkedError
-            If the flush landed but the repository is forked. The snapshot is
-            durable and must not be retried; the error carries its snapshot ID.
         """
         return self._session.flush(message, metadata)
 
@@ -653,12 +635,6 @@ class Session:
         -------
         str
             The ID of the new snapshot.
-
-        Raises
-        ------
-        icechunk.CommitDurableButRepositoryForkedError
-            If the flush landed but the repository is forked. The snapshot is
-            durable and must not be retried; the error carries its snapshot ID.
         """
         return await self._session.flush_async(message, metadata)
 

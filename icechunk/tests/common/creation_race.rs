@@ -20,7 +20,7 @@ use icechunk::{
     format::{REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, snapshot::Snapshot},
     repository::VersionInfo as RepoVersionInfo,
     storage::{
-        DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
+        DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition,
         RepositoryCreation, Settings, StorageContext, StorageError, StorageInfo,
         StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult,
         WriteHint,
@@ -97,14 +97,6 @@ impl Storage for CreatorStorage {
 
     async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
         self.backend.writer_features().await
-    }
-
-    async fn gc_hook(
-        &self,
-        ctx: &StorageContext<'_>,
-        phase: GcPhase<'_>,
-    ) -> StorageResult<()> {
-        self.backend.gc_hook(ctx, phase).await
     }
 
     async fn create_location_if_needed(&self) -> StorageResult<()> {

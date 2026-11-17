@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     log::{Op, OpResult, Record},
-    oracle::{History, Verdict, Warning, clock_allowance_ms, mirror::died_by_ms},
+    oracle::{History, Verdict, Warning, clock_allowance_ms, layout::died_by_ms},
 };
 
 /// A GC that may have landed: not a conflict, which is its change running

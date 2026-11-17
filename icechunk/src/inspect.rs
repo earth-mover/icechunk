@@ -351,8 +351,7 @@ struct RepoInfoInspect {
     repo_before_updates: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     writer_features: Vec<String>,
-    /// As stored: the gate, with the repository's own status in `underlying`,
-    /// when there are writer features.
+    /// As stored, including availability values this library never writes.
     status: serde_json::Value,
 }
 
@@ -768,10 +767,10 @@ mod tests {
     }
 
     #[icechunk_macros::tokio_test]
-    async fn test_inspect_repo_info_shows_writer_features_and_both_statuses()
+    async fn test_inspect_repo_info_shows_writer_features()
     -> Result<(), Box<dyn std::error::Error>> {
         use crate::format::{
-            repo_info::{RepoAvailability, RepoInfo, RepoStatus},
+            repo_info::RepoInfo,
             snapshot::{Snapshot, SnapshotInfo},
             writer_features::WriterFeature,
         };
@@ -792,34 +791,13 @@ mod tests {
             None::<&()>,
             None,
             &[WriterFeature::FilesystemLayoutV1],
-        )
-        .set_status(
-            SpecVersionBin::current(),
-            &RepoStatus {
-                availability: RepoAvailability::ReadOnly,
-                set_at: Utc::now(),
-                limited_availability_reason: Some("maintenance".to_string()),
-            },
-            Some(("backup", 100)),
-        )?;
+        );
         manager.create_repo_info(Arc::new(repo_info)).await?;
 
         let json: serde_json::Value =
             serde_json::from_str(&repo_info_json(&manager, true).await?)?;
         assert_eq!(json["writer_features"], serde_json::json!(["filesystem-layout-v1"]));
-        let gate = &json["status"];
-        assert_eq!(gate["availability"], "ReadOnly");
-        assert!(
-            gate["limited_availability_reason"]
-                .as_str()
-                .is_some_and(|r| r.contains("filesystem-layout-v1"))
-        );
-        assert_eq!(gate["underlying"]["availability"], "ReadOnly");
-        assert_eq!(gate["underlying"]["limited_availability_reason"], "maintenance");
-        assert_eq!(gate["underlying"]["set_at"], gate["set_at"]);
-        let entry = &json["latest_updates"][0]["update_type"];
-        assert_eq!(entry["type"], "RepoStatusChangedUpdate");
-        assert_eq!(&entry["status"], gate);
+        assert_eq!(json["status"]["availability"], "Online");
         Ok(())
     }
 
@@ -856,7 +834,6 @@ mod tests {
                 StoredRepoStatus::for_tests(
                     generated::RepoAvailability(raw),
                     Utc::now(),
-                    None,
                     None,
                 ),
             )?;

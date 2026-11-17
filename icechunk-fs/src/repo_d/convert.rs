@@ -2,32 +2,32 @@
 //! filesystem layout v1, see "Conversion from the object store layout" and
 //! "Conversion to the object store layout" in design-docs/020-filesystem-storage.md.
 
-use std::{fs, io, iter, thread};
+use std::{fs, io};
 
 use bytes::Bytes;
 use chrono::{DateTime, TimeDelta, Utc};
 use icechunk_format::{
     IcechunkFormatError, IcechunkResult, OVERWRITTEN_FILES_PATH,
     layout_v1::{self, FeatureChange},
-    repo_info::{DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE, RepoInfo, WritableShapeMode},
+    repo_info::{DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE, RepoInfo},
     repo_info_file,
     writer_features::{min_version, missing_features},
 };
 use uuid::Uuid;
 
 use super::{
-    FIRST_BACKOFF, OPS_LOG_FILES, ProtocolError, RepoD, TIME_SCALE,
+    OPS_LOG_FILES, ProtocolError, RepoD,
     commit::{ChangeBytes, UpdateOutcome},
-    discard_tmp_dir,
+    discard_tmp_dir, is_stale,
     lifecycle::{FEATURES, RootRepo, unix_millis, write_marker},
-    mirror::{ForkCheck, PublishOutcome, REREADS, is_gone, is_stale, with_root_lock},
-    read::{Current, read_version_file},
+    read::Current,
+    remove_stage, with_retries, with_root_lock,
 };
 use crate::{
     hooks::{ConversionStep, FromObjectStoreStep, Point, Sabotage, ToObjectStoreStep},
     names::{Hash, REPO, RootName, Version, parse_root_name, tmp_dir_name},
     nudge::nudge,
-    path::key_path,
+    path::{key_path, staging_path},
     read::read_all,
     storage::is_missing,
     write::{CreateOutcome as Written, create_exclusive, fsync_dir, write_fresh},
@@ -37,8 +37,8 @@ const RERUN: &str = "rerun convert_to_filesystem_layout() to complete the conver
 const TO_OBJECT_STORE_RERUN: &str =
     "rerun convert_to_object_store_layout() to complete the conversion";
 const OBJECT_STORE_INFO: &str = "the repo info in the object store layout";
-/// The relistings of `repo.d` of the conversion to the object store layout
-/// while the fork check, or the change, shows that a listing was stale.
+/// The retries of the change of the conversion to the object store layout
+/// after a conflict, which shows that its listing of `repo.d` was stale.
 const RELISTS: usize = 8;
 
 /// What [`FilesystemStorage::convert_to_filesystem_layout`] or
@@ -57,18 +57,6 @@ pub enum ConversionOutcome {
     NothingToConvert,
 }
 
-/// `$ROOT/repo` next to `repo.d`, as a rerun of the conversion reads it.
-#[derive(Debug, PartialEq, Eq)]
-enum Mirror {
-    Missing,
-    Decoded {
-        bytes: Bytes,
-        lists_feature: bool,
-    },
-    /// It can't be read or decoded, after re-reads.
-    Unreadable,
-}
-
 impl RepoD<'_> {
     /// `FilesystemStorage::convert_to_filesystem_layout`. Administrative:
     /// nothing else may use the repository. A rerun after a crash decides from
@@ -84,10 +72,7 @@ impl RepoD<'_> {
             }
             let object_store_info = match self.root_repo()? {
                 RootRepo::ObjectStore(bytes) => bytes,
-                RootRepo::Missing | RootRepo::InterruptedCreation => return Ok(None),
-                RootRepo::OrphanMirror => {
-                    return Err(ProtocolError::orphan_mirror(self.root));
-                }
+                RootRepo::Missing => return Ok(None),
                 RootRepo::Undecodable(why) => {
                     return Err(ProtocolError::repo_unreadable(self.root, &why));
                 }
@@ -117,14 +102,6 @@ impl RepoD<'_> {
     ) -> Result<Option<ConversionOutcome>, ProtocolError> {
         let (num_updates, now) = check_convertible(object_store_info, OBJECT_STORE_INFO)?;
         let backup = repo_info_file::new_backup_path();
-        self.write_backup(&backup, object_store_info).map_err(|err| {
-            interrupted(
-                "writing the backup of the repo info in the object store layout",
-                err,
-            )
-        })?;
-        self.hooks.at(from_object_store(FromObjectStoreStep::Backup));
-
         let bytes = layout_v1::convert(
             object_store_info,
             FeatureChange::Add,
@@ -133,6 +110,14 @@ impl RepoD<'_> {
             num_updates,
         )
         .map_err(|err| unconvertible(OBJECT_STORE_INFO, &err))?;
+        self.write_backup(&backup, object_store_info).map_err(|err| {
+            interrupted(
+                "writing the backup of the repo info in the object store layout",
+                err,
+            )
+        })?;
+        self.hooks.at(from_object_store(FromObjectStoreStep::Backup));
+
         let building =
             |err: io::Error| interrupted("building the new repo.d", err.into());
         let initial = unix_millis()
@@ -172,7 +157,7 @@ impl RepoD<'_> {
             }
         }
         self.hooks.at(from_object_store(FromObjectStoreStep::RenameDir));
-        self.publish_conversion(&initial, &bytes, Some(Hash::of(object_store_info)))?;
+        self.unlink_object_store_repo()?;
         Ok(Some(ConversionOutcome::Converted))
     }
 
@@ -205,50 +190,60 @@ impl RepoD<'_> {
                 )));
             }
         }
-        let mirror = self.root.join(REPO);
-        match self.read_mirror()? {
-            Mirror::Decoded { lists_feature: true, .. } => {
-                Ok(ConversionOutcome::NothingToConvert)
+        nudge(self.root);
+        let repo = self.root.join(REPO);
+        let on_disk = match with_root_lock(self.root, || read_all(&repo)) {
+            Ok(on_disk) => on_disk,
+            Err(err) if is_missing(&err) => {
+                return Ok(ConversionOutcome::NothingToConvert);
             }
-            Mirror::Missing => {
-                self.publish_conversion(&version, &bytes, None)?;
-                Ok(ConversionOutcome::NothingToConvert)
+            Err(err) => {
+                return Err(self.foreign_root_repo(&format!("can't be read ({err})")));
             }
-            Mirror::Unreadable => Err(ProtocolError::MirrorUnreadable(format!(
-                "{} couldn't be read or decoded; nothing was changed",
-                mirror.display()
-            ))),
-            Mirror::Decoded { bytes: object_store_info, lists_feature: false } => {
-                if !self.hooks.sabotaged(Sabotage::FromObjectStoreWithoutProvenance)
-                    && !self.built_from(&bytes, &object_store_info)?
-                {
-                    return Err(ProtocolError::manual_recovery(
-                        self.root,
-                        &format!(
-                            "{dir} exists next to {mirror}, which doesn't list {feature}, and no \
-                         backup named or linked in the last {OPS_LOG_FILES} ops-log files of \
-                         {current} holds the bytes of {mirror}: convert_to_filesystem_layout() \
-                         didn't build {dir} from it, {mirror} changed after the conversion \
-                         renamed {dir} into place (a fork), or more changes landed since the \
-                         conversion than those files hold. Nothing was changed. To keep \
-                         {dir}, move {mirror} aside and run publish_mirror(); to keep \
-                         {mirror}, archive and delete {dir}, then run \
-                         convert_to_filesystem_layout()",
-                            dir = dir.display(),
-                            mirror = mirror.display(),
-                            feature = layout_v1::FEATURE,
-                            current = describe(),
-                        ),
-                    ));
-                }
-                self.publish_conversion(
-                    &version,
-                    &bytes,
-                    Some(Hash::of(&object_store_info)),
-                )?;
-                Ok(ConversionOutcome::Converted)
+        };
+        if !self.hooks.sabotaged(Sabotage::FromObjectStoreWithoutProvenance) {
+            let foreign = match layout_v1::lists_feature(&on_disk) {
+                Ok(false) if self.built_from(&bytes, &on_disk)? => None,
+                Ok(false) => Some(format!(
+                    "holds a repo info this conversion didn't build {} from: no backup \
+                     named or linked in the last {OPS_LOG_FILES} ops-log files of {} holds \
+                     its bytes, so it changed after the conversion renamed {} into place, \
+                     or more changes landed since the conversion than those files hold",
+                    dir.display(),
+                    describe(),
+                    dir.display(),
+                )),
+                Ok(true) => Some(format!(
+                    "holds a repo info that lists {}, which this conversion didn't build \
+                     {} from",
+                    layout_v1::FEATURE,
+                    dir.display()
+                )),
+                Err(err) => Some(format!("doesn't decode ({err})")),
+            };
+            if let Some(what) = foreign {
+                return Err(self.foreign_root_repo(&what));
             }
         }
+        self.unlink_object_store_repo()?;
+        Ok(ConversionOutcome::Converted)
+    }
+
+    /// `$ROOT/repo` next to `repo.d` that the provenance check can't attribute
+    /// to this conversion: `what` it is.
+    fn foreign_root_repo(&self, what: &str) -> ProtocolError {
+        let repo = self.root.join(REPO);
+        let dir = self.dir();
+        ProtocolError::manual_recovery(
+            self.root,
+            &format!(
+                "{repo} next to {dir} {what}. Nothing was changed. To keep {dir}, delete \
+                 {repo} after checking that it holds nothing to keep; to keep {repo}, \
+                 archive and delete {dir}, then run convert_to_filesystem_layout()",
+                repo = repo.display(),
+                dir = dir.display(),
+            ),
+        )
     }
 
     /// Step 3: `bytes` at `overwritten/<backup>`, create-only and fsynced.
@@ -331,78 +326,20 @@ impl RepoD<'_> {
         }
     }
 
-    /// Step 7: publishes `version`, which a server-decided step proved
-    /// current or nothing else can have changed, with the hash
-    /// `object_store_info` of the repo info it converted as known: no fork.
-    fn publish_conversion(
-        &self,
-        version: &Version,
-        bytes: &[u8],
-        object_store_info: Option<Hash>,
-    ) -> Result<(), ProtocolError> {
-        let known: Vec<Hash> =
-            iter::once(version.hash().clone()).chain(object_store_info).collect();
-        let mirror = self.root.join(REPO);
-        let mirror = mirror.display();
-        match self.publish(version, Some(bytes), &known) {
-            Ok(PublishOutcome::Current) => {}
-            Ok(PublishOutcome::GaveUp { .. }) => {
-                return Err(ProtocolError::Other(format!(
-                    "the publication of the mirror {mirror} gave up; {RERUN}"
-                )));
-            }
-            Err(ProtocolError::Forked(_)) => {
-                return Err(ProtocolError::Forked(format!(
-                    "{mirror} doesn't list {} and is neither a version file of {} nor the \
-                     repo info this conversion from the object store layout converts; nothing \
-                     was published",
-                    layout_v1::FEATURE,
-                    self.dir().display()
-                )));
-            }
-            Err(err @ ProtocolError::MirrorUnreadable(_)) => {
-                return Err(err.context("; nothing was published"));
-            }
-            Err(ProtocolError::Io(err)) => {
-                return Err(ProtocolError::Other(format!(
-                    "publishing the mirror {mirror} failed: {err}; {RERUN}"
-                )));
-            }
-            Err(err) => return Err(err),
+    /// Step 7: unlinks `$ROOT/repo`, gone already after a lost reply, then
+    /// fsyncs the root.
+    fn unlink_object_store_repo(&self) -> Result<(), ProtocolError> {
+        let repo = self.root.join(REPO);
+        let unlinking = |err: io::Error| {
+            interrupted(&format!("unlinking {}", repo.display()), err.into())
+        };
+        match with_root_lock(self.root, || self.hooks.unlink(&repo)) {
+            Err(err) if !is_missing(&err) => return Err(unlinking(err)),
+            _ => {}
         }
-        self.hooks.at(from_object_store(FromObjectStoreStep::Publish));
+        fsync_dir(self.root).map_err(unlinking)?;
+        self.hooks.at(from_object_store(FromObjectStoreStep::RepoUnlinked));
         Ok(())
-    }
-
-    /// `$ROOT/repo`, read again up to [`REREADS`] times with backoff while it
-    /// can't be read or decoded.
-    fn read_mirror(&self) -> Result<Mirror, ProtocolError> {
-        let path = self.root.join(REPO);
-        let mut pauses = iter::successors(Some(FIRST_BACKOFF), |pause| Some(*pause * 2));
-        for read in 0..=REREADS {
-            if read > 0
-                && let Some(pause) = pauses.next()
-            {
-                thread::sleep(pause / TIME_SCALE);
-            }
-            nudge(self.root);
-            match with_root_lock(self.root, || read_all(&path)) {
-                Ok(bytes) => match layout_v1::lists_feature(&bytes) {
-                    Ok(lists_feature) => {
-                        return Ok(Mirror::Decoded { bytes, lists_feature });
-                    }
-                    Err(err) => {
-                        tracing::debug!(%err, path = %path.display(), "could not decode the mirror");
-                    }
-                },
-                Err(err) if is_missing(&err) => return Ok(Mirror::Missing),
-                Err(err) if is_stale(&err) || self.repo_is_not_a_file() => {
-                    tracing::debug!(%err, path = %path.display(), "could not read the mirror");
-                }
-                Err(err) => return Err(err.into()),
-            }
-        }
-        Ok(Mirror::Unreadable)
     }
 
     /// Step 8: discards every `repo.d.tmp.*`. Nothing else runs, so they are
@@ -430,14 +367,13 @@ impl RepoD<'_> {
     }
 }
 
-/// The version without the feature that the conversion to the object store layout
-/// publishes.
+/// The current version without the feature, which the conversion to the
+/// object store layout writes to `$ROOT/repo`.
 struct Featureless {
-    version: Version,
     bytes: Bytes,
-    /// The version this run's change replaced; `None` on a rerun that found the
-    /// change made.
-    replaced: Option<Version>,
+    /// Whether this run made the change; `false` on a rerun that found it
+    /// made.
+    changed: bool,
 }
 
 impl RepoD<'_> {
@@ -457,10 +393,7 @@ impl RepoD<'_> {
                     RootRepo::ObjectStore(_) => {
                         break ConversionOutcome::NothingToConvert;
                     }
-                    RootRepo::Missing | RootRepo::InterruptedCreation => return Ok(None),
-                    RootRepo::OrphanMirror => {
-                        return Err(ProtocolError::orphan_mirror(self.root));
-                    }
+                    RootRepo::Missing => return Ok(None),
                     RootRepo::Undecodable(why) => {
                         return Err(ProtocolError::repo_unreadable(self.root, &why));
                     }
@@ -486,14 +419,14 @@ impl RepoD<'_> {
         let Some(featureless) = self.change_to_object_store()? else {
             return Ok(None);
         };
-        if self.hooks.sabotaged(Sabotage::DeleteDirBeforePublish)
+        if self.hooks.sabotaged(Sabotage::DeleteDirBeforeRepoWrite)
             && self.rename_aside()?
         {
             self.hooks.at(to_object_store(ToObjectStoreStep::RenameDir));
             self.delete_tmp_dirs()?;
         }
-        self.publish_to_object_store(&featureless)?;
-        self.hooks.at(to_object_store(ToObjectStoreStep::Publish));
+        self.create_object_store_repo(&featureless)?;
+        self.hooks.at(to_object_store(ToObjectStoreStep::RepoWritten));
         if !self.rename_aside()? {
             return Ok(None);
         }
@@ -506,8 +439,7 @@ impl RepoD<'_> {
     /// doesn't exist.
     fn change_to_object_store(&self) -> Result<Option<Featureless>, ProtocolError> {
         let dir = self.dir();
-        let mirror = self.root.join(REPO);
-        let (mut relists, mut conflicts) = (0, 0);
+        let mut conflicts = 0;
         loop {
             let Some(Current { bytes, version }) = self.read_latest()? else {
                 return Ok(None);
@@ -519,9 +451,7 @@ impl RepoD<'_> {
             );
             match layout_v1::lists_feature(&bytes) {
                 // An earlier run made the change.
-                Ok(false) => {
-                    return Ok(Some(Featureless { version, bytes, replaced: None }));
-                }
+                Ok(false) => return Ok(Some(Featureless { bytes, changed: false })),
                 Ok(true) => {}
                 Err(err) => {
                     return Err(ProtocolError::Corrupt(format!(
@@ -531,48 +461,8 @@ impl RepoD<'_> {
             }
             let (num_updates, now) = check_convertible(&bytes, &current)?;
 
-            self.hooks.at(to_object_store(ToObjectStoreStep::ForkCheck));
-            match self.fork_check(&[version.hash().clone()])? {
-                ForkCheck::Fork => {
-                    return Err(ProtocolError::Forked(format!(
-                        "{} doesn't list {} and is neither a version file of {} nor {current}; \
-                         nothing was changed",
-                        mirror.display(),
-                        layout_v1::FEATURE,
-                        dir.display()
-                    )));
-                }
-                ForkCheck::Unreadable => {
-                    return Err(ProtocolError::MirrorUnreadable(format!(
-                        "{} couldn't be read or decoded; nothing was changed",
-                        mirror.display()
-                    )));
-                }
-                // The listing was stale: an earlier run's change and
-                // publication landed.
-                ForkCheck::NotFork { copy_of: Some(copy) }
-                    if self.copies_a_later_change(&copy, &version)? =>
-                {
-                    if relists == RELISTS {
-                        return Err(ProtocolError::Other(format!(
-                            "{} holds version {} of {}, which is newer than {current} or \
-                             doesn't list {}, but {RELISTS} more listings still showed \
-                             {current}: listings of {} are stale. Nothing was changed; run \
-                             convert_to_object_store_layout() again once they refresh",
-                            mirror.display(),
-                            copy.file_name(),
-                            dir.display(),
-                            layout_v1::FEATURE,
-                            dir.display()
-                        )));
-                    }
-                    relists += 1;
-                    nudge(&dir);
-                    continue;
-                }
-                ForkCheck::NotFork { .. } => {}
-            }
-
+            self.hooks.at(to_object_store(ToObjectStoreStep::BeforeChange));
+            self.refuse_a_root_repo()?;
             let backup = repo_info_file::new_backup_path();
             self.write_backup(&backup, &bytes).map_err(|err| {
                 to_object_store_interrupted(
@@ -592,22 +482,19 @@ impl RepoD<'_> {
             let outcome = if self.hooks.sabotaged(Sabotage::ToObjectStoreWithoutChange) {
                 UpdateOutcome::Updated(version.next(Hash::of(&converted.bytes))?)
             } else {
-                self.attempt_change(&converted, &version)
-                    .map_err(|err| {
-                        to_object_store_interrupted(
-                            "the change to the version without the feature",
-                            err,
-                        )
-                    })?
-                    .outcome
+                self.change(&converted, &version).map_err(|err| {
+                    to_object_store_interrupted(
+                        "the change to the version without the feature",
+                        err,
+                    )
+                })?
             };
             match outcome {
-                UpdateOutcome::Updated(new) => {
+                UpdateOutcome::Updated(_) => {
                     self.hooks.at(to_object_store(ToObjectStoreStep::Change));
                     return Ok(Some(Featureless {
-                        version: new,
                         bytes: converted.bytes,
-                        replaced: Some(version),
+                        changed: true,
                     }));
                 }
                 // Nothing else runs: the listing was stale.
@@ -628,73 +515,128 @@ impl RepoD<'_> {
         }
     }
 
-    /// Whether `$ROOT/repo`, a copy of the version file `copy`, shows that a
-    /// listing showing `read` as current was stale: `copy` is newer, or
-    /// doesn't list the feature.
-    fn copies_a_later_change(
-        &self,
-        copy: &Version,
-        read: &Version,
-    ) -> Result<bool, ProtocolError> {
-        if copy.n() > read.n() {
-            return Ok(true);
-        }
-        if copy == read {
-            return Ok(false);
-        }
-        match read_version_file(&self.dir(), copy) {
-            Ok(bytes) => Ok(!layout_v1::lists_feature(&bytes).map_err(|err| {
-                ProtocolError::Corrupt(format!(
-                    "{} in {} doesn't decode: {err}",
-                    copy.file_name(),
-                    self.dir().display()
-                ))
-            })?),
-            // A dead version, deleted since the fork check listed it.
-            Err(err) if is_gone(&err) => Ok(false),
-            Err(err) => Err(err),
+    /// The first run's check before its change: `$ROOT/repo` doesn't exist.
+    fn refuse_a_root_repo(&self) -> Result<(), ProtocolError> {
+        nudge(self.root);
+        let repo = self.root.join(REPO);
+        match fs::symlink_metadata(&repo) {
+            Err(err) if is_missing(&err) => Ok(()),
+            Ok(_) => Err(ProtocolError::Other(format!(
+                "{} exists next to {}: most likely an interrupted \
+                 convert_to_filesystem_layout(); run it again to finish it. Nothing was \
+                 changed",
+                repo.display(),
+                self.dir().display()
+            ))),
+            Err(err) => Err(to_object_store_interrupted(
+                &format!("checking that {} doesn't exist", repo.display()),
+                err.into(),
+            )),
         }
     }
 
-    /// Step 5: publishes the version without the feature, which a
-    /// server-decided step proved current, with the version it replaced on a
-    /// first run as known.
-    fn publish_to_object_store(
+    /// Step 5: writes the version without the feature as `$ROOT/repo`,
+    /// exclusively: staged as `repo.staging.<id>`, linked as `$ROOT/repo`,
+    /// never renamed over an existing name. After this run's change, an
+    /// existing `$ROOT/repo` other than this run's own link is an error and
+    /// `repo.d` stays. A rerun keeps a `$ROOT/repo` in the object store
+    /// layout; anything else stops for manual recovery. The fsyncs always
+    /// run.
+    fn create_object_store_repo(
         &self,
         featureless: &Featureless,
     ) -> Result<(), ProtocolError> {
-        let Featureless { version, bytes, replaced } = featureless;
-        let known: Vec<Hash> =
-            iter::once(version).chain(replaced).map(|v| v.hash().clone()).collect();
-        let mirror = self.root.join(REPO);
-        let mirror = mirror.display();
-        let dir = self.dir();
-        let dir = dir.display();
-        match self.publish(version, Some(bytes), &known) {
-            Ok(PublishOutcome::Current) => Ok(()),
-            Ok(PublishOutcome::GaveUp { .. }) => Err(ProtocolError::Other(format!(
-                "the publication of the mirror {mirror} gave up; {TO_OBJECT_STORE_RERUN}"
-            ))),
-            Err(ProtocolError::Forked(_)) => Err(ProtocolError::Forked(format!(
-                "{mirror} doesn't list {} and is neither a version file of {dir} nor a \
-                 version this conversion read; the conversion's change landed, nothing \
-                 was published and {dir} was kept. Recover the fork by hand (see the \
-                 storage guide's section on forks), then {TO_OBJECT_STORE_RERUN}, not \
-                 convert_to_filesystem_layout()",
-                layout_v1::FEATURE,
-            ))),
-            Err(ProtocolError::MirrorUnreadable(_)) => {
-                Err(ProtocolError::MirrorUnreadable(format!(
-                    "{mirror} couldn't be read or decoded; the conversion's change landed, \
-                 nothing was published and {dir} was kept. Make {mirror} readable or \
-                 move it aside, then {TO_OBJECT_STORE_RERUN}"
-                )))
+        let Featureless { bytes, changed } = featureless;
+        let repo = self.root.join(REPO);
+        let writing = |err: io::Error| {
+            to_object_store_interrupted(
+                &format!("writing {}", repo.display()),
+                err.into(),
+            )
+        };
+        let staging = staging_path(&repo);
+        write_fresh(&staging, bytes, true).map_err(writing)?;
+        let linked = with_root_lock(self.root, || self.hooks.link(&staging, &repo));
+        remove_stage(&staging);
+        match linked {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists && !changed => {
+                self.check_kept_root_repo()?;
             }
-            Err(ProtocolError::Io(err)) => Err(ProtocolError::Other(format!(
-                "publishing the mirror {mirror} failed: {err}; {TO_OBJECT_STORE_RERUN}"
-            ))),
-            Err(err) => Err(err),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                // A lost reply of our own link: the bytes name this run's
+                // fresh backup, so nothing else wrote them.
+                let ours = self.read_root_repo().is_ok_and(|found| found == *bytes);
+                if !ours {
+                    let dir = self.dir();
+                    return Err(ProtocolError::Other(format!(
+                        "{repo} appeared while the conversion to the object store layout \
+                         ran: something else wrote it. The conversion's change landed and \
+                         {dir} was kept. Rerunning convert_to_object_store_layout() keeps \
+                         {repo} if it holds a repo info in the object store layout and \
+                         deletes {dir}: check {repo} first",
+                        repo = repo.display(),
+                        dir = dir.display(),
+                    )));
+                }
+            }
+            Err(err) => return Err(writing(err)),
         }
+        fsync_dir(self.root).map_err(writing)
+    }
+
+    /// A rerun keeps an existing `$ROOT/repo` only if it is a regular file
+    /// holding a repo info without the feature: this conversion's own write,
+    /// or an object-store-layout write made after it. Anything else is left,
+    /// with `repo.d`, for manual recovery.
+    fn check_kept_root_repo(&self) -> Result<(), ProtocolError> {
+        let repo = self.root.join(REPO);
+        let what =
+            match self.read_root_repo().map(|bytes| layout_v1::lists_feature(&bytes)) {
+                Ok(Ok(false)) => return Ok(()),
+                Ok(Ok(true)) => format!("lists {}", layout_v1::FEATURE),
+                Ok(Err(err)) => format!("doesn't decode ({err})"),
+                Err(what) => what,
+            };
+        let dir = self.dir();
+        Err(ProtocolError::manual_recovery(
+            self.root,
+            &format!(
+                "{repo} {what}, and a rerun of convert_to_object_store_layout() keeps only \
+                 a repo info in the object store layout there. {dir} was kept. Move {repo} \
+                 aside after checking that it holds nothing to keep, then run \
+                 convert_to_object_store_layout() again",
+                repo = repo.display(),
+                dir = dir.display(),
+            ),
+        ))
+    }
+
+    /// The bytes of `$ROOT/repo` if it is a regular file, or why not. Reads
+    /// that find it gone or stale are retried, as on a network filesystem
+    /// after another client's write.
+    fn read_root_repo(&self) -> Result<Bytes, String> {
+        let repo = self.root.join(REPO);
+        let mut last = String::new();
+        with_retries(|| {
+            nudge(self.root);
+            let read = match fs::symlink_metadata(&repo) {
+                Ok(metadata) if !metadata.is_file() => {
+                    return Some(Err("isn't a regular file".to_string()));
+                }
+                Ok(_) => with_root_lock(self.root, || read_all(&repo)),
+                Err(err) => Err(err),
+            };
+            match read {
+                Ok(bytes) => Some(Ok(bytes)),
+                Err(err) if is_missing(&err) || is_stale(&err) => {
+                    last = err.to_string();
+                    None
+                }
+                Err(err) => Some(Err(format!("can't be read ({err})"))),
+            }
+        })
+        .unwrap_or_else(|| Err(format!("can't be read ({last})")))
     }
 
     /// Step 6: renames `repo.d` to a fresh `repo.d.tmp.<id>`. `false` if
@@ -747,7 +689,7 @@ fn check_convertible(
     if let Some(min_version) = min_version(&missing) {
         return Err(ProtocolError::MissingFeatures { missing, min_version });
     }
-    info.check_writable_shape(WritableShapeMode::AnyChange).map_err(unconvertible)?;
+    info.check_writable_shape().map_err(unconvertible)?;
     let num_updates = info
         .num_updates_per_repo_info_file()
         .map_err(unconvertible)?
@@ -835,7 +777,7 @@ mod tests {
         FromObjectStoreStep::Backup,
         FromObjectStoreStep::Build,
         FromObjectStoreStep::RenameDir,
-        FromObjectStoreStep::Publish,
+        FromObjectStoreStep::RepoUnlinked,
     ];
 
     fn at_step(step: FromObjectStoreStep) -> Point {
@@ -890,27 +832,39 @@ mod tests {
         names(root).into_iter().filter(|name| name.starts_with("repo.d.tmp.")).collect()
     }
 
+    /// `info` stores `status` as it reads.
+    fn assert_plain_status(info: &RepoInfo, status: &RepoStatus) {
+        let stored = serde_json::to_value(info.raw_status().unwrap()).unwrap();
+        assert_eq!(
+            stored["availability"],
+            format!("{:?}", status.availability),
+            "{stored}"
+        );
+        assert_eq!(
+            stored["limited_availability_reason"],
+            serde_json::json!(status.limited_availability_reason),
+            "{stored}"
+        );
+    }
+
     /// The end state of a conversion of `object_store_info`: `repo.d` holding
     /// its first version and marker, that version being `object_store_info`
-    /// with the feature, the gate and one new `RepoStatusChangedUpdate` whose
-    /// predecessor names a backup of `object_store_info`, `$ROOT/repo` its
-    /// copy, no `repo.d.tmp.*`.
+    /// with the feature and one new `RepoStatusChangedUpdate` whose
+    /// predecessor names a backup of `object_store_info`, no `$ROOT/repo`, no
+    /// `repo.d.tmp.*`.
     fn assert_converted(root: &Path, object_store_info: &[u8]) -> Version {
         let Current { bytes, version } = repo(root).read_latest().unwrap().unwrap();
         assert_eq!(
             names(&root.join("repo.d")),
             set([version.file_name(), latest(&version)])
         );
-        assert_eq!(fs::read(root.join("repo")).unwrap(), bytes);
+        assert!(!root.join("repo").exists());
         assert_eq!(tmp_dirs(root), Vec::<String>::new());
 
         let before = repo_info_file::decode(object_store_info).unwrap();
         let after = repo_info_file::decode(&bytes).unwrap();
         assert!(layout_v1::lists_feature(&bytes).unwrap());
-        // The gate, as stored.
-        let gate = serde_json::to_value(after.raw_status().unwrap()).unwrap();
-        assert_eq!(gate["availability"], "ReadOnly", "{gate}");
-        assert!(gate.get("underlying").is_some(), "{gate}");
+        assert_plain_status(&after, &before.status().unwrap());
         assert_eq!(after.status().unwrap(), before.status().unwrap());
         let entries: Vec<_> =
             after.latest_updates().unwrap().map(Result::unwrap).collect();
@@ -952,12 +906,7 @@ mod tests {
                 at_step(FromObjectStoreStep::Backup),
                 at_step(FromObjectStoreStep::Build),
                 at_step(FromObjectStoreStep::RenameDir),
-                Point::BeforePublish,
-                Point::MirrorStaged,
-                Point::BeforeMirrorRead,
-                Point::BeforeMirrorRename,
-                Point::MirrorRenamed,
-                at_step(FromObjectStoreStep::Publish),
+                at_step(FromObjectStoreStep::RepoUnlinked),
             ]
         );
         assert_eq!(repo(root.path()).open_status().unwrap(), OpenStatus::Ok);
@@ -985,7 +934,7 @@ mod tests {
         plant(root.path(), &object_store_info);
         assert_eq!(converted(root.path()), ConversionOutcome::Converted);
         assert_converted(root.path(), &object_store_info);
-        let bytes = fs::read(root.path().join("repo")).unwrap();
+        let Current { bytes, .. } = repo(root.path()).read_latest().unwrap().unwrap();
         assert_eq!(repo_info_file::decode(&bytes).unwrap().status().unwrap(), read_only);
     }
 
@@ -999,9 +948,8 @@ mod tests {
             plant(root.path(), &object_store_info);
             assert_eq!(converted(root.path()), ConversionOutcome::Converted);
             assert_converted(root.path(), &object_store_info);
-            let named =
-                layout_v1::backup_paths(&fs::read(root.path().join("repo")).unwrap())
-                    .unwrap();
+            let Current { bytes, .. } = repo(root.path()).read_latest().unwrap().unwrap();
+            let named = layout_v1::backup_paths(&bytes).unwrap();
             assert_eq!(named.repo_before_updates.is_some(), paged, "{num_updates:?}");
             assert_eq!(named.entries.is_empty(), paged, "{num_updates:?}");
         }
@@ -1009,17 +957,9 @@ mod tests {
 
     #[test]
     fn convert_without_an_object_store_repo() {
-        // Nothing, or an interrupted creation: no repository.
-        for planted in [None, Some(repo_info(1))] {
-            let root = tempfile::tempdir().unwrap();
-            if let Some(bytes) = &planted {
-                plant(root.path(), bytes);
-            }
-            assert_eq!(convert(root.path(), &NoHooks).unwrap(), None);
-            assert_eq!(fs::read(root.path().join("repo")).ok(), planted);
-            assert!(!root.path().join("repo.d").exists());
-        }
         let root = tempfile::tempdir().unwrap();
+        assert_eq!(convert(root.path(), &NoHooks).unwrap(), None);
+        assert!(names(root.path()).is_empty());
         assert_eq!(convert(&root.path().join("missing"), &NoHooks).unwrap(), None);
 
         // A created repository.
@@ -1033,9 +973,10 @@ mod tests {
             assert_eq!(names(root.path()), strings(["repo"]));
             err
         };
-        let err = refused(&changed_repo_info(1));
+        // It lists the feature already.
+        let err = refused(&repo_info(1));
         assert!(
-            matches!(&err, ProtocolError::Other(msg) if msg.contains("an orphan mirror")),
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("can't be converted")),
             "{err:?}"
         );
         let err = refused(UNDECODABLE);
@@ -1061,12 +1002,12 @@ mod tests {
             let object_store_info = object_store_info(None);
             plant(root.path(), &object_store_info);
             crash_at(root.path(), step);
-            let mirror = fs::read(root.path().join("repo")).unwrap();
-            // Readers that don't implement the layout read the original repo
-            // info until the publication.
+            // `$ROOT/repo` holds the original repo info until the unlink.
+            let repo_file = fs::read(root.path().join("repo")).ok();
             assert_eq!(
-                mirror == object_store_info,
-                step != FromObjectStoreStep::Publish,
+                repo_file,
+                (step != FromObjectStoreStep::RepoUnlinked)
+                    .then(|| object_store_info.clone()),
                 "{step:?}"
             );
             assert_eq!(backups(root.path()).len(), 1, "{step:?}");
@@ -1078,13 +1019,13 @@ mod tests {
                 root.path().join("repo.d").exists(),
                 matches!(
                     step,
-                    FromObjectStoreStep::RenameDir | FromObjectStoreStep::Publish
+                    FromObjectStoreStep::RenameDir | FromObjectStoreStep::RepoUnlinked
                 ),
                 "{step:?}"
             );
 
             let expected = match step {
-                FromObjectStoreStep::Publish => ConversionOutcome::NothingToConvert,
+                FromObjectStoreStep::RepoUnlinked => ConversionOutcome::NothingToConvert,
                 _ => ConversionOutcome::Converted,
             };
             assert_eq!(converted(root.path()), expected, "{step:?}");
@@ -1110,33 +1051,34 @@ mod tests {
 
     /// The state a crash after the directory rename leaves, then `$ROOT/repo`
     /// changed by an object-store-layout write.
-    fn interrupted_then_forked(root: &Path) -> Vec<u8> {
+    fn interrupted_then_overwritten(root: &Path) -> Vec<u8> {
         plant(root, &object_store_info(None));
         crash_at(root, FromObjectStoreStep::RenameDir);
-        let forked = featureless_repo_info(7);
-        plant(root, &forked);
-        forked
+        let overwritten = featureless_repo_info(7);
+        plant(root, &overwritten);
+        overwritten
     }
 
     #[test]
     fn a_rerun_stops_if_repo_changed_after_the_directory_rename() {
         let root = tempfile::tempdir().unwrap();
-        let forked = interrupted_then_forked(root.path());
+        let overwritten = interrupted_then_overwritten(root.path());
         let before = (names(root.path()), names(&root.path().join("repo.d")));
         let err = convert(root.path(), &NoHooks).unwrap_err();
         assert!(
             matches!(&err, ProtocolError::Other(msg)
-                if msg.contains("publish_mirror()") && msg.contains("convert_to_filesystem_layout()")),
+                if msg.contains("needs manual recovery")
+                    && msg.contains("convert_to_filesystem_layout()")),
             "{err:?}"
         );
         assert_eq!((names(root.path()), names(&root.path().join("repo.d"))), before);
-        assert_eq!(fs::read(root.path().join("repo")).unwrap(), forked);
+        assert_eq!(fs::read(root.path().join("repo")).unwrap(), overwritten);
     }
 
     #[test]
-    fn sabotage_from_object_store_without_provenance_overwrites_an_object_store_write() {
+    fn sabotage_from_object_store_without_provenance_loses_an_object_store_write() {
         let root = tempfile::tempdir().unwrap();
-        interrupted_then_forked(root.path());
+        interrupted_then_overwritten(root.path());
         let hooks =
             TestHooks::default().sabotage(Sabotage::FromObjectStoreWithoutProvenance);
         assert_eq!(
@@ -1144,8 +1086,7 @@ mod tests {
             Some(ConversionOutcome::Converted)
         );
         // The planted change is lost.
-        let Current { bytes, .. } = repo(root.path()).read_latest().unwrap().unwrap();
-        assert_eq!(fs::read(root.path().join("repo")).unwrap(), bytes);
+        assert!(!root.path().join("repo").exists());
     }
 
     /// A `repo.d` that step 1's listing missed appears before our directory
@@ -1175,7 +1116,7 @@ mod tests {
             || {
                 assert_eq!(tmp_dirs(root.path()).len(), 1);
                 theirs = Some(repo_d_with(root.path(), &repo_info(5)));
-                plant(root.path(), &repo_info(5));
+                fs::remove_file(root.path().join("repo")).unwrap();
             },
         );
         assert_eq!(outcome, Some(ConversionOutcome::NothingToConvert));
@@ -1197,7 +1138,7 @@ mod tests {
             names(&root.path().join("repo.d")),
             set([theirs.file_name(), latest(&theirs)])
         );
-        assert_eq!(fs::read(root.path().join("repo")).unwrap(), repo_info(5));
+        assert!(!root.path().join("repo").exists());
     }
 
     /// An I/O failure in a step of the conversion names the conversion to
@@ -1326,8 +1267,9 @@ mod tests {
 
     /// Writers change the repository between a crash after the directory
     /// rename and the rerun. The rerun finds the conversion's backup in an
-    /// older ops-log entry and publishes, while it is named within three
-    /// ops-log files; with one update per file, two changes push it past them.
+    /// older ops-log entry and unlinks `$ROOT/repo`, while it is named within
+    /// three ops-log files; with one update per file, two changes push it
+    /// past them.
     #[test]
     fn a_rerun_after_writers_finds_the_backup_within_three_ops_log_files() {
         for (num_updates, changes, found) in
@@ -1338,24 +1280,16 @@ mod tests {
             plant(root.path(), &object_store_info);
             crash_at(root.path(), FromObjectStoreStep::RenameDir);
             let page = num_updates.unwrap_or(DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE);
-            #[expect(
-                clippy::double_ended_iterator_last,
-                reason = "every change must run, not only the last"
-            )]
-            let last =
-                (0..changes).map(|_| writer_change(root.path(), page)).last().unwrap();
+            for _ in 0..changes {
+                writer_change(root.path(), page);
+            }
             assert_eq!(fs::read(root.path().join("repo")).unwrap(), object_store_info);
 
             let rerun = convert(root.path(), &NoHooks);
             let case = format!("{num_updates:?}, {changes}");
             if found {
                 assert_eq!(rerun.unwrap(), Some(ConversionOutcome::Converted), "{case}");
-                let current = root.path().join("repo.d").join(last.file_name());
-                assert_eq!(
-                    fs::read(root.path().join("repo")).unwrap(),
-                    fs::read(current).unwrap(),
-                    "{case}"
-                );
+                assert!(!root.path().join("repo").exists(), "{case}");
             } else {
                 let err = rerun.unwrap_err();
                 assert!(
@@ -1372,27 +1306,79 @@ mod tests {
     }
 
     #[test]
-    fn a_rerun_publishes_a_missing_mirror() {
+    fn convert_from_object_store_unlinks_the_repo_file() {
         let root = tempfile::tempdir().unwrap();
         let object_store_info = object_store_info(None);
         plant(root.path(), &object_store_info);
-        converted(root.path());
-        fs::remove_file(root.path().join("repo")).unwrap();
+        assert_eq!(converted(root.path()), ConversionOutcome::Converted);
+        assert!(!root.path().join("repo").exists());
+        let backups = backups(root.path());
+        let [backed_up] = backups.iter().collect::<Vec<_>>()[..] else {
+            panic!("one backup: {backups:?}")
+        };
+        assert_eq!(backup(root.path(), backed_up), object_store_info);
+    }
+
+    #[test]
+    fn a_rerun_unlinks_the_original_repo_file_after_a_crash() {
+        let root = tempfile::tempdir().unwrap();
+        let object_store_info = object_store_info(None);
+        plant(root.path(), &object_store_info);
+        crash_at(root.path(), FromObjectStoreStep::RenameDir);
+        assert_eq!(fs::read(root.path().join("repo")).unwrap(), object_store_info);
+        assert_eq!(converted(root.path()), ConversionOutcome::Converted);
+        assert!(!root.path().join("repo").exists());
+        assert_converted(root.path(), &object_store_info);
+    }
+
+    /// A `$ROOT/repo` this conversion didn't build `repo.d` from, with or
+    /// without the feature, is left for manual recovery.
+    #[test]
+    fn a_rerun_refuses_a_foreign_repo_file() {
+        for foreign in [featureless_repo_info(7), repo_info(7)] {
+            let root = tempfile::tempdir().unwrap();
+            plant(root.path(), &object_store_info(None));
+            crash_at(root.path(), FromObjectStoreStep::RenameDir);
+            plant(root.path(), &foreign);
+            let before = tree(root.path());
+            let err = convert(root.path(), &NoHooks).unwrap_err();
+            assert!(
+                matches!(&err, ProtocolError::Other(msg) if msg.contains("needs manual recovery")),
+                "{err:?}"
+            );
+            assert_eq!(tree(root.path()), before);
+            assert_eq!(fs::read(root.path().join("repo")).unwrap(), foreign);
+        }
+    }
+
+    #[test]
+    fn a_rerun_after_the_unlink_is_nothing_to_convert() {
+        let root = tempfile::tempdir().unwrap();
+        let object_store_info = object_store_info(None);
+        plant(root.path(), &object_store_info);
+        crash_at(root.path(), FromObjectStoreStep::RepoUnlinked);
+        let before = tree(root.path());
         assert_eq!(converted(root.path()), ConversionOutcome::NothingToConvert);
+        assert_eq!(tree(root.path()), before);
         assert_converted(root.path(), &object_store_info);
     }
 
     #[test]
-    fn a_rerun_with_an_unreadable_mirror_changes_nothing() {
-        let root = tempfile::tempdir().unwrap();
-        plant(root.path(), &object_store_info(None));
-        converted(root.path());
-        plant(root.path(), UNDECODABLE);
-        let before = names(&root.path().join("repo.d"));
-        let err = convert(root.path(), &NoHooks).unwrap_err();
-        assert!(matches!(err, ProtocolError::MirrorUnreadable(_)), "{err:?}");
-        assert_eq!(fs::read(root.path().join("repo")).unwrap(), UNDECODABLE);
-        assert_eq!(names(&root.path().join("repo.d")), before);
+    fn a_rerun_with_an_undecodable_repo_file_needs_manual_recovery() {
+        for planted in [UNDECODABLE.to_vec(), Vec::new()] {
+            let root = tempfile::tempdir().unwrap();
+            plant(root.path(), &object_store_info(None));
+            converted(root.path());
+            plant(root.path(), &planted);
+            let before = tree(root.path());
+            let err = convert(root.path(), &NoHooks).unwrap_err();
+            assert!(
+                matches!(&err, ProtocolError::Other(msg)
+                    if msg.contains("needs manual recovery") && msg.contains("doesn't decode")),
+                "{err:?}"
+            );
+            assert_eq!(tree(root.path()), before);
+        }
     }
 
     /// The current version an interrupted conversion to the object store layout
@@ -1430,7 +1416,7 @@ mod tests {
 
     /// A repository in the filesystem layout, converted from one in the object
     /// store layout whose configuration sets `num_updates`, with `changes`
-    /// writer changes: its current version and bytes. The mirror is current.
+    /// writer changes: its current version and bytes.
     fn in_layout(root: &Path, num_updates: Option<u16>, changes: usize) -> Current {
         plant(root, &object_store_info(num_updates));
         converted(root);
@@ -1438,9 +1424,7 @@ mod tests {
         for _ in 0..changes {
             writer_change(root, page);
         }
-        let current = repo(root).read_latest().unwrap().unwrap();
-        plant(root, &current.bytes);
-        current
+        repo(root).read_latest().unwrap().unwrap()
     }
 
     /// Everything under the root, with the bytes of every file.
@@ -1464,7 +1448,7 @@ mod tests {
 
     /// The end state of a conversion to the object store layout of the version
     /// with `before` bytes: no `repo.d` and no `repo.d.tmp.*`, `$ROOT/repo`
-    /// that version without the feature and the gate, keeping its status,
+    /// that version without the feature, keeping its status,
     /// with one new `RepoStatusChangedUpdate` whose predecessor names a backup
     /// of `before`. Returns the bytes of `$ROOT/repo`.
     fn assert_object_store(root: &Path, before: &[u8]) -> Vec<u8> {
@@ -1476,8 +1460,7 @@ mod tests {
             repo_info_file::decode(before).unwrap(),
             repo_info_file::decode(&bytes).unwrap(),
         );
-        let stored = serde_json::to_value(after.raw_status().unwrap()).unwrap();
-        assert!(stored.get("underlying").is_none(), "{stored}");
+        assert_plain_status(&after, &before_info.status().unwrap());
         assert_eq!(after.status().unwrap(), before_info.status().unwrap());
         let entries: Vec<_> =
             after.latest_updates().unwrap().map(Result::unwrap).collect();
@@ -1512,27 +1495,22 @@ mod tests {
             Some(ConversionOutcome::Converted)
         );
         assert_object_store(root.path(), &bytes);
-        let mirror = fs::read(root.path().join("repo")).unwrap();
-        let attempt = layout_v1::change_info(&mirror).unwrap().attempt.unwrap().id;
+        let object_store_info = fs::read(root.path().join("repo")).unwrap();
+        let attempt =
+            layout_v1::change_info(&object_store_info).unwrap().attempt.unwrap().id;
         assert_eq!(Hash::of(&backup(root.path(), &attempt)), *version.hash());
         assert_eq!(backups(root.path()).len(), backups_before + 1);
         assert_eq!(
             hooks.reached(),
             [
-                to_step(ToObjectStoreStep::ForkCheck),
-                Point::BeforeMirrorRead,
+                to_step(ToObjectStoreStep::BeforeChange),
                 Point::Staged,
                 Point::Linked,
                 Point::BeforeRename,
                 Point::Renamed,
                 Point::BeforeTidyUp,
                 to_step(ToObjectStoreStep::Change),
-                Point::BeforePublish,
-                Point::MirrorStaged,
-                Point::BeforeMirrorRead,
-                Point::BeforeMirrorRename,
-                Point::MirrorRenamed,
-                to_step(ToObjectStoreStep::Publish),
+                to_step(ToObjectStoreStep::RepoWritten),
                 to_step(ToObjectStoreStep::RenameDir),
                 to_step(ToObjectStoreStep::DeleteDir),
             ]
@@ -1600,9 +1578,7 @@ mod tests {
     fn to_object_store_without_a_repository_in_the_layout() {
         let root = tempfile::tempdir().unwrap();
         assert_eq!(to_object_store(root.path(), &NoHooks).unwrap(), None);
-        plant(root.path(), &repo_info(1));
-        assert_eq!(to_object_store(root.path(), &NoHooks).unwrap(), None);
-        assert_eq!(names(root.path()), strings(["repo"]));
+        assert!(names(root.path()).is_empty());
 
         // A repository in the object store layout: only leftover tmp directories
         // are deleted.
@@ -1624,46 +1600,11 @@ mod tests {
             assert_eq!(fs::read(root.path().join("repo")).unwrap(), planted);
             err
         };
-        let err = refused(&changed_repo_info(1));
-        assert!(
-            matches!(&err, ProtocolError::Other(msg) if msg.contains("an orphan mirror")),
-            "{err:?}"
-        );
         let err = refused(UNDECODABLE);
         assert!(
             matches!(&err, ProtocolError::Other(msg) if msg.contains("can't be read or decoded and")),
             "{err:?}"
         );
-    }
-
-    #[test]
-    fn to_object_store_refuses_a_fork_or_an_unreadable_mirror_changing_nothing() {
-        for planted in [featureless_repo_info(9), Vec::new()] {
-            let root = tempfile::tempdir().unwrap();
-            in_layout(root.path(), None, 1);
-            plant(root.path(), &planted);
-            let before = tree(root.path());
-            let err = to_object_store(root.path(), &NoHooks).unwrap_err();
-            if planted.is_empty() {
-                assert!(matches!(err, ProtocolError::MirrorUnreadable(_)), "{err:?}");
-            } else {
-                assert!(matches!(err, ProtocolError::Forked(_)), "{err:?}");
-            }
-            assert_eq!(tree(root.path()), before);
-        }
-    }
-
-    /// The backup is the current version read from `repo.d`, never the
-    /// lagging mirror.
-    #[test]
-    fn to_object_store_backs_up_the_current_version_not_a_lagging_mirror() {
-        let root = tempfile::tempdir().unwrap();
-        let Current { bytes: lagging, .. } = in_layout(root.path(), None, 0);
-        writer_change(root.path(), DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE);
-        let Current { bytes, .. } = repo(root.path()).read_latest().unwrap().unwrap();
-        assert_eq!(fs::read(root.path().join("repo")).unwrap(), lagging);
-        assert_eq!(to_object_store_converted(root.path()), ConversionOutcome::Converted);
-        assert_object_store(root.path(), &bytes);
     }
 
     /// The listing the conversion read lagged behind a change: its own change
@@ -1676,7 +1617,7 @@ mod tests {
         let writer_root = root.path().to_path_buf();
         let changed = AtomicBool::new(false);
         let hooks = TestHooks::default().at(move |point| {
-            if point == to_step(ToObjectStoreStep::ForkCheck)
+            if point == to_step(ToObjectStoreStep::BeforeChange)
                 && !changed.swap(true, Ordering::SeqCst)
             {
                 writer_change(&writer_root, DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE);
@@ -1686,7 +1627,12 @@ mod tests {
             to_object_store(root.path(), &hooks).unwrap(),
             Some(ConversionOutcome::Converted)
         );
-        assert_eq!(fork_checks(&hooks), 2, "{:?}", hooks.reached());
+        let before_changes = hooks
+            .reached()
+            .iter()
+            .filter(|point| **point == to_step(ToObjectStoreStep::BeforeChange))
+            .count();
+        assert_eq!(before_changes, 2, "{:?}", hooks.reached());
         // The writer's change is in the converted version.
         let object_store_info = fs::read(root.path().join("repo")).unwrap();
         let entries: Vec<_> = repo_info_file::decode(&object_store_info)
@@ -1709,8 +1655,6 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         in_layout(root.path(), None, 0);
         let dir = root.path().join("repo.d");
-        let later = Arc::new(Mutex::new(None));
-        let recorded = Arc::clone(&later);
         let lost = AtomicBool::new(false);
         let hooks = TestHooks::default().rename(move |from, to| {
             fs::rename(from, to)?;
@@ -1723,7 +1667,6 @@ mod tests {
                 let next = marker.version.next(Hash::of(&bytes)).unwrap();
                 fs::write(dir.join(next.file_name()), &bytes).unwrap();
                 fs::rename(to, dir.join(latest(&next))).unwrap();
-                *recorded.lock().unwrap() = Some(bytes);
                 return Err(io::ErrorKind::NotFound.into());
             }
             Ok(())
@@ -1738,9 +1681,21 @@ mod tests {
             hooks.observed()
         );
         assert!(hooks.reached().contains(&to_step(ToObjectStoreStep::Change)));
-        // The publication moved on to the later version.
-        let later = later.lock().unwrap().clone().unwrap();
-        assert_eq!(fs::read(root.path().join("repo")).unwrap(), later);
+        let object_store_info = fs::read(root.path().join("repo")).unwrap();
+        assert!(!layout_v1::lists_feature(&object_store_info).unwrap());
+        // The conversion's own change, not the later version.
+        let newest = repo_info_file::decode(&object_store_info)
+            .unwrap()
+            .latest_updates()
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .0;
+        assert!(
+            matches!(newest, UpdateType::RepoStatusChangedUpdate { .. }),
+            "{newest:?}"
+        );
         assert!(!root.path().join("repo.d").exists());
         assert_eq!(tmp_dirs(root.path()), Vec::<String>::new());
     }
@@ -1769,9 +1724,9 @@ mod tests {
     }
 
     const TO_STEPS: [ToObjectStoreStep; 5] = [
-        ToObjectStoreStep::ForkCheck,
+        ToObjectStoreStep::BeforeChange,
         ToObjectStoreStep::Change,
-        ToObjectStoreStep::Publish,
+        ToObjectStoreStep::RepoWritten,
         ToObjectStoreStep::RenameDir,
         ToObjectStoreStep::DeleteDir,
     ];
@@ -1786,9 +1741,7 @@ mod tests {
         assert!(crashed.is_err(), "{step:?}: {crashed:?}");
     }
 
-    /// The same end state whatever step a crash interrupts, and between the
-    /// change and the end of the rerun, implementations of the layout refuse
-    /// to publish and to collect garbage.
+    /// The same end state whatever step a crash interrupts.
     #[test]
     fn a_crash_at_every_step_then_a_rerun_converts_to_object_store() {
         for step in TO_STEPS {
@@ -1797,22 +1750,14 @@ mod tests {
             let backups_before = backups(root.path()).len();
             crash_to_object_store_at(root.path(), step, TestHooks::default());
             let repo = repo(root.path());
-            let changed = step != ToObjectStoreStep::ForkCheck;
-            let published =
-                !matches!(step, ToObjectStoreStep::ForkCheck | ToObjectStoreStep::Change);
+            let changed = step != ToObjectStoreStep::BeforeChange;
+            let written = !matches!(
+                step,
+                ToObjectStoreStep::BeforeChange | ToObjectStoreStep::Change
+            );
             match repo.read_latest().unwrap() {
                 Some(Current { bytes: current, .. }) if changed => {
                     assert!(!layout_v1::lists_feature(&current).unwrap(), "{step:?}");
-                    let err = repo.publish_mirror().unwrap_err();
-                    assert!(
-                        matches!(err, ProtocolError::ConversionInProgress(_)),
-                        "{step:?}: {err:?}"
-                    );
-                    let err = repo.refuse_gc_without_change().unwrap_err();
-                    assert!(
-                        matches!(err, ProtocolError::ConversionInProgress(_)),
-                        "{step:?}: {err:?}"
-                    );
                 }
                 Some(Current { bytes: current, .. }) => assert_eq!(current, bytes),
                 None => assert!(
@@ -1823,8 +1768,8 @@ mod tests {
                     "{step:?}"
                 ),
             }
-            let mirror = fs::read(root.path().join("repo")).unwrap();
-            assert_eq!(mirror == bytes, !published, "{step:?}");
+            let repo_file = fs::read(root.path().join("repo")).ok();
+            assert_eq!(repo_file.is_some(), written, "{step:?}");
             assert_eq!(
                 tmp_dirs(root.path()).len(),
                 usize::from(step == ToObjectStoreStep::RenameDir),
@@ -1841,201 +1786,28 @@ mod tests {
             };
             assert_eq!(to_object_store_converted(root.path()), expected, "{step:?}");
             let object_store_info = assert_object_store(root.path(), &bytes);
-            if published {
-                assert_eq!(object_store_info, mirror, "{step:?}");
+            if let Some(repo_file) = repo_file {
+                assert_eq!(object_store_info, repo_file, "{step:?}");
             }
             // One change in all: the crashed run's, or the rerun's.
             assert_eq!(backups(root.path()).len(), backups_before + 1, "{step:?}");
         }
     }
 
-    /// A fork or an unreadable `$ROOT/repo` found by the publication after the
-    /// change landed: nothing is published, `repo.d` is kept, and the error
-    /// names the conversion to rerun; the rerun finishes once `$ROOT/repo` is
-    /// moved aside.
-    #[test]
-    fn a_fork_or_an_unreadable_mirror_after_the_change_names_the_rerun() {
-        for planted in [featureless_repo_info(9), Vec::new()] {
-            let root = tempfile::tempdir().unwrap();
-            let Current { bytes, .. } = in_layout(root.path(), None, 1);
-            let mirror = root.path().join("repo");
-            let (at_change, to_plant) = (mirror.clone(), planted.clone());
-            let hooks = TestHooks::default().at(move |point| {
-                if point == to_step(ToObjectStoreStep::Change) {
-                    fs::write(&at_change, &to_plant).unwrap();
-                }
-            });
-            let err = to_object_store(root.path(), &hooks).unwrap_err();
-            let detail = match (&err, planted.is_empty()) {
-                (ProtocolError::MirrorUnreadable(detail), true) => {
-                    assert!(detail.contains("readable or move it aside"), "{detail}");
-                    detail
-                }
-                (ProtocolError::Forked(detail), false) => {
-                    assert!(detail.contains("section on forks"), "{detail}");
-                    assert!(
-                        detail.contains("not convert_to_filesystem_layout()"),
-                        "{detail}"
-                    );
-                    detail
-                }
-                _ => panic!("{err:?}"),
-            };
-            assert!(detail.contains(TO_OBJECT_STORE_RERUN), "{detail}");
-            assert!(!hooks.reached().contains(&to_step(ToObjectStoreStep::Publish)));
-            assert_eq!(fs::read(&mirror).unwrap(), planted);
-            assert!(root.path().join("repo.d").exists());
-
-            fs::remove_file(&mirror).unwrap();
-            assert_eq!(
-                to_object_store_converted(root.path()),
-                ConversionOutcome::Converted
-            );
-            assert_object_store(root.path(), &bytes);
-        }
-    }
-
-    /// What a crash after the publication leaves: the current version without
-    /// the feature and its copy in `$ROOT/repo`. Returns the version before
-    /// the change, its bytes, and the version without the feature.
-    fn published_then_crashed(root: &Path) -> (Version, Vec<u8>, Version) {
-        let Current { bytes, version } = in_layout(root, None, 1);
-        crash_to_object_store_at(root, ToObjectStoreStep::Publish, TestHooks::default());
-        let featureless = repo(root).read_latest().unwrap().unwrap().version;
-        (version, bytes.to_vec(), featureless)
-    }
-
-    /// A listing of `repo.d` that still shows `before` as current, after the
-    /// change to `after`.
-    fn stale_view(root: &Path, before: &Version, bytes: &[u8], after: &Version) {
-        let dir = root.join("repo.d");
-        fs::write(dir.join(before.file_name()), bytes).unwrap();
-        fs::rename(dir.join(latest(after)), dir.join(latest(before))).unwrap();
-    }
-
-    fn fresh_view(root: &Path, before: &Version, after: &Version) {
-        let dir = root.join("repo.d");
-        fs::rename(dir.join(latest(before)), dir.join(latest(after))).unwrap();
-        fs::remove_file(dir.join(before.file_name())).unwrap();
-    }
-
-    fn fork_checks(hooks: &TestHooks) -> usize {
-        hooks
-            .reached()
-            .iter()
-            .filter(|point| **point == to_step(ToObjectStoreStep::ForkCheck))
-            .count()
-    }
-
-    /// A rerun whose listing shows the version before the earlier run's change,
-    /// while `$ROOT/repo` holds the published version without the feature:
-    /// the fork check finds it a copy of a newer version, and the rerun lists
-    /// again instead of reporting a fork.
-    #[test]
-    fn a_rerun_under_a_stale_listing_lists_again_and_finishes() {
-        let root = tempfile::tempdir().unwrap();
-        let (before, bytes, after) = published_then_crashed(root.path());
-        let published = fs::read(root.path().join("repo")).unwrap();
-        stale_view(root.path(), &before, &bytes, &after);
-        let backups_before = backups(root.path()).len();
-        let refresh_root = root.path().to_path_buf();
-        let (b, a) = (before.clone(), after.clone());
-        let refreshed = AtomicBool::new(false);
-        let hooks = TestHooks::default().at(move |point| {
-            if point == to_step(ToObjectStoreStep::ForkCheck)
-                && !refreshed.swap(true, Ordering::SeqCst)
-            {
-                fresh_view(&refresh_root, &b, &a);
-            }
-        });
-        assert_eq!(
-            to_object_store(root.path(), &hooks).unwrap(),
-            Some(ConversionOutcome::Converted)
-        );
-        assert_eq!(fork_checks(&hooks), 1);
-        assert!(!hooks.reached().contains(&to_step(ToObjectStoreStep::Change)));
-        assert_eq!(assert_object_store(root.path(), &bytes), published);
-        assert_eq!(backups(root.path()).len(), backups_before);
-    }
-
-    /// Every relisting stays stale: a retryable error, not a fork, and
-    /// nothing changed; a run with fresh listings finishes.
-    #[test]
-    fn a_listing_stale_through_every_relisting_fails_retryably() {
-        let root = tempfile::tempdir().unwrap();
-        let (before, bytes, after) = published_then_crashed(root.path());
-        stale_view(root.path(), &before, &bytes, &after);
-        let unchanged = tree(root.path());
-        let hooks = TestHooks::default();
-        let err = to_object_store(root.path(), &hooks).unwrap_err();
-        assert!(
-            matches!(&err, ProtocolError::Other(msg)
-                if msg.contains("run convert_to_object_store_layout() again")),
-            "{err:?}"
-        );
-        assert_eq!(fork_checks(&hooks), RELISTS + 1);
-        assert_eq!(tree(root.path()), unchanged);
-
-        fresh_view(root.path(), &before, &after);
-        assert_eq!(to_object_store_converted(root.path()), ConversionOutcome::Converted);
-        assert_object_store(root.path(), &bytes);
-    }
-
-    /// The fork check's own listing misses the version file too: a false
-    /// fork report, nothing changed; a run with fresh listings finishes.
-    #[test]
-    fn a_stale_fork_check_listing_reports_a_false_fork_and_changes_nothing() {
-        let root = tempfile::tempdir().unwrap();
-        let (before, bytes, after) = published_then_crashed(root.path());
-        stale_view(root.path(), &before, &bytes, &after);
-        let (file, hidden) = (
-            root.path().join("repo.d").join(after.file_name()),
-            root.path().join("hidden"),
-        );
-        fs::rename(&file, &hidden).unwrap();
-        let unchanged = tree(root.path());
-        let err = to_object_store(root.path(), &NoHooks).unwrap_err();
-        assert!(matches!(err, ProtocolError::Forked(_)), "{err:?}");
-        assert_eq!(tree(root.path()), unchanged);
-
-        fs::rename(&hidden, &file).unwrap();
-        fresh_view(root.path(), &before, &after);
-        assert_eq!(to_object_store_converted(root.path()), ConversionOutcome::Converted);
-        assert_object_store(root.path(), &bytes);
-    }
-
-    /// `publish_mirror()` between the interrupted run and its rerun, from a
-    /// listing that shows the version before the change, adopts the newer
-    /// version in place.
-    #[test]
-    fn publish_mirror_under_a_stale_listing_keeps_the_published_version() {
-        let root = tempfile::tempdir().unwrap();
-        let (before, bytes, after) = published_then_crashed(root.path());
-        let published = fs::read(root.path().join("repo")).unwrap();
-        stale_view(root.path(), &before, &bytes, &after);
-        assert_eq!(
-            repo(root.path()).publish_mirror().unwrap(),
-            Some(PublishOutcome::Current)
-        );
-        assert_eq!(fs::read(root.path().join("repo")).unwrap(), published);
-
-        fresh_view(root.path(), &before, &after);
-        assert_eq!(to_object_store_converted(root.path()), ConversionOutcome::Converted);
-        assert_eq!(assert_object_store(root.path(), &bytes), published);
-    }
-
     /// A conversion from the object store layout interrupted after its
-    /// directory rename: the original `$ROOT/repo` is no version of `repo.d`,
-    /// so the conversion to the object store layout stops before changing
-    /// anything.
+    /// directory rename leaves `$ROOT/repo` next to `repo.d`: the conversion
+    /// to the object store layout stops before changing anything.
     #[test]
-    fn to_object_store_during_an_interrupted_conversion_from_object_store_is_a_fork() {
+    fn to_object_store_during_an_interrupted_conversion_from_object_store_is_refused() {
         let root = tempfile::tempdir().unwrap();
         plant(root.path(), &object_store_info(None));
         crash_at(root.path(), FromObjectStoreStep::RenameDir);
         let unchanged = tree(root.path());
         let err = to_object_store(root.path(), &NoHooks).unwrap_err();
-        assert!(matches!(err, ProtocolError::Forked(_)), "{err:?}");
+        assert!(
+            matches!(&err, ProtocolError::Other(msg) if msg.contains("convert_to_filesystem_layout()")),
+            "{err:?}"
+        );
         assert_eq!(tree(root.path()), unchanged);
 
         assert_eq!(converted(root.path()), ConversionOutcome::Converted);
@@ -2044,8 +1816,153 @@ mod tests {
         assert_object_store(root.path(), &bytes);
     }
 
+    /// Whatever `$ROOT/repo` holds next to a `repo.d` that lists the feature,
+    /// the first run changes nothing.
+    #[test]
+    fn to_object_store_refuses_a_repo_file_next_to_repo_d() {
+        for planted in [Some(object_store_info(None)), None] {
+            let root = tempfile::tempdir().unwrap();
+            let Current { bytes, .. } = in_layout(root.path(), None, 1);
+            let planted = planted.unwrap_or_else(|| bytes.to_vec());
+            plant(root.path(), &planted);
+            let before = tree(root.path());
+            let hooks = TestHooks::default();
+            let err = to_object_store(root.path(), &hooks).unwrap_err();
+            assert!(
+                matches!(&err, ProtocolError::Other(msg)
+                    if msg.contains("convert_to_filesystem_layout()")
+                        && msg.contains(&root.path().join("repo").display().to_string())),
+                "{err:?}"
+            );
+            assert!(!hooks.reached().contains(&Point::Staged));
+            assert_eq!(tree(root.path()), before);
+        }
+    }
+
+    /// A crash after the conversion wrote `$ROOT/repo`, then something else
+    /// replaced it: the rerun keeps it as it is and deletes `repo.d`.
+    #[test]
+    fn a_rerun_keeps_an_existing_repo_file() {
+        let root = tempfile::tempdir().unwrap();
+        in_layout(root.path(), None, 1);
+        crash_to_object_store_at(
+            root.path(),
+            ToObjectStoreStep::RepoWritten,
+            TestHooks::default(),
+        );
+        let foreign = featureless_repo_info(9);
+        plant(root.path(), &foreign);
+        assert_eq!(to_object_store_converted(root.path()), ConversionOutcome::Converted);
+        assert_eq!(fs::read(root.path().join("repo")).unwrap(), foreign);
+        assert!(!root.path().join("repo.d").exists());
+        assert_eq!(tmp_dirs(root.path()), Vec::<String>::new());
+    }
+
+    /// A crash after the conversion wrote `$ROOT/repo`, then something
+    /// replaced it with anything but a repo info without the feature: the
+    /// rerun leaves it and `repo.d` for manual recovery, and finishes once it
+    /// is moved aside.
+    #[test]
+    fn a_rerun_refuses_a_repo_file_that_is_no_object_store_repo_info() {
+        enum Planted {
+            Bytes(Vec<u8>),
+            Dir,
+        }
+        for planted in [
+            Planted::Bytes(UNDECODABLE.to_vec()),
+            Planted::Bytes(Vec::new()),
+            Planted::Bytes(repo_info(9)),
+            Planted::Dir,
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let Current { bytes, .. } = in_layout(root.path(), None, 1);
+            crash_to_object_store_at(
+                root.path(),
+                ToObjectStoreStep::RepoWritten,
+                TestHooks::default(),
+            );
+            let repo_file = root.path().join("repo");
+            fs::remove_file(&repo_file).unwrap();
+            match &planted {
+                Planted::Bytes(planted) => plant(root.path(), planted),
+                Planted::Dir => fs::create_dir_all(&repo_file).unwrap(),
+            }
+            let before = tree(root.path());
+            let err = to_object_store(root.path(), &NoHooks).unwrap_err();
+            assert!(
+                matches!(&err, ProtocolError::Other(msg)
+                    if msg.contains("needs manual recovery")
+                        && msg.contains(&repo_file.display().to_string())),
+                "{err:?}"
+            );
+            assert_eq!(tree(root.path()), before);
+            assert!(root.path().join("repo.d").exists());
+
+            match planted {
+                Planted::Bytes(_) => fs::remove_file(&repo_file).unwrap(),
+                Planted::Dir => fs::remove_dir(&repo_file).unwrap(),
+            }
+            assert_eq!(
+                to_object_store_converted(root.path()),
+                ConversionOutcome::Converted
+            );
+            assert_object_store(root.path(), &bytes);
+        }
+    }
+
+    /// The first run's link of `$ROOT/repo` landed and its reply was lost:
+    /// the file holds this run's bytes, and the conversion completes.
+    #[test]
+    fn a_lost_reply_of_the_first_runs_link_is_ours() {
+        let root = tempfile::tempdir().unwrap();
+        let Current { bytes, .. } = in_layout(root.path(), None, 1);
+        let lost = AtomicBool::new(false);
+        let hooks = TestHooks::default().link(move |from, to| {
+            fs::hard_link(from, to)?;
+            if to.file_name().is_some_and(|n| n == "repo")
+                && !lost.swap(true, Ordering::SeqCst)
+            {
+                Err(io::ErrorKind::AlreadyExists.into())
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(
+            to_object_store(root.path(), &hooks).unwrap(),
+            Some(ConversionOutcome::Converted)
+        );
+        assert!(hooks.reached().contains(&to_step(ToObjectStoreStep::RepoWritten)));
+        assert_object_store(root.path(), &bytes);
+    }
+
+    /// `$ROOT/repo` appears after the first run checked its absence: the
+    /// exclusive write fails and `repo.d` stays.
+    #[test]
+    fn a_first_run_whose_repo_file_appears_after_the_check_fails() {
+        let root = tempfile::tempdir().unwrap();
+        in_layout(root.path(), None, 1);
+        let repo_file = root.path().join("repo");
+        let foreign = featureless_repo_info(9);
+        let (at_change, to_plant) = (repo_file.clone(), foreign.clone());
+        let hooks = TestHooks::default().at(move |point| {
+            if point == to_step(ToObjectStoreStep::Change) {
+                fs::write(&at_change, &to_plant).unwrap();
+            }
+        });
+        let err = to_object_store(root.path(), &hooks).unwrap_err();
+        assert!(
+            matches!(&err, ProtocolError::Other(msg)
+                if msg.contains(&repo_file.display().to_string())
+                    && msg.contains("deletes")),
+            "{err:?}"
+        );
+        assert!(!hooks.reached().contains(&to_step(ToObjectStoreStep::RepoWritten)));
+        assert_eq!(fs::read(&repo_file).unwrap(), foreign);
+        assert!(root.path().join("repo.d").exists());
+    }
+
     /// A change lands after the version the conversion read: without its own
-    /// change, the conversion publishes the stale version, and the
+    /// change, the conversion writes the stale version, and the
     /// acknowledged change is lost.
     #[test]
     fn sabotage_to_object_store_without_change_loses_an_acknowledged_change() {
@@ -2056,7 +1973,7 @@ mod tests {
         let hooks = TestHooks::default()
             .sabotage(Sabotage::ToObjectStoreWithoutChange)
             .at(move |point| {
-                if point == to_step(ToObjectStoreStep::ForkCheck)
+                if point == to_step(ToObjectStoreStep::BeforeChange)
                     && !changed.swap(true, Ordering::SeqCst)
                 {
                     writer_change(&writer_root, DEFAULT_NUM_UPDATES_PER_REPO_INFO_FILE);
@@ -2083,22 +2000,17 @@ mod tests {
         );
     }
 
-    /// `repo.d` deleted before the publication, then a crash: the older
-    /// mirror with the feature and no `repo.d`, an orphan mirror; the
-    /// conversion's change is lost.
+    /// `repo.d` deleted before `$ROOT/repo` is written, then a crash: neither
+    /// is left, and the repository is lost.
     #[test]
-    fn sabotage_delete_dir_before_publish_leaves_an_orphan_mirror() {
+    fn sabotage_delete_dir_before_repo_write_loses_the_repository() {
         let root = tempfile::tempdir().unwrap();
-        let Current { bytes, .. } = in_layout(root.path(), None, 1);
-        let hooks = TestHooks::default().sabotage(Sabotage::DeleteDirBeforePublish);
+        in_layout(root.path(), None, 1);
+        let hooks = TestHooks::default().sabotage(Sabotage::DeleteDirBeforeRepoWrite);
         crash_to_object_store_at(root.path(), ToObjectStoreStep::DeleteDir, hooks);
         assert!(!root.path().join("repo.d").exists());
-        assert_eq!(fs::read(root.path().join("repo")).unwrap(), bytes);
-        assert_eq!(repo(root.path()).open_status().unwrap(), OpenStatus::OrphanMirror);
-        let err = to_object_store(root.path(), &NoHooks).unwrap_err();
-        assert!(
-            matches!(&err, ProtocolError::Other(msg) if msg.contains("an orphan mirror")),
-            "{err:?}"
-        );
+        assert!(!root.path().join("repo").exists());
+        assert_eq!(repo(root.path()).open_status().unwrap(), OpenStatus::NotFound);
+        assert_eq!(to_object_store(root.path(), &NoHooks).unwrap(), None);
     }
 }

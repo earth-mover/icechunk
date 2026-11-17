@@ -168,10 +168,6 @@ pub(crate) mod codes {
         TAG_ERROR => "tag-error",
         INVALID_REPOSITORY_MIGRATION => "invalid-repository-migration",
         LAYOUT_CONVERSION_IN_PROGRESS => "layout-conversion-in-progress",
-        // forks
-        REPOSITORY_FORKED => "repository-forked",
-        UPDATE_DURABLE_BUT_REPOSITORY_FORKED => "update-durable-but-repository-forked",
-        COMMIT_DURABLE_BUT_REPOSITORY_FORKED => "commit-durable-but-repository-forked",
         // storage / environment
         OBJECT_NOT_FOUND => "object-not-found",
         OBJECT_STORE => "object-store",
@@ -185,7 +181,6 @@ pub(crate) mod codes {
         VIRTUAL_CHUNK_FETCH => "virtual-chunk-fetch",
         VIRTUAL_CHUNK_MODIFIED => "virtual-chunk-modified",
         INVALID_OBJECT_SIZE => "invalid-object-size",
-        MIRROR_UNREADABLE => "mirror-unreadable",
         // format
         SERIALIZATION => "serialization",
         DESERIALIZATION => "deserialization",
@@ -216,9 +211,6 @@ enum Classified {
     RebaseFailed {
         snapshot: String,
         conflicts: Vec<PyConflict>,
-    },
-    CommitDurableButRepositoryForked {
-        snapshot_id: String,
     },
     /// `class` names a class in `icechunk._exceptions`; `None` is the
     /// Rust-defined `IcechunkError` root.
@@ -300,11 +292,6 @@ fn classify_session(kind: &SessionErrorKind) -> Classified {
         },
         K::MissingPrunedAncestorTxLog { .. } => {
             class("SessionStateError", codes::REBASE_TX_LOG_PRUNED)
-        }
-        K::CommitDurableButRepositoryForked { snapshot, .. } => {
-            Classified::CommitDurableButRepositoryForked {
-                snapshot_id: snapshot.to_string(),
-            }
         }
         K::JsonSerializationError(_) | K::SerializationError(_) => {
             class("FormatError", codes::SERIALIZATION)
@@ -423,14 +410,6 @@ fn classify_storage(kind: &StorageErrorKind) -> Classified {
         K::LayoutConversionInProgress(_) => {
             class("SessionStateError", codes::LAYOUT_CONVERSION_IN_PROGRESS)
         }
-        K::RepositoryForked(_) => {
-            class("RepositoryForkedError", codes::REPOSITORY_FORKED)
-        }
-        K::RepositoryForkedAfterUpdate { .. } => class(
-            "UpdateDurableButRepositoryForkedError",
-            codes::UPDATE_DURABLE_BUT_REPOSITORY_FORKED,
-        ),
-        K::MirrorUnreadable(_) => class("StorageError", codes::MIRROR_UNREADABLE),
         K::MissingWriterFeatures { .. } => {
             class("ReadOnlyError", codes::MISSING_WRITER_FEATURES)
         }
@@ -721,9 +700,6 @@ fn build_pyerr(
         Classified::RebaseFailed { snapshot, conflicts } => {
             py.get_type::<PyRebaseFailedError>().call1((snapshot, conflicts))?
         }
-        Classified::CommitDurableButRepositoryForked { snapshot_id } => py
-            .get_type::<PyCommitDurableButRepositoryForkedError>()
-            .call1((message, snapshot_id))?,
         Classified::Class { class: None, code } => {
             py.get_type::<IcechunkError>().call1((message, Some(code)))?
         }
@@ -958,81 +934,3 @@ impl PyRebaseFailedError {
 }
 
 impl_pickle!(PyRebaseFailedError);
-
-/// The repository is forked: something that doesn't implement the filesystem
-/// layout overwrote its `repo` file, so `repo` and `repo.d` hold diverging
-/// histories.
-#[pyclass(
-    extends=IcechunkError,
-    subclass,
-    name = "RepositoryForkedError",
-    module = "icechunk"
-)]
-pub(crate) struct PyRepositoryForkedError {}
-
-#[pymethods]
-impl PyRepositoryForkedError {
-    #[new]
-    #[pyo3(signature = (message, kind = None))]
-    pub(crate) fn new(message: String, kind: Option<String>) -> PyClassInitializer<Self> {
-        let kind = kind.unwrap_or_else(|| codes::REPOSITORY_FORKED.to_string());
-        PyClassInitializer::from(IcechunkError { message, kind }).add_subclass(Self {})
-    }
-}
-
-/// A change landed and is durable, but the repository is forked.
-#[pyclass(
-    extends=PyRepositoryForkedError,
-    subclass,
-    name = "UpdateDurableButRepositoryForkedError",
-    module = "icechunk"
-)]
-pub(crate) struct PyUpdateDurableButRepositoryForkedError {}
-
-#[pymethods]
-impl PyUpdateDurableButRepositoryForkedError {
-    #[new]
-    #[pyo3(signature = (message, kind = None))]
-    pub(crate) fn new(message: String, kind: Option<String>) -> PyClassInitializer<Self> {
-        let kind = kind
-            .unwrap_or_else(|| codes::UPDATE_DURABLE_BUT_REPOSITORY_FORKED.to_string());
-        PyRepositoryForkedError::new(message, Some(kind)).add_subclass(Self {})
-    }
-}
-
-#[pyclass(
-    extends=PyUpdateDurableButRepositoryForkedError,
-    name = "CommitDurableButRepositoryForkedError",
-    module = "icechunk"
-)]
-pub(crate) struct PyCommitDurableButRepositoryForkedError {
-    #[pyo3(get)]
-    snapshot_id: String,
-}
-
-#[pymethods]
-impl PyCommitDurableButRepositoryForkedError {
-    #[new]
-    #[pyo3(signature = (message, snapshot_id, kind = None))]
-    pub(crate) fn new(
-        message: String,
-        snapshot_id: String,
-        kind: Option<String>,
-    ) -> PyClassInitializer<Self> {
-        let kind = kind
-            .unwrap_or_else(|| codes::COMMIT_DURABLE_BUT_REPOSITORY_FORKED.to_string());
-        PyUpdateDurableButRepositoryForkedError::new(message, Some(kind))
-            .add_subclass(Self { snapshot_id })
-    }
-
-    // Control pickling to work with tblib
-    fn __reduce__(slf: &Bound<'_, Self>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
-        let py = slf.py();
-        let cls = slf.get_type().into_py_any(py)?;
-        let this = slf.borrow();
-        let base = this.as_super().as_super().as_super();
-        let args = (base.message.clone(), this.snapshot_id.clone(), base.kind.clone())
-            .into_py_any(py)?;
-        Ok((cls, args))
-    }
-}

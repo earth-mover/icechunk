@@ -83,10 +83,6 @@ impl RunRoot {
         self.logs_dir().join(format!("{tag}.{SUPERVISOR_SLOT}.log"))
     }
 
-    pub fn sampler_log(&self, tag: &str) -> PathBuf {
-        self.logs_dir().join(format!("{tag}.{SAMPLER_SLOT}.log"))
-    }
-
     /// The stderr of the host `tag`'s workers: their warnings and panics.
     pub fn workers_stderr(&self, tag: &str) -> PathBuf {
         self.root.join("stderr").join(format!("{tag}.txt"))
@@ -215,9 +211,6 @@ impl ScenarioRoot {
 /// The slot name of a supervisor log; no worker slot may use it.
 pub const SUPERVISOR_SLOT: &str = "supervisor";
 
-/// The slot of a supervisor's mirror sampler log; no worker slot may use it.
-pub const SAMPLER_SLOT: &str = "sampler";
-
 /// Reserved for `verify`'s own writes; no supervisor may use it.
 pub const VERIFY_TAG: &str = "verify";
 
@@ -226,8 +219,8 @@ pub const VERIFY_TAG: &str = "verify";
 pub const INIT_TAG: &str = "init";
 
 /// Reserved for the conversion scenario's own logs in a phase: its
-/// converters, its writers in the object store layout and during an
-/// interrupted conversion, and its planted object-store-layout write.
+/// converters and its writers in the object store layout and during an
+/// interrupted conversion.
 pub const SCENARIO_TAG: &str = "scenario";
 
 /// Host tags are `[A-Za-z0-9._-]+`.
@@ -235,12 +228,10 @@ pub fn is_valid_tag(tag: &str) -> bool {
     !tag.is_empty() && tag.chars().all(is_tag_char)
 }
 
-/// Slots are tag characters without `.`, and never [`SUPERVISOR_SLOT`] or
-/// [`SAMPLER_SLOT`].
+/// Slots are tag characters without `.`, and never [`SUPERVISOR_SLOT`].
 pub fn is_valid_slot(slot: &str) -> bool {
     !slot.is_empty()
         && slot != SUPERVISOR_SLOT
-        && slot != SAMPLER_SLOT
         && slot.chars().all(|c| c != '.' && is_tag_char(c))
 }
 

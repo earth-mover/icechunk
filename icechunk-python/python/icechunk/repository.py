@@ -2442,10 +2442,8 @@ class Repository:
             Keys: ``header``, ``spec_version``, ``branches``, ``tags``,
             ``deleted_tags``, ``snapshots``, ``metadata``, ``latest_updates``,
             ``status`` and, when present, ``repo_before_updates`` and
-            ``writer_features``. ``status`` is the status as stored: for a
-            repository with writer features, the read-only status that
-            Icechunk versions which don't implement them read, with the
-            repository's own status under ``underlying``.
+            ``writer_features``. ``status`` is the status as stored,
+            including availability values this library never writes.
 
             Every ``inspect_*`` method reports a ``header`` describing the
             binary header of the file it read. Keys: ``written_by`` (the
@@ -2475,10 +2473,8 @@ class Repository:
             Keys: ``header``, ``spec_version``, ``branches``, ``tags``,
             ``deleted_tags``, ``snapshots``, ``metadata``, ``latest_updates``,
             ``status`` and, when present, ``repo_before_updates`` and
-            ``writer_features``. ``status`` is the status as stored: for a
-            repository with writer features, the read-only status that
-            Icechunk versions which don't implement them read, with the
-            repository's own status under ``underlying``.
+            ``writer_features``. ``status`` is the status as stored,
+            including availability values this library never writes.
 
             Every ``inspect_*`` method reports a ``header`` describing the
             binary header of the file it read. Keys: ``written_by`` (the

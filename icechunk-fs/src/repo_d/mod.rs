@@ -5,22 +5,19 @@
 pub(crate) mod commit;
 pub(crate) mod convert;
 pub(crate) mod lifecycle;
-pub(crate) mod mirror;
 pub(crate) mod read;
 pub(crate) mod sweep;
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, HashMap},
     fs, io, iter,
     path::{Path, PathBuf},
+    sync::{Arc, LazyLock, Mutex, PoisonError},
     thread,
     time::Duration,
 };
 
-use icechunk_format::{
-    layout_v1,
-    writer_features::{FeatureName, MinVersion},
-};
+use icechunk_format::writer_features::{FeatureName, MinVersion};
 use uuid::Uuid;
 
 use crate::{
@@ -48,16 +45,6 @@ pub(crate) enum ProtocolError {
     NoConsistentView(String),
     /// A version file whose bytes don't hash to its name, or don't decode.
     Corrupt(String),
-    /// The fork check found a fork; what it found.
-    Forked(String),
-    /// A change landed as `new`, and its publication found a fork; what it
-    /// found.
-    ForkedAfterUpdate {
-        new: Version,
-        detail: String,
-    },
-    /// `$ROOT/repo` couldn't be read or decoded, so a fork can't be ruled out.
-    MirrorUnreadable(String),
     /// The current version doesn't list `filesystem-layout-v1`: a conversion
     /// to the object store layout was interrupted.
     ConversionInProgress(String),
@@ -67,40 +54,14 @@ pub(crate) enum ProtocolError {
 }
 
 impl ProtocolError {
-    /// Appends `suffix` to the message of a fork or an unreadable mirror:
-    /// what that means for the operation that found it.
-    pub(crate) fn context(self, suffix: &str) -> Self {
-        match self {
-            Self::Forked(msg) => Self::Forked(msg + suffix),
-            Self::MirrorUnreadable(msg) => Self::MirrorUnreadable(msg + suffix),
-            err => err,
-        }
-    }
-
-    /// `$ROOT/repo` doesn't list `filesystem-layout-v1` and `repo.d` doesn't
-    /// exist: a repository in the object store layout, to convert.
+    /// `$ROOT/repo` holds a repo info and `repo.d` doesn't exist: a repository
+    /// in the object store layout, to convert.
     pub(crate) fn object_store_layout(root: &Path) -> Self {
         let root = root.display();
         Self::Other(format!(
-            "the repository in {root} is in the object store layout: {root}/repo doesn't \
-             list the writer feature {feature} and {root}/repo.d doesn't exist. Stop \
-             every writer, then run convert_to_filesystem_layout() once",
-            feature = layout_v1::FEATURE
-        ))
-    }
-
-    /// `$ROOT/repo` lists `filesystem-layout-v1` with a longer history than a
-    /// creation's and `repo.d` doesn't exist.
-    pub(crate) fn orphan_mirror(root: &Path) -> Self {
-        let root = root.display();
-        Self::Other(format!(
-            "{root}/repo lists the writer feature {feature} but {root}/repo.d doesn't \
-             exist: an orphan mirror, repo.d was deleted or not copied. Restore repo.d \
-             if a copy exists. Otherwise create repo.d/ holding <N>.<h> with the bytes \
-             of {root}/repo, where N is the current Unix time in milliseconds and h \
-             their SHA-256, and an empty latest.<K>.<N>.<h>, K = 999999999999999 - N in \
-             15 digits; changes after the version the mirror holds are lost",
-            feature = layout_v1::FEATURE
+            "the repository in {root} is in the object store layout: {root}/repo exists \
+             and {root}/repo.d doesn't. Stop every writer, then run \
+             convert_to_filesystem_layout() once"
         ))
     }
 
@@ -153,9 +114,7 @@ impl RepoD<'_> {
                     .into_iter()
                     .filter_map(|name| match name {
                         RepoDName::Marker(marker) => Some(marker),
-                        RepoDName::Content(_)
-                        | RepoDName::Stage(_)
-                        | RepoDName::Mirror(_) => None,
+                        RepoDName::Content(_) | RepoDName::Stage(_) => None,
                     })
                     .collect(),
             )
@@ -276,6 +235,25 @@ fn remove_stage(stage: &Path) {
     }
 }
 
+/// A file replaced or deleted under an NFS reader.
+fn is_stale(err: &io::Error) -> bool {
+    err.raw_os_error() == Some(libc::ESTALE)
+}
+
+/// Runs `f` holding the lock this process takes around its reads, links and
+/// unlinks of `$ROOT/repo`: unlinking a file that is open on the same NFS
+/// client becomes a silly rename.
+pub(super) fn with_root_lock<T>(root: &Path, f: impl FnOnce() -> T) -> T {
+    static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
+        LazyLock::new(Default::default);
+    let key = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let lock = Arc::clone(
+        LOCKS.lock().unwrap_or_else(PoisonError::into_inner).entry(key).or_default(),
+    );
+    let _held = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    f()
+}
+
 /// Deletes the creation directory `tmp` in `root`, unless it has become
 /// `repo.d`. It is first renamed to a fresh name: that fails on the server if
 /// `tmp` is gone, whereas a deletion through `tmp` could follow a cached
@@ -292,11 +270,10 @@ pub(super) mod testing {
 
     use std::{
         collections::{BTreeSet, HashSet},
-        fmt::{self, Write as _},
-        fs, io,
+        fmt, fs, io,
         path::Path,
         sync::{
-            Arc, Mutex,
+            Mutex,
             atomic::{AtomicBool, Ordering},
             mpsc,
         },
@@ -304,15 +281,9 @@ pub(super) mod testing {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use tracing::{
-        Event, Level, Metadata, Subscriber,
-        field::{Field, Visit},
-        span,
-    };
-
     use super::{RepoD, lifecycle::CreateOutcome::Created};
     pub(crate) use crate::repo_infos::{
-        changed_repo_info, committed_repo_info, featureless_repo_info, repo_info,
+        committed_repo_info, featureless_repo_info, repo_info,
     };
     use crate::{
         hooks::{Observed, Point, ProtocolHooks, Sabotage},
@@ -523,42 +494,6 @@ pub(super) mod testing {
         pub(crate) fn observed(&self) -> Vec<Observed> {
             self.observed.lock().unwrap().clone()
         }
-    }
-
-    /// The fields of the events at `level` logged while `f` runs on this
-    /// thread.
-    pub(crate) fn logged<T>(level: Level, f: impl FnOnce() -> T) -> (T, Vec<String>) {
-        #[derive(Clone)]
-        struct Collector(Level, Arc<Mutex<Vec<String>>>);
-        struct Fields(String);
-        impl Visit for Fields {
-            fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-                write!(self.0, "{}={value:?} ", field.name()).unwrap();
-            }
-        }
-        impl Subscriber for Collector {
-            fn enabled(&self, _: &Metadata<'_>) -> bool {
-                true
-            }
-            fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
-                span::Id::from_u64(1)
-            }
-            fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
-            fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
-            fn event(&self, event: &Event<'_>) {
-                if *event.metadata().level() == self.0 {
-                    let mut fields = Fields(String::new());
-                    event.record(&mut fields);
-                    self.1.lock().unwrap().push(fields.0);
-                }
-            }
-            fn enter(&self, _: &span::Id) {}
-            fn exit(&self, _: &span::Id) {}
-        }
-        let collector = Collector(level, Arc::default());
-        let result = tracing::subscriber::with_default(collector.clone(), f);
-        let events = collector.1.lock().unwrap().clone();
-        (result, events)
     }
 
     /// Runs `writer` with `hooks` on its own thread, pauses it at `pause`,

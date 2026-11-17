@@ -46,11 +46,10 @@ pub use icechunk_storage::s3_config::{
     S3StaticCredentials,
 };
 use icechunk_storage::{
-    DeleteObjectsResult, GcPhase, GetModifiedResult, ListInfo, PutCondition,
-    RepositoryCreation, Settings, Storage, StorageContext, StorageError,
-    StorageErrorKind, StorageInfo, StorageResult, StorageWriterFeatures, Timeout,
-    VersionInfo, VersionedUpdateResult, WriteHint, obj_not_found_res, obj_store_error,
-    obj_store_error_res, other_error,
+    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
+    Settings, Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo,
+    StorageResult, StorageWriterFeatures, Timeout, VersionInfo, VersionedUpdateResult,
+    WriteHint, obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -1206,14 +1205,6 @@ impl Storage for S3Storage {
 
     async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
         Ok(StorageWriterFeatures::new())
-    }
-
-    async fn gc_hook(
-        &self,
-        _ctx: &StorageContext<'_>,
-        _phase: GcPhase<'_>,
-    ) -> StorageResult<()> {
-        Ok(())
     }
 
     async fn create_location_if_needed(&self) -> StorageResult<()> {
