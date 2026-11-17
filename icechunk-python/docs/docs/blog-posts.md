@@ -9,6 +9,24 @@ A curated list of blog posts about Icechunk.
 
 <div class="grid cards" markdown>
 
+-   [![Fundamentals: What is zero-copy ingest?](https://earthmover.io/images/blog/covers/zero-copy-ingest.png){ loading=lazy }](https://www.earthmover.io/blog/zero-copy-ingest)
+
+    **[Fundamentals: What is zero-copy ingest?](https://www.earthmover.io/blog/zero-copy-ingest)**
+
+    *November 5, 2026* — Read data in HDF5, TIFF, or ND2 as Zarr without converting it, using virtual chunks in Icechunk.
+
+-   [![Having it all: virtual and materialized data products](https://earthmover.io/images/blog/covers/virtual-and-materialized-data-products.gif){ loading=lazy }](https://www.earthmover.io/blog/virtual-and-materialized-data-products)
+
+    **[Having it all: virtual and materialized data products](https://www.earthmover.io/blog/virtual-and-materialized-data-products)**
+
+    *July 21, 2026* — A guest post from dynamical.org on combining virtual Icechunk Zarrs with materialized products for low-latency weather data.
+
+-   [![Virtual chunks that just work — but securely](https://earthmover.io/images/blog/covers/arraylake-club-bouncer.jpg){ loading=lazy }](https://www.earthmover.io/blog/secure-virtual-chunks)
+
+    **[Virtual chunks that just work — but securely](https://www.earthmover.io/blog/secure-virtual-chunks)**
+
+    *June 10, 2026* — The design behind access control for virtual chunks, and why open-source Icechunk requires explicit authorization.
+
 -   [![Icechunk Adopted by the National Weather Service](https://earthmover.io/images/blog/covers/icechunk-at-nws-cirrus.jpg){ loading=lazy }](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)
 
     **[Icechunk Adopted by the National Weather Service: Earthmover Joins Booz Allen on NWS CIRRUS](https://www.earthmover.io/blog/icechunk-at-nws-cirrus)**
@@ -75,6 +93,12 @@ A curated list of blog posts about Icechunk.
 
     *December 2, 2025* — Preview of Icechunk 2 features and the migration path from 1.x.
 
+-   [![I/O-Maxing Tensors in the Cloud](https://earthmover.io/images/blog/covers/i-o-maxing-tensors-in-the-cloud.png){ loading=lazy }](https://www.earthmover.io/blog/i-o-maxing-tensors-in-the-cloud)
+
+    **[I/O-Maxing Tensors in the Cloud](https://www.earthmover.io/blog/i-o-maxing-tensors-in-the-cloud)**
+
+    *November 25, 2025* — Zarr Python with Icechunk saturates the EC2–S3 network; benchmarks across chunk sizes and Zarr stacks.
+
 -   [![Zarr Everywhere](https://developmentseed.org/static/a169ba6827b60c16d7853b7eb03e00ac/00db2/zarr%20blog%20cover.png){ loading=lazy }](https://developmentseed.org/blog/2025-10-13-zarr/)
 
     **[Zarr Everywhere](https://developmentseed.org/blog/2025-10-13-zarr/)**
@@ -128,6 +152,12 @@ A curated list of blog posts about Icechunk.
     **[Solving NASA's Cloud Data Dilemma: How Icechunk Revolutionizes Earth Data Access](https://www.earthmover.io/blog/nasa-icechunk)**
 
     *March 27, 2025* — Case study on the Earthmover and Development Seed NASA pilot, enabling 100x faster cloud-native access to archival Earth science datasets without costly data migration.
+
+-   [![Accelerating Xarray with Zarr-Python 3](https://earthmover.io/images/blog/covers/xarray-open-zarr-improvements.svg){ loading=lazy }](https://www.earthmover.io/blog/xarray-open-zarr-improvements)
+
+    **[Accelerating Xarray with Zarr-Python 3](https://www.earthmover.io/blog/xarray-open-zarr-improvements)**
+
+    *February 20, 2025* — Zarr-Python 3 performance work that makes loading large, deeply nested datasets like ARCO ERA5 up to 14x faster.
 
 </div>
 
