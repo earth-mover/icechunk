@@ -56,6 +56,16 @@ pub enum StorageErrorKind {
     /// The store asked us to slow down (S3 `SlowDown` / HTTP 503 / 429). Retry with backoff.
     #[error("storage throttled the request: {code}: {message}")]
     Throttled { code: String, message: String },
+    /// The storage host could not be reached, or something other than the storage
+    /// service answered (typically a firewall or proxy).
+    #[error("{}", unreachable_message(host, failure))]
+    Unreachable {
+        // Boxed to keep `StorageError` under clippy's `result_large_err` threshold.
+        host: Box<str>,
+        failure: Box<NetworkFailure>,
+        #[source]
+        cause: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     #[error("storage error: {0}")]
     Other(String),
 }
@@ -63,6 +73,93 @@ pub enum StorageErrorKind {
 impl StorageErrorKind {
     pub fn is_throttled(&self) -> bool {
         matches!(self, StorageErrorKind::Throttled { .. })
+    }
+
+    /// True for [`StorageErrorKind::Unreachable`]: the storage host could not be
+    /// reached, or something other than the storage service answered.
+    pub fn is_unreachable(&self) -> bool {
+        matches!(self, StorageErrorKind::Unreachable { .. })
+    }
+}
+
+pub use icechunk_types::network::{NetworkFailure, unreachable_message};
+
+/// Builds a [`StorageErrorKind::Unreachable`] error for `host`, keeping `cause`
+/// reachable through `source()`.
+pub fn unreachable_error(
+    host: impl Into<String>,
+    failure: NetworkFailure,
+    cause: impl std::error::Error + Send + Sync + 'static,
+) -> StorageError {
+    StorageError::capture(StorageErrorKind::Unreachable {
+        host: host.into().into_boxed_str(),
+        failure: Box::new(failure),
+        cause: Box::new(cause),
+    })
+}
+
+const MAX_SNIPPET_CHARS: usize = 200;
+const MAX_CONTENT_TYPE_CHARS: usize = 100;
+
+/// Printable, whitespace-collapsed prefix of `text`, at most `max_chars`
+/// characters, or `None` if nothing printable is left.
+fn sanitize_text(text: &str, max_chars: usize) -> Option<String> {
+    let cleaned: String =
+        text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let collapsed = cleaned.split_whitespace().join(" ");
+    let out: String = collapsed.chars().take(max_chars).collect();
+    let out = out.trim().to_string();
+    (!out.is_empty()).then_some(out)
+}
+
+/// Printable, whitespace-collapsed prefix of a response body, at most 200 characters.
+pub fn sanitize_snippet(body: &[u8]) -> Option<String> {
+    sanitize_text(&String::from_utf8_lossy(body), MAX_SNIPPET_CHARS)
+}
+
+/// A `Content-Type` header value made safe to show: printable,
+/// whitespace-collapsed and at most 100 characters.
+pub fn sanitize_content_type(content_type: &str) -> Option<String> {
+    sanitize_text(content_type, MAX_CONTENT_TYPE_CHARS)
+}
+
+/// True if the error chain contains a rustls error, directly or wrapped in an `io::Error`.
+pub fn error_chain_has_tls_failure(err: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = current {
+        if e.downcast_ref::<rustls::Error>().is_some() {
+            return true;
+        }
+        // `io::Error::source` skips the error it wraps, so unwrap nested
+        // `io::Error`s by hand.
+        let mut io = e.downcast_ref::<std::io::Error>();
+        while let Some(err) = io {
+            let Some(inner) = err.get_ref() else { break };
+            if inner.downcast_ref::<rustls::Error>().is_some() {
+                return true;
+            }
+            io = inner.downcast_ref::<std::io::Error>();
+        }
+        current = e.source();
+    }
+    false
+}
+
+/// The body format a storage service is expected to answer with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExpectedBody {
+    Xml,
+    Json,
+}
+
+/// True when a `Content-Type` is present and is not the format the storage service uses.
+pub fn is_non_storage_content_type(ct: Option<&str>, expected: ExpectedBody) -> bool {
+    let Some(ct) = ct else { return false };
+    let media = ct.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+    match expected {
+        ExpectedBody::Xml => media != "application/xml" && media != "text/xml",
+        ExpectedBody::Json => media != "application/json",
     }
 }
 
@@ -930,5 +1027,114 @@ mod tests {
         assert_eq!(filtered(&ids, &["0B"]), vec!["0B"]);
         assert!(filtered(&ids, &[]).is_empty());
         assert!(filtered(&ids, &["1"]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod network_failure_tests {
+    use super::*;
+
+    #[test]
+    fn unexpected_response_display() {
+        let e = StorageErrorKind::Unreachable {
+            host: "abc123.r2.cloudflarestorage.com".into(),
+            failure: NetworkFailure::UnexpectedResponse {
+                status: 403,
+                content_type: Some("text/html".into()),
+                snippet: Some("Access blocked".into()),
+            }
+            .into(),
+            cause: "x".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "could not reach storage at abc123.r2.cloudflarestorage.com: got an unexpected response (HTTP 403, Content-Type: text/html) instead of a storage service response; response begins: \"Access blocked\". This can happen when a firewall or proxy blocks or intercepts traffic to abc123.r2.cloudflarestorage.com. If you are on a corporate or institutional network, ask your network administrator to allow access to this host."
+        );
+    }
+
+    #[test]
+    fn tls_display_adds_ca_sentence() {
+        let e = StorageErrorKind::Unreachable {
+            host: "h.invalid".into(),
+            failure: NetworkFailure::Tls.into(),
+            cause: "x".into(),
+        };
+        let s = e.to_string();
+        assert!(s.starts_with(
+            "could not establish a TLS connection to storage at h.invalid."
+        ));
+        assert!(s.contains("ICECHUNK_TLS_CA_FILE"));
+    }
+
+    #[test]
+    fn connect_display_has_no_ca_sentence() {
+        let e = StorageErrorKind::Unreachable {
+            host: "h.invalid".into(),
+            failure: NetworkFailure::Connect.into(),
+            cause: "x".into(),
+        };
+        let s = e.to_string();
+        assert!(s.contains("could not connect."));
+        assert!(!s.contains("CA certificate"));
+    }
+
+    #[test]
+    fn snippet_is_capped_and_printable() {
+        let mut body = b"<html>\n\t<body>\x00\x07Blocked".to_vec();
+        body.extend(iter::repeat_n(b'a', 1000));
+        let s = sanitize_snippet(&body).unwrap();
+        assert!(s.chars().count() <= 200);
+        assert!(s.starts_with("<html> <body> Blocked"));
+        assert!(s.chars().all(|c| !c.is_control()));
+    }
+
+    #[test]
+    fn empty_snippet_is_none() {
+        assert_eq!(sanitize_snippet(b" \n\t"), None);
+    }
+
+    #[test]
+    fn content_type_is_capped_and_printable() {
+        let mut ct = "text/html;\r\n\tcharset=utf-8\x00 ".to_string();
+        ct.push_str(&"a".repeat(1000));
+        let s = sanitize_content_type(&ct).unwrap();
+        assert_eq!(s.chars().count(), 100);
+        assert!(s.starts_with("text/html; charset=utf-8 aaa"));
+        assert!(s.chars().all(|c| !c.is_control()));
+        assert_eq!(sanitize_content_type("\r\n"), None);
+    }
+
+    #[test]
+    fn content_type_checks() {
+        assert!(!is_non_storage_content_type(
+            Some("application/xml; charset=utf-8"),
+            ExpectedBody::Xml
+        ));
+        assert!(!is_non_storage_content_type(Some("TEXT/XML"), ExpectedBody::Xml));
+        assert!(is_non_storage_content_type(Some("text/html"), ExpectedBody::Xml));
+        assert!(!is_non_storage_content_type(None, ExpectedBody::Xml));
+        assert!(!is_non_storage_content_type(
+            Some("application/json"),
+            ExpectedBody::Json
+        ));
+    }
+
+    #[test]
+    fn tls_detected_through_io_error() {
+        let io = std::io::Error::other(rustls::Error::General("bad".into()));
+        assert!(error_chain_has_tls_failure(&io));
+        assert!(!error_chain_has_tls_failure(&std::io::Error::from(
+            std::io::ErrorKind::ConnectionRefused
+        )));
+    }
+
+    #[test]
+    fn tls_detected_through_nested_io_errors() {
+        let inner = std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            rustls::Error::General("bad".into()),
+        );
+        let outer = std::io::Error::other(inner);
+        assert!(error_chain_has_tls_failure(&outer));
     }
 }
