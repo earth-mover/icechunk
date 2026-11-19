@@ -1681,6 +1681,60 @@ mod tests {
         ));
     }
 
+    /// Manifests wrap stored locations with `VirtualChunkLocation::from_trusted`,
+    /// so a crafted manifest can carry a `file://` location with `..` segments.
+    /// Confinement to the container must then hold at fetch time.
+    #[cfg(feature = "object-store-fs")]
+    #[tokio::test]
+    async fn test_file_traversal_outside_container_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::create_dir(root.join("allowed")).unwrap();
+        std::fs::write(root.join("allowed").join("ok.bin"), b"good").unwrap();
+        std::fs::write(root.join("secret.bin"), b"secret").unwrap();
+
+        let root = root.to_str().unwrap();
+        let prefix = format!("file://{root}/allowed/");
+        let container = VirtualChunkContainer::new_named(
+            "c".to_string(),
+            prefix.clone(),
+            ObjectStoreConfig::LocalFileSystem(format!("{root}/allowed").into()),
+        )
+        .unwrap();
+        let resolver = VirtualChunkResolver::new(
+            [container].into_iter(),
+            std::collections::HashMap::from([(prefix.clone(), None)]),
+            Default::default(),
+        );
+        let attribution = || RequestAttribution::without_node(&UNATTRIBUTED_LABELS);
+
+        // sanity check: the container is authorized and readable
+        let ok = resolver
+            .fetch_chunk(&format!("{prefix}ok.bin"), &(0..4), None, attribution())
+            .await
+            .unwrap();
+        assert_eq!(ok.as_ref(), b"good");
+
+        for location in [
+            format!("{prefix}../secret.bin"),
+            format!("{prefix}%2e%2e/secret.bin"),
+            format!("{prefix}sub/../../secret.bin"),
+            "vcc://c/../secret.bin".to_string(),
+        ] {
+            let res = resolver.fetch_chunk(&location, &(0..6), None, attribution()).await;
+            assert!(
+                matches!(
+                    res,
+                    Err(VirtualReferenceError {
+                        kind: VirtualReferenceErrorKind::NoContainerForUrl(_),
+                        ..
+                    })
+                ),
+                "{location} must not resolve, got {res:?}"
+            );
+        }
+    }
+
     #[cfg(feature = "object-store-fs")]
     #[tokio::test]
     async fn test_resolver_filters_out_invalid_containers() {
