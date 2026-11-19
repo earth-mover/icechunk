@@ -17,6 +17,7 @@
 
 ### Fixes
 
+- `icechunk-js`: the `Storage.new*WithRefreshableCredentials` factories now await a credentials callback that returns a `Promise`, as their types declare. Before, an `async` callback failed on first use with `object store error dispatch failure`. A callback that returns the credentials directly still works. A `Storage` with a credentials callback no longer keeps the Node.js process alive after all work is done ([#2568](https://github.com/earth-mover/icechunk/pull/2568)).
 - The S3 client (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) has a default per-attempt timeout of 10 minutes. A server that accepted a request and never answered used to make the request wait forever. Now the attempt fails and is retried. Set `operation_attempt_timeout_ms` to change the limit, or to 0 to disable it.
 
 ## Python Icechunk Library 2.3.1
