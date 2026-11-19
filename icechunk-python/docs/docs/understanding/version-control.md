@@ -208,6 +208,10 @@ We can [delete a branch](../reference/index.md#icechunk.Repository.delete_branch
 repo.delete_branch("feature")
 ```
 
+!!! note
+    Deleting a branch or tag does not free any storage by itself. Commits that are no longer reachable from any
+    branch or tag become garbage, which is reclaimed by [garbage collection](expiration.md#running-expiration-and-garbage-collection-safely).
+
 We can also [reset a branch](../reference/index.md#icechunk.Repository.reset_branch) to a previous snapshot with [`reset_branch`](../reference/index.md#icechunk.Repository.reset_branch). This immediately modifies the branch tip to the specified snapshot, changing the history of the branch.
 
 ```python exec="on" session="version" source="material-block"
@@ -297,6 +301,12 @@ repo.delete_tag("v1.0.0")
 ```
 
 ## Conflict Resolution
+
+!!! info
+    For a walk-through of transactions, conflict detection and rebasing using a bank-transfer example,
+    see the blog post [Learning about Icechunk consistency](https://www.earthmover.io/blog/learning-about-icechunk-consistency).
+    [Multi-Player Mode](https://www.earthmover.io/blog/multi-player-mode-why-teams-that-use-zarr-need-icechunk) explains why
+    teams writing Zarr collaboratively need these guarantees.
 
 Icechunk is a serverless distributed system, and as such, it is possible to have multiple users or processes modifying the same data at the same time. Icechunk relies on the consistency guarantees of the underlying storage backends to ensure that the data is always consistent. In situations where two users or processes attempt to modify the same data at the same time, Icechunk will detect the conflict and raise an exception at commit time. This can be illustrated with the following example.
 

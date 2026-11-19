@@ -1818,6 +1818,11 @@ class Repository:
         `expire_snapshots` runs, but other readers can get inconsistent
         views of the repository history.
 
+        `older_than` must be earlier than any version that is concurrently
+        being read, listed, or used as the parent of a commit. Do not run
+        this concurrently with another expiration or garbage collection
+        operation.
+
         Parameters
         ----------
         older_than: datetime.datetime
@@ -1869,6 +1874,11 @@ class Repository:
         carefully. The repository can still operate concurrently while
         `expire_snapshots` runs, but other readers can get inconsistent
         views of the repository history.
+
+        `older_than` must be earlier than any version that is concurrently
+        being read, listed, or used as the parent of a commit. Do not run
+        this concurrently with another expiration or garbage collection
+        operation.
 
         Parameters
         ----------
@@ -2000,6 +2010,13 @@ class Repository:
         `garbage_collect` runs, but other reades can get inconsistent
         views if they are trying to access the expired snapshots.
 
+        `delete_object_older_than` must be earlier than the start of the
+        oldest write session that is still running or may still commit,
+        otherwise the chunks that session has written but not yet committed
+        can be deleted. Do not run garbage collection with a cutoff shorter
+        than your longest writing session, and do not run it concurrently
+        with another garbage collection or expiration operation.
+
         Parameters
         ----------
         delete_object_older_than: datetime.datetime
@@ -2084,6 +2101,13 @@ class Repository:
         carefully. The repository can still operate concurrently while
         `garbage_collect` runs, but other reades can get inconsistent
         views if they are trying to access the expired snapshots.
+
+        `delete_object_older_than` must be earlier than the start of the
+        oldest write session that is still running or may still commit,
+        otherwise the chunks that session has written but not yet committed
+        can be deleted. Do not run garbage collection with a cutoff shorter
+        than your longest writing session, and do not run it concurrently
+        with another garbage collection or expiration operation.
 
         Parameters
         ----------
