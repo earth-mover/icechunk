@@ -1684,7 +1684,7 @@ mod tests {
     /// Manifests wrap stored locations with `VirtualChunkLocation::from_trusted`,
     /// so a crafted manifest can carry a `file://` location with `..` segments.
     /// Confinement to the container must then hold at fetch time.
-    #[cfg(feature = "object-store-fs")]
+    #[cfg(all(feature = "object-store-fs", not(windows)))]
     #[tokio::test]
     async fn test_file_traversal_outside_container_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
