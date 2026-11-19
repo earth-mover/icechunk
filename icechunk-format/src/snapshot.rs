@@ -54,7 +54,7 @@ impl ArrayShape {
     }
 
     pub fn get(&self, ax: usize) -> Option<DimensionShape> {
-        if ax > self.len() - 1 { None } else { Some(self.0[ax].clone()) }
+        self.0.get(ax).cloned()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &DimensionShape> {
@@ -998,6 +998,17 @@ mod tests {
         strategies::{ShapeDim, manifest_file_info, node_snapshot, shapes_and_dims},
     };
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn array_shape_get_out_of_range() {
+        // 0-d (scalar) arrays have an empty shape
+        let scalar = ArrayShape::new([]).unwrap();
+        assert_eq!(scalar.get(0), None);
+
+        let shape = ArrayShape::new([(10, 2)]).unwrap();
+        assert_eq!(shape.get(0), Some(DimensionShape::new(10, 2)));
+        assert_eq!(shape.get(1), None);
+    }
     use proptest::prelude::*;
     use std::iter::{self};
 
