@@ -1689,7 +1689,7 @@ mod tests {
     async fn test_file_traversal_outside_container_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        std::fs::create_dir(root.join("allowed")).unwrap();
+        std::fs::create_dir_all(root.join("allowed")).unwrap();
         std::fs::write(root.join("allowed").join("ok.bin"), b"good").unwrap();
         std::fs::write(root.join("secret.bin"), b"secret").unwrap();
 
