@@ -15,8 +15,6 @@ use crate::{
 };
 use icechunk_types::ICResultExt as _;
 
-// No `Default`: an empty buffer is not a valid flatbuffer, and `root()` reads it
-// without verification, so a default value would be unsound.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransactionLog {
     buffer: Vec<u8>,
