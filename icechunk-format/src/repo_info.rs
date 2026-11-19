@@ -1497,7 +1497,19 @@ impl RepoInfo {
             }
             generated::UpdateType::RepoStatusChangedUpdate => {
                 let up = update.update_type_as_repo_status_changed_update().unwrap();
-                let fb_status = up.status().unwrap();
+                // `status` is not `(required)` in the schema, so a malformed file
+                // can omit it.
+                let fb_status = up
+                    .status()
+                    .ok_or_else(|| {
+                        IcechunkFormatErrorKind::InvalidFlatBuffer(
+                            flatbuffers::InvalidFlatbuffer::MissingRequiredField {
+                                required: Cow::Borrowed("status"),
+                                error_trace: Default::default(),
+                            },
+                        )
+                    })
+                    .capture()?;
                 let status = fb_status.try_into()?;
 
                 Ok(UpdateType::RepoStatusChangedUpdate { status })
@@ -2069,6 +2081,75 @@ mod tests {
         assert_eq!(results.len(), 3);
         assert!(results[..2].iter().all(|r| r.is_ok()));
         assert!(results[2].is_err());
+    }
+
+    #[test]
+    fn status_changed_update_without_status_is_an_error_not_a_panic() {
+        // A repo file whose ops log has a RepoStatusChangedUpdate with no `status`
+        let mut builder = flatbuffers::FlatBufferBuilder::new();
+        let tags = builder.create_vector::<WIPOffset<generated::Ref<'_>>>(&[]);
+        let name = Some(builder.create_string("main"));
+        let main = generated::Ref::create(
+            &mut builder,
+            &generated::RefArgs { name, snapshot_index: 0 },
+        );
+        let branches = builder.create_vector(&[main]);
+        let deleted_tags = builder.create_vector::<WIPOffset<&str>>(&[]);
+        let id = generated::ObjectId12::new(&[0u8; 12]);
+        let message = Some(builder.create_string(""));
+        let snap = generated::SnapshotInfo::create(
+            &mut builder,
+            &generated::SnapshotInfoArgs {
+                id: Some(&id),
+                parent_offset: -1,
+                flushed_at: 1_000_000,
+                message,
+                metadata: None,
+                pruned_ancestor_tx_logs: None,
+            },
+        );
+        let snapshots = builder.create_vector(&[snap]);
+        let status = generated::RepoStatus::create(
+            &mut builder,
+            &generated::RepoStatusArgs {
+                availability: RepoAvailability::Online.into(),
+                set_at: 1_000_000,
+                limited_availability_reason: None,
+            },
+        );
+        let status_update = generated::RepoStatusChangedUpdate::create(
+            &mut builder,
+            &generated::RepoStatusChangedUpdateArgs { status: None },
+        );
+        let update = generated::Update::create(
+            &mut builder,
+            &generated::UpdateArgs {
+                update_type_type: generated::UpdateType::RepoStatusChangedUpdate,
+                update_type: Some(status_update.as_union_value()),
+                updated_at: 1_000_000,
+                backup_path: None,
+            },
+        );
+        let latest_updates = builder.create_vector(&[update]);
+        let repo = generated::Repo::create(
+            &mut builder,
+            &generated::RepoArgs {
+                spec_version: SpecVersionBin::current() as u8,
+                tags: Some(tags),
+                branches: Some(branches),
+                deleted_tags: Some(deleted_tags),
+                snapshots: Some(snapshots),
+                status: Some(status),
+                latest_updates: Some(latest_updates),
+                ..Default::default()
+            },
+        );
+        builder.finish(repo, None);
+
+        let info = RepoInfo::from_buffer(builder.finished_data().to_vec()).unwrap();
+        let updates: Vec<_> = info.latest_updates().unwrap().collect();
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].is_err());
     }
 
     #[test]
