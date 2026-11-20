@@ -1,4 +1,5 @@
 pub mod attribution;
+pub mod proxy;
 pub mod readback;
 pub mod s3_config;
 mod storage;
