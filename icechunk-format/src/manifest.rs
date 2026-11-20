@@ -287,6 +287,12 @@ impl VirtualChunkLocation {
     }
 
     /// Wrap a pre-validated location string without re-parsing.
+    ///
+    /// Used when reading manifests, where parsing every location would be
+    /// costly. A crafted manifest can therefore hold unnormalized locations,
+    /// such as `file://` URLs with `..` segments. Containment within a virtual
+    /// chunk container is enforced at fetch time, which re-parses the location
+    /// before matching it against container prefixes.
     fn from_trusted(s: String) -> Self {
         VirtualChunkLocation(s)
     }
