@@ -255,12 +255,31 @@ impl Repository {
 
     /// Set the HTTP transport for sessions opened after this call. The callback
     /// is runtime-only and is not persisted or serialized with the repository.
+    #[deprecated(
+        note = "register a `Storage` for the container instead, with `Repository::set_virtual_chunk_storage`"
+    )]
+    #[expect(deprecated)]
     pub fn set_http_virtual_chunk_fetcher(
         &mut self,
         fetcher: Arc<dyn crate::virtual_chunks::HttpVirtualChunkFetcher>,
     ) {
         self.virtual_resolver =
             Arc::new(self.virtual_resolver.with_http_fetcher(fetcher));
+    }
+
+    /// Read the virtual chunks of the container with `url_prefix` from `storage`
+    /// in sessions opened after this call, instead of the container's configured
+    /// backend. A chunk at `{url_prefix}{path}` is read as `path` from `storage`.
+    /// The container must still be authorized when opening the repository.
+    /// Runtime-only: not persisted or serialized with the repository.
+    pub fn set_virtual_chunk_storage(
+        &mut self,
+        url_prefix: &str,
+        storage: Arc<dyn Storage + Send + Sync>,
+    ) -> Result<(), crate::format::manifest::VirtualReferenceError> {
+        self.virtual_resolver =
+            Arc::new(self.virtual_resolver.with_container_storage(url_prefix, storage)?);
+        Ok(())
     }
 
     #[instrument(skip_all)]

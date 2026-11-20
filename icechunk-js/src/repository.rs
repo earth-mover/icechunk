@@ -82,7 +82,7 @@ pub struct JsVersionOptions {
 
 fn version_options_to_version_info(opts: JsVersionOptions) -> napi::Result<VersionInfo> {
     if let Some(snap) = opts.snapshot_id {
-        let id = SnapshotId::try_from(snap.as_str()).map_napi_err()?;
+        let id = SnapshotId::try_from(snap.as_str()).map_err(napi::Error::from_reason)?;
         Ok(VersionInfo::SnapshotId(id))
     } else if let Some(tag) = opts.tag {
         Ok(VersionInfo::TagRef(tag))
@@ -231,10 +231,35 @@ impl JsRepository {
             >,
         >,
     ) -> napi::Result<()> {
-        self.0.write().await.set_http_virtual_chunk_fetcher(Arc::new(
-            crate::virtual_chunks::JsHttpVirtualChunkFetcher(callback),
-        ));
+        let fetcher =
+            Arc::new(crate::virtual_chunks::JsHttpVirtualChunkFetcher(callback));
+        let mut repo = self.0.write().await;
+        #[expect(
+            deprecated,
+            reason = "the JS API is not deprecated; it uses the core shim"
+        )]
+        repo.set_http_virtual_chunk_fetcher(fetcher);
         Ok(())
+    }
+
+    /// Read the virtual chunks of the container with `urlPrefix` from `storage`
+    /// instead of the container's configured backend, in sessions created after
+    /// this call. A chunk at `{urlPrefix}{path}` is read as `path` from the
+    /// storage, so any Storage works: `Storage.newCustom(...)`, fetch storage,
+    /// or a native backend. The container must still be authorized in
+    /// `authorizeVirtualChunkAccess` (any credential value, or `null`).
+    /// Not persisted or serialized.
+    #[napi]
+    pub async fn set_virtual_chunk_storage(
+        &self,
+        url_prefix: String,
+        storage: &JsStorage,
+    ) -> napi::Result<()> {
+        self.0
+            .write()
+            .await
+            .set_virtual_chunk_storage(&url_prefix, Arc::clone(&storage.0))
+            .map_napi_err()
     }
 
     #[napi(factory)]
@@ -330,7 +355,8 @@ impl JsRepository {
         let version = match options {
             Some(opts) => {
                 if let Some(snap) = opts.snapshot_id {
-                    let id = SnapshotId::try_from(snap.as_str()).map_napi_err()?;
+                    let id = SnapshotId::try_from(snap.as_str())
+                        .map_err(napi::Error::from_reason)?;
                     VersionInfo::SnapshotId(id)
                 } else if let Some(tag) = opts.tag {
                     VersionInfo::TagRef(tag)
@@ -368,7 +394,8 @@ impl JsRepository {
         name: String,
         snapshot_id: String,
     ) -> napi::Result<()> {
-        let id = SnapshotId::try_from(snapshot_id.as_str()).map_napi_err()?;
+        let id = SnapshotId::try_from(snapshot_id.as_str())
+            .map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         repo.create_branch(&name, &id).await.map_napi_err()
     }
@@ -386,7 +413,8 @@ impl JsRepository {
         name: String,
         snapshot_id: String,
     ) -> napi::Result<()> {
-        let id = SnapshotId::try_from(snapshot_id.as_str()).map_napi_err()?;
+        let id = SnapshotId::try_from(snapshot_id.as_str())
+            .map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         repo.create_tag(&name, &id).await.map_napi_err()
     }
@@ -396,7 +424,8 @@ impl JsRepository {
         &self,
         snapshot_id: String,
     ) -> napi::Result<Vec<JsManifestFileInfo>> {
-        let id = SnapshotId::try_from(snapshot_id.as_str()).map_napi_err()?;
+        let id = SnapshotId::try_from(snapshot_id.as_str())
+            .map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         let files = repo.lookup_manifest_files(&id).await.map_napi_err()?;
         Ok(files
@@ -424,9 +453,10 @@ impl JsRepository {
         to_snapshot_id: String,
         from_snapshot_id: Option<String>,
     ) -> napi::Result<()> {
-        let to_id = SnapshotId::try_from(to_snapshot_id.as_str()).map_napi_err()?;
+        let to_id = SnapshotId::try_from(to_snapshot_id.as_str())
+            .map_err(napi::Error::from_reason)?;
         let from_id = from_snapshot_id
-            .map(|s| SnapshotId::try_from(s.as_str()).map_napi_err())
+            .map(|s| SnapshotId::try_from(s.as_str()).map_err(napi::Error::from_reason))
             .transpose()?;
         let repo = self.0.read().await;
         repo.reset_branch(&branch, &to_id, from_id.as_ref()).await.map_napi_err()
@@ -460,7 +490,8 @@ impl JsRepository {
         &self,
         snapshot_id: String,
     ) -> napi::Result<JsSnapshotInfo> {
-        let id = SnapshotId::try_from(snapshot_id.as_str()).map_napi_err()?;
+        let id = SnapshotId::try_from(snapshot_id.as_str())
+            .map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         let info = repo.lookup_snapshot(&id).await.map_napi_err()?;
         Ok(info.into())
@@ -514,7 +545,8 @@ impl JsRepository {
     #[napi]
     pub async fn diff(&self, options: JsDiffOptions) -> napi::Result<JsDiff> {
         let from = if let Some(snap) = options.from_snapshot_id {
-            let id = SnapshotId::try_from(snap.as_str()).map_napi_err()?;
+            let id =
+                SnapshotId::try_from(snap.as_str()).map_err(napi::Error::from_reason)?;
             VersionInfo::SnapshotId(id)
         } else if let Some(tag) = options.from_tag {
             VersionInfo::TagRef(tag)
@@ -527,7 +559,8 @@ impl JsRepository {
         };
 
         let to = if let Some(snap) = options.to_snapshot_id {
-            let id = SnapshotId::try_from(snap.as_str()).map_napi_err()?;
+            let id =
+                SnapshotId::try_from(snap.as_str()).map_err(napi::Error::from_reason)?;
             VersionInfo::SnapshotId(id)
         } else if let Some(tag) = options.to_tag {
             VersionInfo::TagRef(tag)

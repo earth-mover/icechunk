@@ -10,6 +10,16 @@ export declare class Repository {
    * Callbacks use the error-first convention, like Storage.newCustom.
    */
   setHttpVirtualChunkFetcher(callback: (err: null, request: HttpVirtualChunkRequest) => Promise<HttpVirtualChunkResponse>): Promise<void>
+  /**
+   * Read the virtual chunks of the container with `urlPrefix` from `storage`
+   * instead of the container's configured backend, in sessions created after
+   * this call. A chunk at `{urlPrefix}{path}` is read as `path` from the
+   * storage, so any Storage works: `Storage.newCustom(...)`, fetch storage,
+   * or a native backend. The container must still be authorized in
+   * `authorizeVirtualChunkAccess` (any credential value, or `null`).
+   * Not persisted or serialized.
+   */
+  setVirtualChunkStorage(urlPrefix: string, storage: JsStorage): Promise<void>
   static create(storage: JsStorage, config?: RepositoryConfig | undefined | null, specVersion?: number | undefined | null, authorizeVirtualChunkAccess?: Record<string, Credentials | undefined | null> | undefined | null, checkCleanRoot?: boolean | undefined | null): Promise<Repository>
   static open(storage: JsStorage, config?: RepositoryConfig | undefined | null, authorizeVirtualChunkAccess?: Record<string, Credentials | undefined | null> | undefined | null): Promise<Repository>
   static openOrCreate(storage: JsStorage, config?: RepositoryConfig | undefined | null, specVersion?: number | undefined | null, authorizeVirtualChunkAccess?: Record<string, Credentials | undefined | null> | undefined | null, checkCleanRoot?: boolean | undefined | null): Promise<Repository>
