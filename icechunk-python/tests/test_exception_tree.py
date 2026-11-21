@@ -278,9 +278,8 @@ def test_malformed_repo_info_is_a_format_error(tmp_path: Path) -> None:
     ic.Repository.create(ic.local_filesystem_storage(str(tmp_path)))
     # the only snapshot's parent is out of range
     edit_repo_info(tmp_path / "repo", lambda buf: set_first_parent_offset(buf, 7))
-    repo = ic.Repository.open(ic.local_filesystem_storage(str(tmp_path)))
     with pytest.raises(ic.FormatError, match="malformed repo info") as excinfo:
-        list(repo.ancestry(branch="main"))
+        ic.Repository.open(ic.local_filesystem_storage(str(tmp_path)))
     assert excinfo.value.kind == ic.ErrorKind.INVALID_FILE_FORMAT
 
 

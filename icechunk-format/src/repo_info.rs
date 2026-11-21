@@ -1711,10 +1711,7 @@ impl RepoInfo {
             check_snapshot_index(r.snapshot_index() as usize, num_snaps)?;
         }
         for snap in root.snapshots().iter() {
-            let parent = snap.parent_offset();
-            if parent >= 0 {
-                check_snapshot_index(parent as usize, num_snaps)?;
-            }
+            parent_index(&root, &snap)?;
         }
         Ok(())
     }
@@ -4019,34 +4016,35 @@ mod tests {
     #[test]
     fn out_of_range_snapshot_indexes_are_errors_not_panics()
     -> Result<(), Box<dyn std::error::Error>> {
-        // parsing rejects indexes past the end: parent offsets, branches, tags
-        for (offsets, main, tag) in
-            [(&[1], 0, 0), (&[5], 0, 0), (&[-1], 1, 0), (&[-1], 0, 3)]
-        {
-            let err = crafted_snapshots(offsets, main, tag)
+        let parse_error = |offsets: &[i32], main, tag| {
+            crafted_snapshots(offsets, main, tag)
                 .err()
-                .and_then(|e| e.downcast::<IcechunkFormatError>().ok());
+                .and_then(|e| e.downcast::<IcechunkFormatError>().ok())
+                .map(|e| e.kind)
+        };
+
+        // parsing rejects branch and tag indexes past the end
+        for (main, tag) in [(1, 0), (0, 3)] {
+            let err = parse_error(&[-1], main, tag);
             assert!(
                 matches!(
-                    err.as_deref(),
-                    Some(IcechunkFormatError {
-                        kind: IcechunkFormatErrorKind::InvalidFlatBuffer(
-                            flatbuffers::InvalidFlatbuffer::RangeOutOfBounds { .. }
-                        ),
-                        ..
-                    })
+                    err,
+                    Some(IcechunkFormatErrorKind::InvalidFlatBuffer(
+                        flatbuffers::InvalidFlatbuffer::RangeOutOfBounds { .. }
+                    ))
                 ),
-                "{offsets:?} {main} {tag}: {err:?}"
+                "{main} {tag}: {err:?}"
             );
         }
 
-        // parsing accepts other negative parent offsets, reading them fails
-        let (info, ids) = crafted_snapshots(&[-2], 0, 0)?;
-        assert!(is_malformed(&info.all_snapshots()?.try_collect::<_, Vec<_>, _>()));
-        assert!(is_malformed(&info.ancestry(&ids[0])?.try_collect::<_, Vec<_>, _>()));
-        assert!(is_malformed(&info.find_snapshot(&ids[0])));
-        assert!(is_malformed(&info.snapshot_and_parent_ids()));
-        let _ = format!("{info:?}");
+        // parsing rejects parent offsets past the end, or negative other than -1
+        for offsets in [&[1], &[5], &[-2], &[i32::MIN]] {
+            let err = parse_error(offsets, 0, 0);
+            assert!(
+                matches!(err, Some(IcechunkFormatErrorKind::MalformedRepoInfo(_))),
+                "{offsets:?}: {err:?}"
+            );
+        }
         Ok(())
     }
 
