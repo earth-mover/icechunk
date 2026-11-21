@@ -1,7 +1,6 @@
 import pickle
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import cast
 
 from icechunk._icechunk_python import (
     AzureCredentials,
@@ -453,9 +452,9 @@ def azure_credentials(
 def containers_credentials(
     m: Mapping[
         str,
-        AnyS3Credential
-        | AnyGcsCredential
-        | AnyAzureCredential
+        S3Credentials
+        | GcsCredentials
+        | AzureCredentials
         | Credentials.LocalFileSystemAccess
         | Credentials.HttpAccess
         | None,
@@ -465,7 +464,7 @@ def containers_credentials(
 
     Parameters
     ----------
-    m: Mapping[str, AnyS3Credential | AnyGcsCredential | AnyAzureCredential | Credentials.LocalFileSystemAccess | Credentials.HttpAccess | None]
+    m: Mapping[str, S3Credentials | GcsCredentials | AzureCredentials | Credentials.LocalFileSystemAccess | Credentials.HttpAccess | None]
         A mapping from container url prefixes to credentials. Each key must equal a
         configured container's ``url_prefix`` exactly (trailing slash included).
         For backends that need no authentication, use the explicit
@@ -508,24 +507,12 @@ def containers_credentials(
             res[name] = None
         elif isinstance(cred, Credentials.LocalFileSystemAccess | Credentials.HttpAccess):
             res[name] = cred
-        elif isinstance(cred, AnyS3Credential):
+        elif isinstance(cred, S3Credentials):
             res[name] = Credentials.S3(cred)
-        elif isinstance(
-            cred,
-            GcsCredentials.FromEnv
-            | GcsCredentials.Static
-            | GcsCredentials.Refreshable
-            | GcsCredentials.Anonymous,
-        ):
-            res[name] = Credentials.Gcs(cast(GcsCredentials, cred))
-        elif isinstance(
-            cred,
-            AzureCredentials.FromEnv
-            | AzureCredentials.Anonymous
-            | AzureCredentials.Static
-            | AzureCredentials.Refreshable,
-        ):
-            res[name] = Credentials.Azure(cast(AzureCredentials, cred))
+        elif isinstance(cred, GcsCredentials):
+            res[name] = Credentials.Gcs(cred)
+        elif isinstance(cred, AzureCredentials):
+            res[name] = Credentials.Azure(cred)
         else:
             raise ValueError(f"Unknown credential type {type(cred)}")
     return res

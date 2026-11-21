@@ -57,6 +57,7 @@ AnyObjectStoreConfig = (
     | ObjectStoreConfig.Gcs
     | ObjectStoreConfig.Azure
     | ObjectStoreConfig.Tigris
+    | ObjectStoreConfig.Http
 )
 
 
