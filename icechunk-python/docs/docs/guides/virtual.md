@@ -8,6 +8,13 @@ While Icechunk works wonderfully with native chunks managed by Zarr, there is lo
 
 `VirtualiZarr` lets users ingest existing data files into virtual datasets using various different tools under the hood, including `kerchunk`, `xarray`, `zarr`, and now `icechunk`. It does so by creating virtual references to existing data that can be combined and manipulated to create larger virtual datasets using `xarray`. These datasets can then be exported to `kerchunk` reference format or to an `Icechunk` repository, without ever copying or moving the existing data files.
 
+!!! tip "Further reading"
+
+    - [Old format, no problem! Cloud-optimizing the GOES-16 archive as Virtual Zarr](https://www.earthmover.io/blog/virtual-zarr): a large worked example.
+    - [Fundamentals: What is zero-copy ingest?](https://www.earthmover.io/blog/zero-copy-ingest): when and why to ingest data as virtual chunks.
+    - [Having it all: virtual and materialized data products](https://www.earthmover.io/blog/virtual-and-materialized-data-products): combining virtual and native chunks.
+    - [Virtual chunks that just work, but securely](https://www.earthmover.io/blog/secure-virtual-chunks): the design behind authorizing virtual chunk access.
+
 !!! note
 
     Currently, Icechunk supports virtual references to data stored in `s3` compatible, `gcs`, `azure`, `http/https`, and `local` storage backends.

@@ -1701,8 +1701,21 @@ impl RepoInfo {
 
     /// Check that `buffer` passes every check [`RepoInfo::from_buffer`] applies.
     pub fn verify_buffer(buffer: &[u8]) -> IcechunkResult<()> {
-        let _ = flatbuffers::root_with_opts::<generated::Repo<'_>>(&ROOT_OPTIONS, buffer)
-            .capture()?;
+        let root =
+            flatbuffers::root_with_opts::<generated::Repo<'_>>(&ROOT_OPTIONS, buffer)
+                .capture()?;
+        // The flatbuffers verifier only checks structure. Our accessors index
+        // into `snapshots` with these values, so they must be in range.
+        let num_snaps = root.snapshots().len();
+        for r in root.tags().iter().chain(root.branches().iter()) {
+            check_snapshot_index(r.snapshot_index() as usize, num_snaps)?;
+        }
+        for snap in root.snapshots().iter() {
+            let parent = snap.parent_offset();
+            if parent >= 0 {
+                check_snapshot_index(parent as usize, num_snaps)?;
+            }
+        }
         Ok(())
     }
 
@@ -2038,6 +2051,20 @@ fn resolve_ref_iter<'a>(
     Ok(res)
 }
 
+fn check_snapshot_index(index: usize, num_snaps: usize) -> IcechunkResult<()> {
+    if index < num_snaps {
+        Ok(())
+    } else {
+        Err(IcechunkFormatErrorKind::InvalidFlatBuffer(
+            flatbuffers::InvalidFlatbuffer::RangeOutOfBounds {
+                range: index..index + 1,
+                error_trace: Default::default(),
+            },
+        ))
+        .capture()
+    }
+}
+
 fn timestamp_to_timestamp(ts: u64) -> IcechunkResult<DateTime<Utc>> {
     let ts: i64 =
         ts.try_into().map_err(|_| IcechunkFormatErrorKind::InvalidTimestamp).capture()?;
@@ -2347,6 +2374,178 @@ mod tests {
     }
 
     roundtrip_serialization_tests!(serialize_and_deserialize_repo_info - valid_repo_info);
+
+    /// Builds a minimal repo buffer by hand, bypassing the checks in
+    /// `from_parts`, so tests can produce malformed indices.
+    fn raw_repo_buffer(
+        tag_index: Option<u32>,
+        branch_index: u32,
+        parent_offsets: &[i32],
+    ) -> Vec<u8> {
+        let mut builder = flatbuffers::FlatBufferBuilder::new();
+        fn mk_ref<'b>(
+            b: &mut flatbuffers::FlatBufferBuilder<'b>,
+            name: &str,
+            snapshot_index: u32,
+        ) -> WIPOffset<generated::Ref<'b>> {
+            let name = Some(b.create_string(name));
+            generated::Ref::create(b, &generated::RefArgs { name, snapshot_index })
+        }
+        let tags: Vec<_> =
+            tag_index.into_iter().map(|ix| mk_ref(&mut builder, "tag", ix)).collect();
+        let tags = builder.create_vector(&tags);
+        let branch = mk_ref(&mut builder, "main", branch_index);
+        let branches = builder.create_vector(&[branch]);
+        let deleted_tags = builder.create_vector::<WIPOffset<&str>>(&[]);
+        let snapshots: Vec<_> = parent_offsets
+            .iter()
+            .enumerate()
+            .map(|(i, &parent_offset)| {
+                let mut id = [0u8; 12];
+                id[0] = i as u8;
+                let id = generated::ObjectId12::new(&id);
+                let message = Some(builder.create_string(""));
+                generated::SnapshotInfo::create(
+                    &mut builder,
+                    &generated::SnapshotInfoArgs {
+                        id: Some(&id),
+                        parent_offset,
+                        flushed_at: 1_000_000,
+                        message,
+                        metadata: None,
+                        pruned_ancestor_tx_logs: None,
+                    },
+                )
+            })
+            .collect();
+        let snapshots = builder.create_vector(&snapshots);
+        let status = generated::RepoStatus::create(
+            &mut builder,
+            &generated::RepoStatusArgs {
+                availability: RepoAvailability::Online.into(),
+                set_at: 1_000_000,
+                limited_availability_reason: None,
+            },
+        );
+        let latest_updates =
+            builder.create_vector::<WIPOffset<generated::Update<'_>>>(&[]);
+        let repo = generated::Repo::create(
+            &mut builder,
+            &generated::RepoArgs {
+                spec_version: SpecVersionBin::current() as u8,
+                tags: Some(tags),
+                branches: Some(branches),
+                deleted_tags: Some(deleted_tags),
+                snapshots: Some(snapshots),
+                status: Some(status),
+                latest_updates: Some(latest_updates),
+                ..Default::default()
+            },
+        );
+        builder.finish(repo, None);
+        builder.finished_data().to_vec()
+    }
+
+    #[test]
+    fn raw_repo_buffer_is_valid_when_indices_are_in_range() {
+        let info = RepoInfo::from_buffer(raw_repo_buffer(Some(1), 1, &[-1, 0])).unwrap();
+        assert_eq!(
+            info.ancestry(&info.resolve_branch("main").unwrap()).unwrap().count(),
+            2
+        );
+        assert!(info.tags().unwrap().count() == 1);
+    }
+
+    #[test]
+    fn verify_rejects_out_of_range_ref_snapshot_index() {
+        assert!(RepoInfo::from_buffer(raw_repo_buffer(Some(5), 0, &[-1])).is_err());
+        assert!(RepoInfo::from_buffer(raw_repo_buffer(None, 5, &[-1])).is_err());
+    }
+
+    #[test]
+    fn verify_rejects_out_of_range_parent_offset() {
+        assert!(RepoInfo::from_buffer(raw_repo_buffer(None, 0, &[-1, 7])).is_err());
+    }
+
+    #[test]
+    fn ancestry_with_cyclic_parents_errors_instead_of_looping() {
+        // snapshot 0 -> 1 -> 0 -> ...
+        let info = RepoInfo::from_buffer(raw_repo_buffer(None, 0, &[1, 0])).unwrap();
+        let start = info.resolve_branch("main").unwrap();
+        let results: Vec<_> = info.ancestry(&start).unwrap().collect();
+        assert_eq!(results.len(), 3);
+        assert!(results[..2].iter().all(|r| r.is_ok()));
+        assert!(results[2].is_err());
+    }
+
+    #[test]
+    fn status_changed_update_without_status_is_an_error_not_a_panic() {
+        // A repo file whose ops log has a RepoStatusChangedUpdate with no `status`
+        let mut builder = flatbuffers::FlatBufferBuilder::new();
+        let tags = builder.create_vector::<WIPOffset<generated::Ref<'_>>>(&[]);
+        let name = Some(builder.create_string("main"));
+        let main = generated::Ref::create(
+            &mut builder,
+            &generated::RefArgs { name, snapshot_index: 0 },
+        );
+        let branches = builder.create_vector(&[main]);
+        let deleted_tags = builder.create_vector::<WIPOffset<&str>>(&[]);
+        let id = generated::ObjectId12::new(&[0u8; 12]);
+        let message = Some(builder.create_string(""));
+        let snap = generated::SnapshotInfo::create(
+            &mut builder,
+            &generated::SnapshotInfoArgs {
+                id: Some(&id),
+                parent_offset: -1,
+                flushed_at: 1_000_000,
+                message,
+                metadata: None,
+                pruned_ancestor_tx_logs: None,
+            },
+        );
+        let snapshots = builder.create_vector(&[snap]);
+        let status = generated::RepoStatus::create(
+            &mut builder,
+            &generated::RepoStatusArgs {
+                availability: RepoAvailability::Online.into(),
+                set_at: 1_000_000,
+                limited_availability_reason: None,
+            },
+        );
+        let status_update = generated::RepoStatusChangedUpdate::create(
+            &mut builder,
+            &generated::RepoStatusChangedUpdateArgs { status: None },
+        );
+        let update = generated::Update::create(
+            &mut builder,
+            &generated::UpdateArgs {
+                update_type_type: generated::UpdateType::RepoStatusChangedUpdate,
+                update_type: Some(status_update.as_union_value()),
+                updated_at: 1_000_000,
+                backup_path: None,
+            },
+        );
+        let latest_updates = builder.create_vector(&[update]);
+        let repo = generated::Repo::create(
+            &mut builder,
+            &generated::RepoArgs {
+                spec_version: SpecVersionBin::current() as u8,
+                tags: Some(tags),
+                branches: Some(branches),
+                deleted_tags: Some(deleted_tags),
+                snapshots: Some(snapshots),
+                status: Some(status),
+                latest_updates: Some(latest_updates),
+                ..Default::default()
+            },
+        );
+        builder.finish(repo, None);
+
+        let info = RepoInfo::from_buffer(builder.finished_data().to_vec()).unwrap();
+        let updates: Vec<_> = info.latest_updates().unwrap().collect();
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].is_err());
+    }
 
     #[test]
     fn deserializing_an_unverified_buffer_fails() {
@@ -3820,25 +4019,33 @@ mod tests {
     #[test]
     fn out_of_range_snapshot_indexes_are_errors_not_panics()
     -> Result<(), Box<dyn std::error::Error>> {
-        for offset in [1, 5, -2] {
-            let (info, ids) = crafted_snapshots(&[offset], 0, 0)?;
-            assert!(is_malformed(&info.all_snapshots()?.try_collect::<_, Vec<_>, _>()));
-            assert!(is_malformed(&info.ancestry(&ids[0])?.try_collect::<_, Vec<_>, _>()));
-            assert!(is_malformed(&info.find_snapshot(&ids[0])));
-            assert!(is_malformed(&info.snapshot_and_parent_ids()));
-            let _ = format!("{info:?}");
+        // parsing rejects indexes past the end: parent offsets, branches, tags
+        for (offsets, main, tag) in
+            [(&[1], 0, 0), (&[5], 0, 0), (&[-1], 1, 0), (&[-1], 0, 3)]
+        {
+            let err = crafted_snapshots(offsets, main, tag)
+                .err()
+                .and_then(|e| e.downcast::<IcechunkFormatError>().ok());
+            assert!(
+                matches!(
+                    err.as_deref(),
+                    Some(IcechunkFormatError {
+                        kind: IcechunkFormatErrorKind::InvalidFlatBuffer(
+                            flatbuffers::InvalidFlatbuffer::RangeOutOfBounds { .. }
+                        ),
+                        ..
+                    })
+                ),
+                "{offsets:?} {main} {tag}: {err:?}"
+            );
         }
 
-        let (info, _) = crafted_snapshots(&[-1], 1, 0)?;
-        assert!(is_malformed(&info.resolve_branch("main")));
-        assert!(is_malformed(&info.branches().map(|_| ())));
-        assert_eq!(info.tags()?.count(), 1);
-        let _ = format!("{info:?}");
-
-        let (info, _) = crafted_snapshots(&[-1], 0, 3)?;
-        assert!(is_malformed(&info.resolve_tag("t")));
-        assert!(is_malformed(&info.tags().map(|_| ())));
-        assert_eq!(info.branches()?.count(), 1);
+        // parsing accepts other negative parent offsets, reading them fails
+        let (info, ids) = crafted_snapshots(&[-2], 0, 0)?;
+        assert!(is_malformed(&info.all_snapshots()?.try_collect::<_, Vec<_>, _>()));
+        assert!(is_malformed(&info.ancestry(&ids[0])?.try_collect::<_, Vec<_>, _>()));
+        assert!(is_malformed(&info.find_snapshot(&ids[0])));
+        assert!(is_malformed(&info.snapshot_and_parent_ids()));
         let _ = format!("{info:?}");
         Ok(())
     }

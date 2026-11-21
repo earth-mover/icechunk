@@ -12,12 +12,12 @@ use crate::storage::redirect::RedirectStorage;
 // Re-export everything from icechunk-storage
 pub use icechunk_storage::{
     Attribution, AttributionError, AttributionLabels, ConcurrencySettings,
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ICError, ListInfo,
-    PutCondition, RepositoryCreation, RequestAttribution, RetriesSettings, Settings,
-    Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    StorageWriterFeatures, TimeoutSettings, UNATTRIBUTED_LABELS, VersionInfo,
-    VersionedUpdateResult, WriteHint, list_objects_filtered_by_id_prefix,
-    root_is_clean_by_listing,
+    DeleteObjectsResult, ETag, Generation, GetIfMatchResult, GetModifiedResult, ICError,
+    ListInfo, PutCondition, RepositoryCreation, RequestAttribution, RetriesSettings,
+    Settings, Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo,
+    StorageResult, StorageWriterFeatures, TimeoutSettings, UNATTRIBUTED_LABELS,
+    VersionInfo, VersionedUpdateResult, WriteHint, etag_matches,
+    list_objects_filtered_by_id_prefix, root_is_clean_by_listing,
     s3_config::{S3Credentials, S3CredentialsFetcher, S3Options, S3StaticCredentials},
     split_in_multiple_equal_requests, split_in_multiple_requests, strip_quotes, tls,
 };

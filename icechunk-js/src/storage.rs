@@ -8,10 +8,11 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use icechunk::storage::{
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, PutCondition,
-    RepositoryCreation, Settings, Storage, StorageContext, StorageError, StorageInfo,
-    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
-    list_objects_filtered_by_id_prefix, root_is_clean_by_listing,
+    DeleteObjectsResult, ETag, Generation, GetIfMatchResult, GetModifiedResult, ListInfo,
+    PutCondition, RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+    VersionedUpdateResult, WriteHint, etag_matches, list_objects_filtered_by_id_prefix,
+    root_is_clean_by_listing,
 };
 use napi::bindgen_prelude::{Buffer, Promise};
 use napi::threadsafe_function::ThreadsafeFunction;
@@ -298,6 +299,33 @@ impl JsCallbackStorage {
 
 impl icechunk_storage::sealed::Sealed for JsCallbackStorage {}
 
+impl JsCallbackStorage {
+    async fn call_get_object_range(
+        &self,
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<JsStorageGetObjectResponse> {
+        let args = JsStorageGetObjectRangeArgs {
+            path: path.to_string(),
+            range_start: range.map(|r| r.start as f64),
+            range_end: range.map(|r| r.end as f64),
+        };
+        self.get_object_range_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| js_storage_error("JS getObjectRange call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS getObjectRange failed", e))
+    }
+}
+
+fn bytes_stream(
+    data: Buffer,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>> {
+    let bytes = Bytes::from(data.to_vec());
+    Box::pin(futures::stream::once(async move { Ok(bytes) }))
+}
+
 #[async_trait]
 #[typetag::serde(name = "js_callback_storage")]
 impl Storage for JsCallbackStorage {
@@ -363,22 +391,24 @@ impl Storage for JsCallbackStorage {
         range: Option<&Range<u64>>,
     ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
     {
-        let args = JsStorageGetObjectRangeArgs {
-            path: path.to_string(),
-            range_start: range.map(|r| r.start as f64),
-            range_end: range.map(|r| r.end as f64),
-        };
-        let response = self
-            .get_object_range_fn
-            .call_async(Ok(args))
-            .await
-            .map_err(|e| js_storage_error("JS getObjectRange call failed", e))?
-            .await
-            .map_err(|e| js_storage_error("JS getObjectRange failed", e))?;
+        let response = self.call_get_object_range(path, range).await?;
+        Ok(bytes_stream(response.data))
+    }
 
-        let bytes = Bytes::from(response.data.to_vec());
-        let stream = futures::stream::once(async move { Ok(bytes) });
-        Ok(Box::pin(stream))
+    /// Compares the etag the callback returns: it has no way to send If-Match.
+    async fn get_object_range_if_match(
+        &self,
+        _ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        let response = self.call_get_object_range(path, range).await?;
+        if etag_matches(etag, response.version.etag.as_deref())? {
+            Ok(GetIfMatchResult::Matched(bytes_stream(response.data)))
+        } else {
+            Ok(GetIfMatchResult::Modified)
+        }
     }
 
     async fn put_object(
@@ -839,9 +869,32 @@ mod native {
 
     use async_trait::async_trait;
     use chrono::{TimeDelta, Utc};
+    use napi::bindgen_prelude::{Either, FromNapiValue, TypeName, ValidateNapiValue};
     use napi::threadsafe_function::ThreadsafeFunction;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use tokio::sync::RwLock;
+
+    /// A JS credentials callback. It may return the credentials directly or a
+    /// `Promise` that resolves to them.
+    ///
+    /// The function is weak (unref'd): a `Storage` that holds it does not keep
+    /// the Node.js event loop alive. Icechunk only calls it during an operation,
+    /// and the pending operation keeps the loop alive.
+    pub(crate) type JsCredentialsCallback<T> =
+        ThreadsafeFunction<(), Either<Promise<T>, T>, (), napi::Status, true, true>;
+
+    /// Call a JS credentials callback and await its result if it returned a `Promise`.
+    async fn call_credentials_callback<T>(
+        tsfn: &JsCredentialsCallback<T>,
+    ) -> napi::Result<T>
+    where
+        T: FromNapiValue + ValidateNapiValue + TypeName + Send + 'static,
+    {
+        match tsfn.call_async(Ok(())).await? {
+            Either::A(promise) => promise.await,
+            Either::B(value) => Ok(value),
+        }
+    }
 
     /// A credentials fetcher that calls back into JS to get fresh S3 credentials.
     ///
@@ -849,7 +902,7 @@ mod native {
     /// This struct is NOT fully serializable — only the cached credential is
     /// persisted. The JS callback cannot survive serialization.
     pub(crate) struct JsS3CredentialsFetcher {
-        pub(crate) tsfn: ThreadsafeFunction<(), JsS3StaticCredentials>,
+        pub(crate) tsfn: JsCredentialsCallback<JsS3StaticCredentials>,
         pub(crate) last_credential: RwLock<Option<icechunk::config::S3StaticCredentials>>,
     }
 
@@ -903,10 +956,9 @@ mod native {
             }
 
             // Call the JS function to get fresh credentials
-            let js_creds: JsS3StaticCredentials =
-                self.tsfn.call_async(Ok(())).await.map_err(|e| {
-                    format!("Failed to call JS S3 credentials fetcher: {e}")
-                })?;
+            let js_creds: JsS3StaticCredentials = call_credentials_callback(&self.tsfn)
+                .await
+                .map_err(|e| format!("JS S3 credentials callback failed: {e}"))?;
 
             let creds: icechunk::config::S3StaticCredentials = js_creds.into();
 
@@ -920,7 +972,7 @@ mod native {
 
     /// A credentials fetcher that calls back into JS to get fresh GCS credentials.
     pub(crate) struct JsGcsCredentialsFetcher {
-        pub(crate) tsfn: ThreadsafeFunction<(), JsGcsBearerCredential>,
+        pub(crate) tsfn: JsCredentialsCallback<JsGcsBearerCredential>,
         pub(crate) last_credential: RwLock<Option<icechunk::config::GcsBearerCredential>>,
     }
 
@@ -974,10 +1026,9 @@ mod native {
             }
 
             // Call the JS function to get fresh credentials
-            let js_creds: JsGcsBearerCredential =
-                self.tsfn.call_async(Ok(())).await.map_err(|e| {
-                    format!("Failed to call JS GCS credentials fetcher: {e}")
-                })?;
+            let js_creds: JsGcsBearerCredential = call_credentials_callback(&self.tsfn)
+                .await
+                .map_err(|e| format!("JS GCS credentials callback failed: {e}"))?;
 
             let creds: icechunk::config::GcsBearerCredential = js_creds.into();
 
@@ -1313,11 +1364,8 @@ impl JsStorage {
     pub fn new_s3_with_refreshable_credentials(
         bucket: String,
         prefix: Option<String>,
-        #[napi(ts_arg_type = "() => Promise<S3StaticCredentials>")]
-        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
-            (),
-            JsS3StaticCredentials,
-        >,
+        #[napi(ts_arg_type = "() => S3StaticCredentials | Promise<S3StaticCredentials>")]
+        credentials_callback: JsCredentialsCallback<JsS3StaticCredentials>,
         initial_credentials: Option<JsS3StaticCredentials>,
         options: Option<JsS3Options>,
     ) -> napi::Result<JsStorage> {
@@ -1348,11 +1396,8 @@ impl JsStorage {
         bucket: Option<String>,
         prefix: Option<String>,
         account_id: Option<String>,
-        #[napi(ts_arg_type = "() => Promise<S3StaticCredentials>")]
-        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
-            (),
-            JsS3StaticCredentials,
-        >,
+        #[napi(ts_arg_type = "() => S3StaticCredentials | Promise<S3StaticCredentials>")]
+        credentials_callback: JsCredentialsCallback<JsS3StaticCredentials>,
         initial_credentials: Option<JsS3StaticCredentials>,
         options: Option<JsS3Options>,
     ) -> napi::Result<JsStorage> {
@@ -1383,11 +1428,8 @@ impl JsStorage {
     pub fn new_tigris_with_refreshable_credentials(
         bucket: String,
         prefix: Option<String>,
-        #[napi(ts_arg_type = "() => Promise<S3StaticCredentials>")]
-        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
-            (),
-            JsS3StaticCredentials,
-        >,
+        #[napi(ts_arg_type = "() => S3StaticCredentials | Promise<S3StaticCredentials>")]
+        credentials_callback: JsCredentialsCallback<JsS3StaticCredentials>,
         initial_credentials: Option<JsS3StaticCredentials>,
         options: Option<JsS3Options>,
         use_weak_consistency: Option<bool>,
@@ -1420,11 +1462,8 @@ impl JsStorage {
     pub async fn new_s3_object_store_with_refreshable_credentials(
         bucket: String,
         prefix: Option<String>,
-        #[napi(ts_arg_type = "() => Promise<S3StaticCredentials>")]
-        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
-            (),
-            JsS3StaticCredentials,
-        >,
+        #[napi(ts_arg_type = "() => S3StaticCredentials | Promise<S3StaticCredentials>")]
+        credentials_callback: JsCredentialsCallback<JsS3StaticCredentials>,
         initial_credentials: Option<JsS3StaticCredentials>,
         options: Option<JsS3Options>,
     ) -> napi::Result<JsStorage> {
@@ -1454,11 +1493,8 @@ impl JsStorage {
     pub fn new_gcs_with_refreshable_credentials(
         bucket: String,
         prefix: Option<String>,
-        #[napi(ts_arg_type = "() => Promise<GcsBearerCredential>")]
-        credentials_callback: napi::threadsafe_function::ThreadsafeFunction<
-            (),
-            JsGcsBearerCredential,
-        >,
+        #[napi(ts_arg_type = "() => GcsBearerCredential | Promise<GcsBearerCredential>")]
+        credentials_callback: JsCredentialsCallback<JsGcsBearerCredential>,
         initial_credentials: Option<JsGcsBearerCredential>,
         config: Option<HashMap<String, String>>,
     ) -> napi::Result<JsStorage> {

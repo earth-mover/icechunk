@@ -12,9 +12,10 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
-    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
-    StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
+    DeleteObjectsResult, ETag, GetIfMatchResult, GetModifiedResult, ListInfo,
+    PutCondition, RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+    VersionedUpdateResult, WriteHint,
 };
 
 type Backend<'a> = &'a (dyn Storage + Send + Sync);
@@ -168,6 +169,16 @@ impl Storage for InterceptingStorage {
     ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
     {
         self.backend.get_object_range(ctx, path, range).await
+    }
+
+    async fn get_object_range_if_match(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        self.backend.get_object_range_if_match(ctx, path, range, etag).await
     }
 
     async fn put_object(

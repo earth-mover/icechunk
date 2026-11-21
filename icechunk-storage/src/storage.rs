@@ -563,6 +563,23 @@ impl fmt::Debug for GetModifiedResult {
     }
 }
 
+/// Result of [`Storage::get_object_range_if_match`].
+pub enum GetIfMatchResult {
+    /// The object's etag is the expected one.
+    Matched(Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>),
+    /// The object has a different etag.
+    Modified,
+}
+
+impl fmt::Debug for GetIfMatchResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Matched(_) => write!(f, "Matched"),
+            Self::Modified => write!(f, "Modified"),
+        }
+    }
+}
+
 impl Display for GetModifiedResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -704,6 +721,19 @@ pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
         path: &str,
         range: Option<&Range<u64>>,
     ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>;
+
+    /// Read `path`, or a range of it, only if its etag is `etag`.
+    ///
+    /// Returns [`GetIfMatchResult::Modified`] when the object has a different
+    /// etag. Fails when the backend can't verify etags or the read returns no
+    /// etag. Quotes around etags are ignored.
+    async fn get_object_range_if_match(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult>;
 
     /// Write `path` unconditionally, replacing any existing object.
     ///
@@ -984,6 +1014,14 @@ pub fn split_in_multiple_equal_requests(
 
 pub fn strip_quotes(s: &str) -> &str {
     s.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(s)
+}
+
+/// Whether `actual`, the etag a read returned, is `expected`, ignoring quotes.
+/// A read without an etag is an error: there is nothing to verify.
+pub fn etag_matches(expected: &ETag, actual: Option<&str>) -> StorageResult<bool> {
+    let actual =
+        actual.ok_or_else(|| other_error("the storage returned no ETag to verify"))?;
+    Ok(strip_quotes(actual) == strip_quotes(&expected.0))
 }
 
 #[cfg(test)]

@@ -46,10 +46,11 @@ pub use icechunk_storage::s3_config::{
     S3StaticCredentials,
 };
 use icechunk_storage::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
-    Settings, Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo,
-    StorageResult, StorageWriterFeatures, Timeout, VersionInfo, VersionedUpdateResult,
-    WriteHint, obj_not_found_res, obj_store_error, obj_store_error_res, other_error,
+    DeleteObjectsResult, ETag, GetIfMatchResult, GetModifiedResult, ListInfo,
+    PutCondition, RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageErrorKind, StorageInfo, StorageResult, StorageWriterFeatures, Timeout,
+    VersionInfo, VersionedUpdateResult, WriteHint, etag_matches, obj_not_found_res,
+    obj_store_error, obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -332,7 +333,7 @@ pub async fn mk_client(
     };
 
     let mut aws_config =
-        aws_config::defaults(BehaviorVersion::v2026_01_12()).region(region);
+        aws_config::defaults(BehaviorVersion::v2026_11_17()).region(region);
 
     if let Some(endpoint) = endpoint {
         aws_config = aws_config.endpoint_url(endpoint);
@@ -1526,7 +1527,10 @@ impl Storage for S3Storage {
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        match self.get_object_range_conditional(ctx, path, None, previous_version).await {
+        match self
+            .get_object_range_conditional(ctx, path, None, previous_version, None)
+            .await
+        {
             Ok(Some((stream, new_version))) => {
                 let reader = StreamReader::new(stream.map_err(std::io::Error::other));
                 Ok(GetModifiedResult::Modified { data: Box::pin(reader), new_version })
@@ -1543,13 +1547,34 @@ impl Storage for S3Storage {
         range: Option<&Range<u64>>,
     ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
     {
-        self.get_object_range_conditional(ctx, path, range, None).await.map(|v| {
+        self.get_object_range_conditional(ctx, path, range, None, None).await.map(|v| {
             // If we got a result, then we can unwrap safely here:
             // Errors would be in the other branch, and None is only expected
-            // if previous_version was passed in function call, but we set it to None
+            // if a condition was passed in function call, but we set none
             #[expect(clippy::expect_used)]
             v.expect("Logic bug in get_object_range_conditional, should not get None").0
         })
+    }
+
+    async fn get_object_range_if_match(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        match self
+            .get_object_range_conditional(ctx, path, range, None, Some(etag))
+            .await?
+        {
+            // a server that ignores If-Match still returns the object's ETag
+            Some((stream, version))
+                if etag_matches(etag, version.etag().map(String::as_str))? =>
+            {
+                Ok(GetIfMatchResult::Matched(stream))
+            }
+            _ => Ok(GetIfMatchResult::Modified),
+        }
     }
 }
 
@@ -1560,6 +1585,7 @@ impl S3Storage {
         path: &str,
         range: Option<&Range<u64>>,
         previous_version: Option<&VersionInfo>,
+        if_match: Option<&ETag>,
     ) -> StorageResult<
         Option<(
             Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
@@ -1586,6 +1612,10 @@ impl S3Storage {
         {
             req = req.if_none_match(strip_quotes(etag));
         };
+
+        if let Some(etag) = if_match {
+            req = req.if_match(strip_quotes(&etag.0));
+        }
 
         match req.customize().config_override(attribution_override(ctx)).send().await {
             Ok(output) => match output.e_tag {
@@ -1623,6 +1653,14 @@ impl S3Storage {
                             .is_some_and(|x| x.status().as_u16() == 304) =>
                     {
                         trace!("Received 304 (Not Modified). Treating requested object as up-to-date.");
+                        Ok(None)
+                    }
+                    Some(_)
+                        if if_match.is_some()
+                            && sdk_err
+                                .raw_response()
+                                .is_some_and(|x| x.status().as_u16() == 412) =>
+                    {
                         Ok(None)
                     }
                     _ => obj_store_error_res(sdk_err),

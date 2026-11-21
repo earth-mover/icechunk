@@ -20,8 +20,8 @@ use futures::{
     stream::{self, BoxStream},
 };
 use icechunk_storage::{
-    DeleteObjectsResult, ETag, GetModifiedResult, ListInfo, PutCondition,
-    RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    DeleteObjectsResult, ETag, GetIfMatchResult, GetModifiedResult, ListInfo,
+    PutCondition, RepositoryCreation, Settings, Storage, StorageContext, StorageError,
     StorageErrorKind, StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
     VersionedUpdateResult, WriteHint, list_objects_filtered_by_id_prefix, other_error,
     root_is_clean_by_listing, sealed, split_in_multiple_requests,
@@ -429,6 +429,17 @@ impl Storage for FilesystemStorage {
             blocking(move || read_range(&path, range.as_ref()).map_err(io_error)).await?
         };
         Ok(stream::once(ready(Ok(bytes))).boxed())
+    }
+
+    /// Files have no etags to verify.
+    async fn get_object_range_if_match(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _path: &str,
+        _range: Option<&Range<u64>>,
+        _etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        Err(other_error("filesystem storage can't verify ETags"))
     }
 
     /// `repo` is one read, whatever the length of `range`: reads split into

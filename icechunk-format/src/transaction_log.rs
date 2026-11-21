@@ -15,7 +15,7 @@ use crate::{
 };
 use icechunk_types::ICResultExt as _;
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TransactionLog {
     buffer: Vec<u8>,
 }

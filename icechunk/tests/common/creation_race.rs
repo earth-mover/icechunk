@@ -20,10 +20,10 @@ use icechunk::{
     format::{REPO_INFO_FILE_PATH, SNAPSHOTS_FILE_PATH, snapshot::Snapshot},
     repository::VersionInfo as RepoVersionInfo,
     storage::{
-        DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition,
-        RepositoryCreation, Settings, StorageContext, StorageError, StorageInfo,
-        StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult,
-        WriteHint,
+        DeleteObjectsResult, ETag, GetIfMatchResult, GetModifiedResult, ListInfo,
+        PutCondition, RepositoryCreation, Settings, StorageContext, StorageError,
+        StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+        VersionedUpdateResult, WriteHint,
     },
 };
 use icechunk_storage::sealed;
@@ -242,6 +242,16 @@ impl Storage for CreatorStorage {
     ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
     {
         self.backend.get_object_range(ctx, path, range).await
+    }
+
+    async fn get_object_range_if_match(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        self.backend.get_object_range_if_match(ctx, path, range, etag).await
     }
 }
 

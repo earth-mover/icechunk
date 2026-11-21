@@ -20,12 +20,12 @@ use icechunk_storage::Timeout;
 #[cfg(feature = "s3")]
 use icechunk_storage::s3_config::{S3Credentials, S3Options};
 use icechunk_storage::{
-    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetModifiedResult,
-    ListInfo, PutCondition, RepositoryCreation, RetriesSettings, Settings, Storage,
-    StorageContext, StorageError, StorageErrorKind, StorageInfo, StorageResult,
-    StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
-    filter_ids_by_id_prefix, obj_not_found_res, obj_store_error, obj_store_error_res,
-    other_error,
+    ConcurrencySettings, DeleteObjectsResult, ETag, Generation, GetIfMatchResult,
+    GetModifiedResult, ListInfo, PutCondition, RepositoryCreation, RetriesSettings,
+    Settings, Storage, StorageContext, StorageError, StorageErrorKind, StorageInfo,
+    StorageResult, StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
+    etag_matches, filter_ids_by_id_prefix, obj_not_found_res, obj_store_error,
+    obj_store_error_res, other_error,
     readback::{
         ReadbackOutcome, WRITE_ID_METADATA_KEY, resolve_lost_response,
         resolve_precondition, write_id_for,
@@ -981,6 +981,28 @@ impl Storage for ObjectStorage {
             #[expect(clippy::expect_used)]
             v.expect("Logic bug in get_object_range_conditional, should not get None").0
         })
+    }
+
+    #[instrument(skip(self, ctx))]
+    async fn get_object_range_if_match(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        // No If-Match: `object_store` compares it verbatim, and its backends
+        // disagree on quoting ETags. The response's ETag is that of its bytes.
+        match self.get_object_range_conditional(ctx, path, range, None).await? {
+            Some((stream, version)) => {
+                if etag_matches(etag, version.etag().map(String::as_str))? {
+                    Ok(GetIfMatchResult::Matched(stream))
+                } else {
+                    Ok(GetIfMatchResult::Modified)
+                }
+            }
+            None => Err(other_error("an unconditional read returned no object")),
+        }
     }
 }
 

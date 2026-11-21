@@ -175,6 +175,10 @@ While the transaction is in progress, none of these changes will be visible to o
 Once the transaction is committed, a new snapshot is generated.
 Readers can only see and use committed snapshots.
 
+Keeping every version does not duplicate your data: only chunks that change are written
+(see [Icechunk: Efficient storage of versioned array data](https://www.earthmover.io/blog/icechunk-efficient-storage-of-versioned-array-data)).
+Old versions you no longer need can be removed with [expiration and garbage collection](expiration.md).
+
 ### Branches and Tags
 
 Additionally, snapshots occur in a specific linear (i.e. serializable) order within a  **branch**.

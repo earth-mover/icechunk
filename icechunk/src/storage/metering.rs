@@ -16,9 +16,10 @@ use futures::{Stream, StreamExt as _, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, PutCondition, RepositoryCreation,
-    Settings, Storage, StorageContext, StorageError, StorageInfo, StorageResult,
-    StorageWriterFeatures, VersionInfo, VersionedUpdateResult, WriteHint,
+    DeleteObjectsResult, ETag, GetIfMatchResult, GetModifiedResult, ListInfo,
+    PutCondition, RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+    VersionedUpdateResult, WriteHint,
 };
 use icechunk_storage::sealed;
 
@@ -347,6 +348,28 @@ impl Storage for MeteringStorage {
             }
         });
         Ok(Box::pin(stream))
+    }
+
+    async fn get_object_range_if_match(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        self.meter.request("get_object_range_if_match");
+        match self.backend.get_object_range_if_match(ctx, path, range, etag).await? {
+            GetIfMatchResult::Matched(stream) => {
+                let meter = Arc::clone(&self.meter);
+                let stream = stream.inspect(move |item| {
+                    if let Ok(bytes) = item {
+                        meter.read("get_object_range_if_match", bytes.len() as u64);
+                    }
+                });
+                Ok(GetIfMatchResult::Matched(Box::pin(stream)))
+            }
+            GetIfMatchResult::Modified => Ok(GetIfMatchResult::Modified),
+        }
     }
 }
 

@@ -1,0 +1,4 @@
+self-hosted-runner:
+  # GitHub-hosted larger runner of the earth-mover org
+  labels:
+    - ubuntu24-8-core-amd64
