@@ -57,6 +57,7 @@ pub mod storage;
 pub mod store;
 #[cfg(test)]
 pub mod strategies;
+pub mod url_pipeline;
 pub mod virtual_chunks;
 
 pub use config::{ObjectStoreConfig, RepositoryConfig};

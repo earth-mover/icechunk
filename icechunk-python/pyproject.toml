@@ -155,7 +155,15 @@ enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 # This fixture generator drives several icechunk versions (installed under
 # renamed packages via third-wheel; see `just gen-expired-fixtures`) through one
 # Any-typed API, so it can't be meaningfully type-checked.
-exclude = ["tests/data_generation/generate_expired_repos.py"]
+exclude = [
+  "tests/data_generation/generate_expired_repos.py",
+  # The URL pipeline adapter needs zarr's URL pipeline API (zarr-python#4192,
+  # merged but unreleased), which the pinned dev zarr lacks. The
+  # url-pipeline-adapter job in python-check.yaml type-checks these files against
+  # zarr main. TODO: drop them from here once a zarr release has the API.
+  "python/icechunk/zarr_url_adapter.py",
+  "tests/test_zarr_url_adapter.py",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -205,6 +213,11 @@ ban-relative-imports = "all"
 
 [project.scripts]
 icechunk = "icechunk._icechunk_python:cli_entrypoint"
+
+# The `icechunk:` URL pipeline adapter (ZEP 8). zarr loads it only when a URL
+# pipeline names the scheme. Released zarr versions do not read this group yet.
+[project.entry-points."zarr.url_adapters"]
+icechunk = "icechunk.zarr_url_adapter:IcechunkURLAdapter"
 
 [tool.pixi.workspace]
 channels = ["conda-forge", "https://prefix.dev/github-releases"]
