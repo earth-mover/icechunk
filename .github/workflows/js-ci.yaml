@@ -62,7 +62,7 @@ jobs:
           manifest-path: icechunk-python/pyproject.toml
           environments: js
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           # pixi.lock pins rustc, so a toolchain bump invalidates the cache
           key: ${{ matrix.settings.target }}-${{ hashFiles('icechunk-python/pixi.lock') }}
@@ -109,7 +109,7 @@ jobs:
         # the runner image ships an older stable; track the current one
         run: rustup update stable --no-self-update && rustup default stable
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        uses: Swatinem/rust-cache@eedcf2fb1c22f010a0eb66b92f378c110977f266 # v2
         with:
           key: x86_64-unknown-linux-gnu
           save-if: ${{ github.ref == 'refs/heads/main' }}
