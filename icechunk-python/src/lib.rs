@@ -62,12 +62,14 @@ fn cli_entrypoint(py: Python<'_>) -> PyResult<()> {
     let sys = py.import("sys")?;
     let args: Vec<String> = sys.getattr("argv")?.extract()?;
     match IcechunkCLI::try_parse_from(args.clone()) {
-        Ok(cli_args) => pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            if let Err(e) = run_cli(cli_args).await {
-                eprintln!("{e}");
-                std::process::exit(1);
-            }
-            Ok(())
+        Ok(cli_args) => py.detach(|| {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                if let Err(e) = run_cli(cli_args).await {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+                Ok(())
+            })
         }),
         Err(e) => {
             if e.use_stderr() {
