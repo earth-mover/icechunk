@@ -4714,4 +4714,30 @@ mod tests {
 
         Ok(())
     }
+
+    /// Without list permission, S3 and GCS answer a read of the missing V1 ref with
+    /// 403 instead of 404. Any error from the V1 check must not fail the open of a
+    /// V2 repo whose `repo` object reads fine.
+    #[tokio_test]
+    async fn test_open_ignores_v1_check_error() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        Repository::create(Arc::clone(&storage)).execute().await?;
+
+        let settings = storage.default_settings().await?;
+        let labels = AttributionLabels::from(&Attribution::default());
+        storage
+            .put_object(
+                &StorageContext::without_node(&settings, &labels),
+                "refs/branch.main/ref.json",
+                Bytes::from_static(b"unreadable"),
+                None,
+                Vec::new(),
+                None,
+            )
+            .await?;
+
+        let repo = Repository::open(storage).execute().await?;
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
+        Ok(())
+    }
 }
