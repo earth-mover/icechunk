@@ -16,9 +16,8 @@ use icechunk::{
 };
 
 pub(crate) enum Permission {
-    #[expect(dead_code)]
     ReadOnly, // GetObject
-    Modify, // {Get,Put,Delete}Object, ListBucket
+    Modify,   // {Get,Put,Delete}Object, ListBucket
 }
 
 impl Permission {

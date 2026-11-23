@@ -466,6 +466,51 @@ async fn check_clean_repo() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Credentials with `GetObject` but no `ListBucket` get a 403, not a 404, for missing
+/// keys. Opening a V2+ repo probes the V1 ref, which is missing, so that 403 must not
+/// fail the open. V1 repos still need `ListBucket`: their missing `repo` object 403s.
+#[tokio_test]
+async fn open_without_list_permission() -> Result<(), Box<dyn std::error::Error>> {
+    async fn check(
+        mk_storage: impl AsyncFn(
+            &str,
+            &Permission,
+        ) -> StorageResult<Arc<dyn Storage + Send + Sync>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let main = icechunk::repository::VersionInfo::BranchTipRef("main".to_string());
+
+        let prefix = common::get_random_prefix("open_without_list_permission_v2");
+        let repo = Repository::create(mk_storage(&prefix, &Permission::Modify).await?)
+            .execute()
+            .await?;
+        let snap = repo.lookup_branch("main").await?;
+        repo.create_tag("tag", &snap).await?;
+
+        let repo = Repository::open(mk_storage(&prefix, &Permission::ReadOnly).await?)
+            .execute()
+            .await?;
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
+        repo.readonly_session(&main).await?;
+        assert_eq!(repo.lookup_tag("tag").await?, snap);
+
+        let prefix = common::get_random_prefix("open_without_list_permission_v1");
+        Repository::create(mk_storage(&prefix, &Permission::Modify).await?)
+            .spec_version(SpecVersionBin::V1)
+            .execute()
+            .await?;
+        let res = Repository::open(mk_storage(&prefix, &Permission::ReadOnly).await?)
+            .execute()
+            .await;
+        assert!(res.is_err());
+
+        Ok(())
+    }
+
+    check(mk_s3_storage).await?;
+    check(mk_s3_object_store_storage).await?;
+    Ok(())
+}
+
 /// Creating a repository at an empty prefix (the bucket/container root) is refused on
 /// every cloud object-store backend — native S3 and the `object_store`-based S3,
 /// Azure, and GCS — but allowed on in-memory and local-filesystem storage, and via
