@@ -2041,6 +2041,26 @@ mod tests {
         client.config().timeout_config().cloned().expect("timeout config is always set")
     }
 
+    async fn http_client_name(options: &S3Options) -> String {
+        let client = mk_client(
+            options,
+            S3Credentials::Anonymous,
+            vec![],
+            vec![],
+            &Settings::default(),
+        )
+        .await;
+        format!("{:?}", client.config().http_client())
+    }
+
+    #[tokio_test]
+    async fn only_custom_endpoints_use_the_http1_client() {
+        let aws = S3Options::default().with_region("us-east-1");
+        assert!(!http_client_name(&aws).await.contains("Http1Client"));
+        let custom = aws.with_endpoint_url("https://storage.googleapis.com");
+        assert!(http_client_name(&custom).await.contains("Http1Client"));
+    }
+
     #[tokio_test]
     async fn default_timeouts_bound_each_attempt() {
         let timeouts = client_timeouts(&Settings::default()).await;

@@ -1,10 +1,11 @@
-//! HTTPS client that offers only HTTP/1.1. Hyper's HTTP/2 client reads 2-7x slower, and the SDK
+//! HTTP client that speaks only HTTP/1.1. Hyper's HTTP/2 client reads much slower, and the SDK
 //! client cannot turn HTTP/2 off: <https://github.com/earth-mover/icechunk/issues/2571>.
 
 use std::{
+    borrow::Cow,
     collections::HashMap,
     error::Error,
-    fmt,
+    fmt, io,
     pin::Pin,
     sync::{Arc, LazyLock, Mutex},
     task::{Context, Poll},
@@ -16,6 +17,7 @@ use aws_sdk_s3::{
     error::BoxError,
 };
 use aws_smithy_runtime_api::client::{
+    connector_metadata::ConnectorMetadata,
     http::{
         HttpClient, HttpConnector, HttpConnectorFuture, HttpConnectorSettings,
         SharedHttpConnector,
@@ -24,12 +26,16 @@ use aws_smithy_runtime_api::client::{
     result::ConnectorError,
 };
 use aws_smithy_types::{body::SdkBody, retry::ErrorKind};
-use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
+use http::{Uri, header::PROXY_AUTHORIZATION, uri::Scheme};
+use hyper::rt::{Read, ReadBufCursor, Write};
+use hyper_rustls::{HttpsConnector, MaybeHttpsStream};
 use hyper_util::{
     client::{
         legacy::{
             Client,
-            connect::{HttpConnector as TcpConnector, proxy::Tunnel},
+            connect::{
+                Connected, Connection, HttpConnector as TcpConnector, proxy::Tunnel,
+            },
         },
         proxy::matcher::Matcher,
     },
@@ -49,7 +55,7 @@ pub(crate) enum TrustRoots {
 
 pub(crate) fn https_client(roots: TrustRoots) -> SharedHttpClient {
     SharedHttpClient::new(Http1Client {
-        tls: tls_config(roots),
+        tls: Arc::new(tls_config(roots)),
         proxies: Arc::new(Matcher::from_env()),
         connectors: Mutex::default(),
     })
@@ -62,6 +68,9 @@ static SYSTEM_ROOTS: LazyLock<Arc<RootCertStore>> = LazyLock::new(|| {
     }
     let mut store = RootCertStore::empty();
     store.add_parsable_certificates(native.certs);
+    if store.is_empty() {
+        tracing::warn!("no system TLS root certificates found, HTTPS requests will fail");
+    }
     Arc::new(store)
 });
 
@@ -78,19 +87,21 @@ fn tls_config(roots: TrustRoots) -> ClientConfig {
         TrustRoots::Nothing => Arc::new(RootCertStore::empty()),
     };
     #[expect(clippy::expect_used)]
-    ClientConfig::builder_with_provider(Arc::new(
+    let mut config = ClientConfig::builder_with_provider(Arc::new(
         rustls::crypto::aws_lc_rs::default_provider(),
     ))
     .with_safe_default_protocol_versions()
     .expect("aws-lc-rs supports the default TLS versions")
     .with_root_certificates(roots)
-    .with_no_client_auth()
+    .with_no_client_auth();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    config
 }
 
 type Timeouts = (Option<Duration>, Option<Duration>);
 
 struct Http1Client {
-    tls: ClientConfig,
+    tls: Arc<ClientConfig>,
     proxies: Arc<Matcher>,
     // The SDK asks for a connector per request; caching keeps the connection pool alive.
     connectors: Mutex<HashMap<Timeouts, SharedHttpConnector>>,
@@ -115,55 +126,170 @@ impl HttpClient for Http1Client {
             .entry(timeouts)
             .or_insert_with(|| {
                 SharedHttpConnector::new(Http1Connector::new(
-                    self.tls.clone(),
+                    Arc::clone(&self.tls),
                     Arc::clone(&self.proxies),
                     timeouts,
                 ))
             })
             .clone()
     }
+
+    fn connector_metadata(&self) -> Option<ConnectorMetadata> {
+        Some(ConnectorMetadata::new("hyper", Some(Cow::Borrowed("1.x"))))
+    }
 }
 
-/// TCP connections, through a CONNECT tunnel when the proxy env vars select one for the host.
+type ProxyIo = MaybeHttpsStream<TokioIo<TcpStream>>;
+
+/// A TCP stream to the endpoint, or a stream to or through the proxy that the env vars select.
+struct Conn {
+    io: ProxyIo,
+    // Hyper sends absolute-form request targets only on a connection marked as proxied.
+    forward_proxy: bool,
+}
+
+impl Connection for Conn {
+    fn connected(&self) -> Connected {
+        self.io.connected().proxy(self.forward_proxy)
+    }
+}
+
+impl Read for Conn {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: ReadBufCursor<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.io).poll_read(cx, buf)
+    }
+}
+
+impl Write for Conn {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.io).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.io).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.io).poll_shutdown(cx)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.io.is_write_vectored()
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.io).poll_write_vectored(cx, bufs)
+    }
+}
+
+type Connecting<T> = Pin<Box<dyn Future<Output = Result<T, BoxError>> + Send>>;
+
 #[derive(Clone)]
 struct Transport {
     tcp: TcpConnector,
+    // Speaks TLS to an `https://` proxy, so the CONNECT and its credentials stay encrypted.
+    to_proxy: HttpsConnector<TcpConnector>,
     proxies: Arc<Matcher>,
 }
 
-impl Service<http::Uri> for Transport {
-    type Response = TokioIo<TcpStream>;
+impl Service<Uri> for Transport {
+    type Response = Conn;
     type Error = BoxError;
-    type Future =
-        Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future = Connecting<Conn>;
 
     fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, dst: http::Uri) -> Self::Future {
+    fn call(&mut self, dst: Uri) -> Self::Future {
         let mut tcp = self.tcp.clone();
-        // A plain-HTTP endpoint connects directly: a proxy would need absolute-form requests.
-        let proxy = (dst.scheme() == Some(&http::uri::Scheme::HTTPS))
-            .then(|| self.proxies.intercept(&dst))
-            .flatten();
+        let mut to_proxy = self.to_proxy.clone();
+        let proxy = self.proxies.intercept(&dst);
         Box::pin(async move {
-            match proxy {
-                None => Ok(tcp.call(dst).await?),
-                Some(proxy) => {
-                    let mut tunnel = Tunnel::new(proxy.uri().clone(), tcp);
-                    if let Some(auth) = proxy.basic_auth() {
-                        tunnel = tunnel.with_auth(auth.clone());
-                    }
-                    Ok(tunnel.call(dst).await?)
+            let Some(proxy) = proxy else {
+                let io = MaybeHttpsStream::Http(tcp.call(dst).await?);
+                return Ok(Conn { io, forward_proxy: false });
+            };
+            let scheme = proxy.uri().scheme_str().unwrap_or_default();
+            if !matches!(scheme, "http" | "https") {
+                return Err(format!("unsupported proxy scheme `{scheme}`").into());
+            }
+            if dst.scheme() == Some(&Scheme::HTTPS) {
+                let mut tunnel = Tunnel::new(proxy.uri().clone(), to_proxy);
+                if let Some(auth) = proxy.basic_auth() {
+                    tunnel = tunnel.with_auth(auth.clone());
                 }
+                Ok(Conn { io: tunnel.call(dst).await?, forward_proxy: false })
+            } else {
+                let io = to_proxy.call(proxy.uri().clone()).await?;
+                Ok(Conn { io, forward_proxy: true })
+            }
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ConnectTimeout(Duration);
+
+impl fmt::Display for ConnectTimeout {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "HTTP connect timeout occurred after {:?}", self.0)
+    }
+}
+
+impl Error for ConnectTimeout {}
+
+/// One limit for DNS, TCP, the proxy handshake and TLS together, as in the SDK client.
+#[derive(Clone)]
+struct WithConnectTimeout {
+    inner: HttpsConnector<Transport>,
+    limit: Option<Duration>,
+}
+
+impl Service<Uri> for WithConnectTimeout {
+    type Response = MaybeHttpsStream<Conn>;
+    type Error = BoxError;
+    type Future = Connecting<Self::Response>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, dst: Uri) -> Self::Future {
+        let connecting = self.inner.call(dst);
+        let limit = self.limit;
+        Box::pin(async move {
+            match limit {
+                None => connecting.await,
+                Some(limit) => tokio::time::timeout(limit, connecting)
+                    .await
+                    .map_err(|_| ConnectTimeout(limit))?,
             }
         })
     }
 }
 
 struct Http1Connector {
-    client: Client<HttpsConnector<Transport>, SdkBody>,
+    client: Client<WithConnectTimeout, SdkBody>,
+    proxies: Arc<Matcher>,
     read_timeout: Option<Duration>,
 }
 
@@ -177,34 +303,45 @@ impl fmt::Debug for Http1Connector {
 
 impl Http1Connector {
     fn new(
-        tls: ClientConfig,
+        tls: Arc<ClientConfig>,
         proxies: Arc<Matcher>,
         (connect_timeout, read_timeout): Timeouts,
     ) -> Self {
         let mut tcp = TcpConnector::new();
         tcp.enforce_http(false);
         tcp.set_nodelay(true);
-        tcp.set_connect_timeout(connect_timeout);
-        let https = HttpsConnectorBuilder::new()
-            .with_tls_config(tls)
-            .https_or_http()
-            .enable_http1()
-            .wrap_connector(Transport { tcp, proxies });
+        let transport = Transport {
+            to_proxy: HttpsConnector::from((tcp.clone(), Arc::clone(&tls))),
+            tcp,
+            proxies: Arc::clone(&proxies),
+        };
+        let connector = WithConnectTimeout {
+            inner: HttpsConnector::from((transport, tls)),
+            limit: connect_timeout,
+        };
         let client = Client::builder(TokioExecutor::new())
             .pool_timer(TokioTimer::new())
-            .build(https);
-        Self { client, read_timeout }
+            .build(connector);
+        Self { client, proxies, read_timeout }
     }
 }
 
 impl HttpConnector for Http1Connector {
     fn call(&self, request: HttpRequest) -> HttpConnectorFuture {
-        let request = match request.try_into_http1x() {
+        let mut request = match request.try_into_http1x() {
             Ok(request) => request,
             Err(err) => {
                 return HttpConnectorFuture::ready(Err(ConnectorError::user(err.into())));
             }
         };
+        // A tunnel sends the proxy credentials in its CONNECT; a forward proxy reads them here.
+        if request.uri().scheme() == Some(&Scheme::HTTP)
+            && !request.headers().contains_key(PROXY_AUTHORIZATION)
+            && let Some(proxy) = self.proxies.intercept(request.uri())
+            && let Some(auth) = proxy.basic_auth()
+        {
+            request.headers_mut().insert(PROXY_AUTHORIZATION, auth.clone());
+        }
         let response = self.client.request(request);
         let read_timeout = self.read_timeout;
         HttpConnectorFuture::new(async move {
@@ -243,6 +380,9 @@ enum Kind {
 
 fn error_kind(err: &(dyn Error + 'static)) -> Kind {
     let chain = || std::iter::successors(Some(err), |&e| e.source());
+    if chain().any(|e| e.is::<ConnectTimeout>()) {
+        return Kind::Timeout;
+    }
     if let Some(hyper_err) = chain().find_map(|e| e.downcast_ref::<hyper::Error>()) {
         if hyper_err.is_timeout() {
             return Kind::Timeout;
@@ -261,7 +401,7 @@ fn error_kind(err: &(dyn Error + 'static)) -> Kind {
     let connect_failed = chain()
         .find_map(|e| e.downcast_ref::<hyper_util::client::legacy::Error>())
         .is_some_and(hyper_util::client::legacy::Error::is_connect);
-    if connect_failed || chain().any(|e| e.is::<std::io::Error>()) {
+    if connect_failed || chain().any(|e| e.is::<io::Error>()) {
         Kind::Io
     } else {
         Kind::Other
@@ -270,16 +410,23 @@ fn error_kind(err: &(dyn Error + 'static)) -> Kind {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use aws_smithy_runtime_api::client::{
-        http::HttpConnector as _, orchestrator::HttpRequest,
+        http::HttpConnector as _,
+        orchestrator::{HttpRequest, HttpResponse},
+        result::ConnectorError,
     };
     use aws_smithy_types::body::SdkBody;
     use hyper_util::client::proxy::matcher::Matcher;
+    use icechunk_macros::tokio_test;
     use rustls::ServerConfig;
     use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject as _};
-    use tokio::{io::AsyncWriteExt as _, net::TcpListener};
+    use tokio::{
+        io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _},
+        net::{TcpListener, TcpStream},
+        sync::mpsc::{UnboundedReceiver, unbounded_channel},
+    };
     use tokio_rustls::TlsAcceptor;
 
     use super::{Http1Connector, TrustRoots, tls_config};
@@ -287,9 +434,11 @@ mod tests {
     const CA: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/ca.pem");
     const CERT: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/server.pem");
     const KEY: &[u8] = include_bytes!("../../icechunk-python/tests/data/tls/server.key");
+    const OK: &[u8] = b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n";
+    const AUTH: &str = "proxy-authorization: basic dxnlcjpzzwnyzxq=";
 
-    /// Serves one empty `200` over TLS and returns the ALPN protocol the client picked.
-    async fn negotiated_protocol(connector: Http1Connector) -> Option<Vec<u8>> {
+    /// A TLS server side for `localhost` that offers `h2` before `http/1.1`.
+    fn acceptor() -> TlsAcceptor {
         let mut server = ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
         ))
@@ -302,36 +451,188 @@ mod tests {
         )
         .unwrap();
         server.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-        let acceptor = TlsAcceptor::from(Arc::new(server));
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        let serve = tokio::spawn(async move {
-            let (tcp, _) = listener.accept().await.unwrap();
-            let mut tls = acceptor.accept(tcp).await.unwrap();
-            let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
-            tls.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n").await.unwrap();
-            tls.shutdown().await.unwrap();
-            alpn
-        });
-
-        let request = http::Request::get(format!("https://localhost:{port}/"))
-            .body(SdkBody::empty())
-            .unwrap();
-        let response =
-            connector.call(HttpRequest::try_from(request).unwrap()).await.unwrap();
-        assert_eq!(response.status().as_u16(), 200);
-        serve.await.unwrap()
+        TlsAcceptor::from(Arc::new(server))
     }
 
-    #[tokio::test]
+    fn connector(proxies: Matcher, connect_timeout: Option<Duration>) -> Http1Connector {
+        Http1Connector::new(
+            Arc::new(tls_config(TrustRoots::Pem(CA.to_vec()))),
+            Arc::new(proxies),
+            (connect_timeout, None),
+        )
+    }
+
+    fn proxy(url: String) -> Matcher {
+        Matcher::builder().all(url).build()
+    }
+
+    async fn get(
+        connector: &Http1Connector,
+        url: &str,
+    ) -> Result<HttpResponse, ConnectorError> {
+        let request = http::Request::get(url).body(SdkBody::empty()).unwrap();
+        connector.call(HttpRequest::try_from(request).unwrap()).await
+    }
+
+    /// Reads a request head in lower case, or `None` when the peer sends none.
+    async fn read_head(io: &mut (impl AsyncRead + Unpin)) -> Option<String> {
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(io.read_u8().await.ok()?);
+        }
+        Some(String::from_utf8_lossy(&head).to_lowercase())
+    }
+
+    /// Runs `handle` on every connection to a new local port. A handler that returns `None`
+    /// is ignored, so a stray connection cannot fail a test.
+    async fn serve<F, Fut>(handle: F) -> (u16, UnboundedReceiver<String>)
+    where
+        F: Fn(TcpStream) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Option<String>> + Send,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen, rx) = unbounded_channel();
+        let handle = Arc::new(handle);
+        tokio::spawn(async move {
+            while let Ok((tcp, _)) = listener.accept().await {
+                let (handle, seen) = (Arc::clone(&handle), seen.clone());
+                tokio::spawn(async move {
+                    if let Some(observed) = handle(tcp).await {
+                        let _ = seen.send(observed);
+                    }
+                });
+            }
+        });
+        (port, rx)
+    }
+
+    async fn answer(mut io: impl AsyncRead + AsyncWrite + Unpin) -> Option<String> {
+        let head = read_head(&mut io).await?;
+        io.write_all(OK).await.ok()?;
+        Some(head)
+    }
+
+    /// Answers a CONNECT, then serves the tunneled TLS connection. Returns the CONNECT head.
+    async fn tunnel(mut io: impl AsyncRead + AsyncWrite + Unpin) -> Option<String> {
+        let connect = read_head(&mut io).await?;
+        io.write_all(b"HTTP/1.1 200 OK\r\n\r\n").await.ok()?;
+        answer(acceptor().accept(io).await.ok()?).await?;
+        Some(connect)
+    }
+
+    async fn stall(tcp: TcpStream) -> Option<String> {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        drop(tcp);
+        None
+    }
+
+    async fn timeout_error(connector: &Http1Connector, url: &str) -> ConnectorError {
+        tokio::time::timeout(Duration::from_secs(10), get(connector, url))
+            .await
+            .expect("the connect timeout must end the attempt")
+            .unwrap_err()
+    }
+
+    #[tokio_test]
     async fn negotiates_http1_with_a_server_that_offers_h2() {
-        let connector = Http1Connector::new(
-            tls_config(TrustRoots::Pem(CA.to_vec())),
-            Arc::new(Matcher::builder().build()),
-            (None, None),
+        let (port, mut seen) = serve(|tcp| async {
+            let tls = acceptor().accept(tcp).await.ok()?;
+            let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec)?;
+            answer(tls).await?;
+            String::from_utf8(alpn).ok()
+        })
+        .await;
+        let connector = connector(Matcher::builder().build(), None);
+        let response = get(&connector, &format!("https://localhost:{port}/")).await;
+        assert_eq!(response.unwrap().status().as_u16(), 200);
+        assert_eq!(seen.recv().await.unwrap(), "http/1.1");
+    }
+
+    #[tokio_test]
+    async fn connect_timeout_covers_a_stalled_tls_handshake() {
+        let (port, _seen) = serve(stall).await;
+        let connector =
+            connector(Matcher::builder().build(), Some(Duration::from_millis(200)));
+        let err = timeout_error(&connector, &format!("https://localhost:{port}/")).await;
+        assert!(err.is_timeout(), "{err:?}");
+    }
+
+    #[tokio_test]
+    async fn connect_timeout_covers_a_stalled_proxy() {
+        let (port, _seen) = serve(stall).await;
+        let connector = connector(
+            proxy(format!("http://127.0.0.1:{port}")),
+            Some(Duration::from_millis(200)),
         );
-        // hyper-rustls sends no ALPN for HTTP/1-only, and without ALPN no server can pick h2.
-        assert_ne!(negotiated_protocol(connector).await.as_deref(), Some(&b"h2"[..]));
+        let err = timeout_error(&connector, "https://localhost:1/").await;
+        assert!(err.is_timeout(), "{err:?}");
+    }
+
+    #[tokio_test]
+    async fn refused_connections_are_io_errors() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let connector = connector(Matcher::builder().build(), None);
+        let err =
+            get(&connector, &format!("https://localhost:{port}/")).await.unwrap_err();
+        assert!(err.is_io(), "{err:?}");
+    }
+
+    #[tokio_test]
+    async fn https_endpoints_tunnel_through_an_http_proxy() {
+        let (port, mut seen) = serve(tunnel).await;
+        let connector =
+            connector(proxy(format!("http://user:secret@127.0.0.1:{port}")), None);
+        let response = get(&connector, "https://localhost:1/").await;
+        assert_eq!(response.unwrap().status().as_u16(), 200);
+        let connect = seen.recv().await.unwrap();
+        assert!(connect.starts_with("connect localhost:1 "), "{connect}");
+        assert!(connect.contains(AUTH), "{connect}");
+    }
+
+    #[tokio_test]
+    async fn an_https_proxy_gets_the_connect_inside_tls() {
+        let (port, mut seen) =
+            serve(|tcp| async { tunnel(acceptor().accept(tcp).await.ok()?).await }).await;
+        let connector =
+            connector(proxy(format!("https://user:secret@localhost:{port}")), None);
+        let response = get(&connector, "https://localhost:1/").await;
+        assert_eq!(response.unwrap().status().as_u16(), 200);
+        let connect = seen.recv().await.unwrap();
+        assert!(connect.starts_with("connect localhost:1 "), "{connect}");
+        assert!(connect.contains(AUTH), "{connect}");
+    }
+
+    #[tokio_test]
+    async fn http_endpoints_use_a_forward_proxy() {
+        let (port, mut seen) = serve(answer).await;
+        let connector =
+            connector(proxy(format!("http://user:secret@127.0.0.1:{port}")), None);
+        let response = get(&connector, "http://endpoint.invalid/bucket/key").await;
+        assert_eq!(response.unwrap().status().as_u16(), 200);
+        let head = seen.recv().await.unwrap();
+        assert!(head.starts_with("get http://endpoint.invalid/bucket/key "), "{head}");
+        assert!(head.contains(AUTH), "{head}");
+    }
+
+    #[tokio_test]
+    async fn no_proxy_hosts_connect_directly() {
+        let (port, mut seen) =
+            serve(|tcp| async { answer(acceptor().accept(tcp).await.ok()?).await }).await;
+        let proxies =
+            Matcher::builder().all("http://127.0.0.1:1").no("localhost").build();
+        let connector = connector(proxies, None);
+        let response = get(&connector, &format!("https://localhost:{port}/")).await;
+        assert_eq!(response.unwrap().status().as_u16(), 200);
+        assert!(seen.recv().await.unwrap().starts_with("get / "));
+    }
+
+    #[tokio_test]
+    async fn other_proxy_schemes_are_rejected() {
+        let connector = connector(proxy("socks5://127.0.0.1:1".to_string()), None);
+        let err = get(&connector, "https://localhost:1/").await.unwrap_err();
+        assert!(format!("{err:?}").contains("unsupported proxy scheme"), "{err:?}");
     }
 }
