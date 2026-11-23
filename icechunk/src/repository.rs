@@ -25,7 +25,7 @@ use itertools::Itertools as _;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{sync::AcquireError, task::JoinError, try_join};
+use tokio::{join, sync::AcquireError, task::JoinError};
 use tracing::{Instrument as _, debug, error, instrument, trace, warn};
 
 use crate::{
@@ -342,14 +342,17 @@ impl Repository {
             );
 
             let res = temp_asset_manager.fetch_repo_info().await;
-            Ok(res.and_then(|(ri, _)| {
+            res.and_then(|(ri, _)| {
                 let version = ri.spec_version().inject()?;
                 Ok((version, ri))
-            }))
+            })
         }
         .in_current_span();
 
-        let (is_v1, after_v1) = try_join!(is_v1, after_v1).inject()?;
+        // Use join! (not try_join!) so that an error from the V1 check doesn't
+        // fail the detection of a V2+ repo. Without list permissions, S3 and GCS
+        // answer a missing V1 ref with 403 instead of 404.
+        let (is_v1, after_v1) = join!(is_v1, after_v1);
         match after_v1 {
             // if we have both configuration, this is an unfinished migration
             // but still a V2+ repo
@@ -360,7 +363,7 @@ impl Repository {
                 kind: RepositoryErrorKind::RepositoryDoesntExist,
                 ..
             }) => {
-                if is_v1 {
+                if is_v1.inject()? {
                     Ok(Some(DetectedSpecVersion::V1))
                 } else {
                     Ok(None)
@@ -4709,6 +4712,32 @@ mod tests {
 
         assert_eq!(diff.moved_nodes.len(), 2);
 
+        Ok(())
+    }
+
+    /// Without list permission, S3 and GCS answer a read of the missing V1 ref with
+    /// 403 instead of 404. Any error from the V1 check must not fail the open of a
+    /// V2 repo whose `repo` object reads fine.
+    #[tokio_test]
+    async fn test_open_ignores_v1_check_error() -> Result<(), Box<dyn Error>> {
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        Repository::create(Arc::clone(&storage)).execute().await?;
+
+        let settings = storage.default_settings().await?;
+        let labels = AttributionLabels::from(&Attribution::default());
+        storage
+            .put_object(
+                &StorageContext::without_node(&settings, &labels),
+                "refs/branch.main/ref.json",
+                Bytes::from_static(b"unreadable"),
+                None,
+                Vec::new(),
+                None,
+            )
+            .await?;
+
+        let repo = Repository::open(storage).execute().await?;
+        assert_eq!(repo.spec_version(), SpecVersionBin::V2);
         Ok(())
     }
 }
