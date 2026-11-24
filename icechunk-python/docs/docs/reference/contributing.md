@@ -369,8 +369,8 @@ because `zstd-sys` compiles C code.
     export CC_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang
     export CXX_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang++
     export AR_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/llvm-ar
-    # the browser build: Apple's clang compiles it, but its `ar` writes archives
-    # the wasm linker cannot index, so zstd silently goes missing
+    # browser build: Apple's clang works, but its `ar` writes archives the wasm
+    # linker cannot index, so zstd silently goes missing
     export AR_wasm32_unknown_unknown=/opt/homebrew/opt/llvm/bin/llvm-ar
     ```
 

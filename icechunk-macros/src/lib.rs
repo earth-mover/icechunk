@@ -39,20 +39,11 @@ pub fn test(_attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// `#[async_trait]` whose futures are `Send` everywhere except
-/// `wasm32-unknown-unknown`, where they are `?Send` so browser `fetch`-based
-/// code can implement the trait.
+/// `#[async_trait]`, but `#[async_trait(?Send)]` on `wasm32-unknown-unknown`,
+/// so browser code that awaits JS promises can implement the trait.
 ///
-/// Use it on traits whose futures must not be `Send` in the browser (like
-/// `Storage`) and on every impl of those traits. It expands to two
-/// `cfg_attr`s, evaluated in the calling crate, so it needs `async-trait` as
-/// a dependency there.
-///
-/// ```ignore
-/// #[icechunk_storage::maybe_send_async_trait]
-/// #[typetag::serde]
-/// impl Storage for MyStorage { /* ... */ }
-/// ```
+/// Use it on such traits (like `Storage`) and on every impl of them. The
+/// calling crate needs `async-trait` as a dependency.
 #[proc_macro_attribute]
 pub fn maybe_send_async_trait(attr: TokenStream, item: TokenStream) -> TokenStream {
     parse_macro_input!(attr as syn::parse::Nothing);

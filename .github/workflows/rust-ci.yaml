@@ -746,13 +746,17 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
+      - name: Read the wasm-bindgen version from Cargo.lock
+        id: wasm-bindgen
+        run: echo "version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')" >> "$GITHUB_OUTPUT"
+
       - name: Install just and wasm-bindgen-test-runner
         uses: taiki-e/install-action@v2.90.1
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
-          # keep in sync with the wasm-bindgen version in Cargo.lock
-          tool: just,wasm-bindgen@0.2.114
+          # the test runner must match the wasm-bindgen crate exactly
+          tool: just,wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
 
       - name: Install Rust toolchain
         run: |

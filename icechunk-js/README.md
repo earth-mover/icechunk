@@ -168,32 +168,20 @@ registers the callback for every HTTP container in the repository.
 Bundlers resolve `@earthmover/icechunk` to its browser build (the `browser`
 export condition), a WebAssembly module built with wasm-bindgen. It has the
 same API as the Node.js build, minus the native-only storage backends and
-virtual reference writes. It needs no special install flags and no
-cross-origin isolation (COOP/COEP) headers.
-
-To open a public repository, use fetch storage:
-
-```typescript
-import { Repository } from '@earthmover/icechunk'
-import { createFetchStorage } from '@earthmover/icechunk/fetch-storage'
-
-const repo = await Repository.open(createFetchStorage('https://my-bucket.s3.us-west-2.amazonaws.com/my-repo.icechunk'))
-```
-
-For more control, implement a storage backend with `Storage.newCustom()` and any
-JS networking library.
+virtual reference writes. It needs no install flags and no cross-origin
+isolation (COOP/COEP) headers. Use [fetch storage](#fetch-storage-read-only-works-everywhere)
+to read a public repository, or [`Storage.newCustom()`](#custom-storage-backends)
+for anything else, including writes.
 
 Things to know:
 
-- **It runs on the thread that imports it.** There are no worker threads, so
-  decompressing and parsing large snapshots and manifests happens on that
-  thread. For large repositories, import it in a
+- **It runs on the thread that imports it**, with no worker threads. For large
+  repositories, import it in a
   [module Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker#module)
   to keep the page responsive.
-- **It loads its `.wasm` on import**, from next to the module
-  (`new URL('icechunk_js_bg.wasm', import.meta.url)`), using top-level `await`.
-  Vite and webpack 5 handle this. With Vite, exclude the package from dependency
-  optimization:
+- **It loads its `.wasm` on import**, from next to the module, using top-level
+  `await`. Vite and webpack 5 handle this. With Vite, exclude the package from
+  dependency optimization:
 
   ```typescript
   // vite.config.ts
@@ -204,11 +192,10 @@ Things to know:
 
   A strict Content Security Policy needs `script-src 'wasm-unsafe-eval'`, and
   the server must send `.wasm` files as `application/wasm`.
-- **To load the `.wasm` yourself**, import `@earthmover/icechunk/web/init` and
-  call `init()` (or `initSync()`) once before anything else. Use it with esbuild
-  (which does not copy the `.wasm` next to the bundle), in service workers (no
-  top-level `await`), with server-side rendering, or to control when and from
-  where the `.wasm` loads:
+- **To load the `.wasm` yourself** (esbuild, service workers, server-side
+  rendering), import `@earthmover/icechunk/web/init` and call `init()` or
+  `initSync()` once before anything else. The file is
+  `wasm-bindgen/web/icechunk_js_bg.wasm` in the package.
 
   ```typescript
   import { init, Repository, Storage } from '@earthmover/icechunk/web/init'
@@ -216,14 +203,9 @@ Things to know:
   await init({ module_or_path: '/assets/icechunk_js_bg.wasm' })
   ```
 
-  The file is `wasm-bindgen/web/icechunk_js_bg.wasm` in the package.
 - **Session getters never block.** While an operation such as a commit is using a
   session, getters like `session.snapshotId` return the state from before it
   started. The Node.js build waits for the operation instead.
-- **Writing** works through `Storage.newCustom()`. A custom storage's `putObject`
-  must honor `previousVersion` (create-if-missing, or write only if the ETag
-  matches) and return `{ kind: 'not_on_latest_version' }` when the condition
-  fails. icechunk relies on this to update branches safely.
 - `@earthmover/icechunk/web` is the browser build under an explicit name, for
   tools that do not apply the `browser` condition. If you import it, take
   `createFetchStorage` from it too, not from `@earthmover/icechunk/fetch-storage`:
@@ -242,10 +224,9 @@ yarn build
 yarn test
 ```
 
-To build and test the browser build, run these from the repository root. They
-need `clang`, `llvm-ar`, and the `wasm-bindgen` CLI at the version in `Cargo.lock`;
-on macOS, Apple's `clang` works but its `ar` does not, so install Homebrew LLVM for
-`llvm-ar` (see [WASM Compiler Setup (macOS)](../icechunk-python/docs/docs/reference/contributing.md#wasm-compiler-setup-macos)).
+To build and test the browser build, run these from the repository root. See
+[WASM Compiler Setup (macOS)](../icechunk-python/docs/docs/reference/contributing.md#wasm-compiler-setup-macos)
+for the toolchain (`clang`, `llvm-ar`, the `wasm-bindgen` CLI).
 
 ```bash
 just js-build-browser   # or `just js-build-browser browser-release` for the published build

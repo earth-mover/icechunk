@@ -12,7 +12,7 @@ use wasm_bindgen::prelude::*;
 use super::virtual_chunks::JsHttpVirtualChunkFetcher;
 use super::{
     IntoJsResult as _, JsResult, from_js, from_js_optional, js_error, read_now, spawn,
-    to_js, to_js_nullable,
+    spawn_void, to_js, to_js_nullable,
 };
 use crate::config::{JsRepositoryConfig, JsStorageSettings};
 use crate::repository::{
@@ -24,22 +24,12 @@ use crate::repository::{
 use crate::session::JsSession;
 use crate::storage::JsStorage;
 
-type StorageRef = Arc<dyn Storage + Send + Sync>;
-
 fn repository(repo: Repository) -> JsValue {
     JsRepository(Arc::new(RwLock::new(repo))).into()
 }
 
 fn session(session: icechunk::session::Session) -> JsValue {
     JsSession::browser(Arc::new(RwLock::new(session))).into()
-}
-
-/// The arguments `create` and `openOrCreate` share.
-struct CreateArgs {
-    config: JsValue,
-    spec_version: Option<u32>,
-    authorize_virtual_chunk_access: JsValue,
-    check_clean_root: Option<bool>,
 }
 
 fn credentials(
@@ -61,13 +51,13 @@ impl JsRepository {
     pub fn set_http_virtual_chunk_fetcher(&self, callback: Function) -> Promise {
         let repo = Arc::clone(&self.0);
         let fetcher = Arc::new(JsHttpVirtualChunkFetcher(SendWrapper::new(callback)));
-        spawn(async move {
+        spawn_void(async move {
             #[expect(
                 deprecated,
                 reason = "the JS API is not deprecated; it uses the core shim"
             )]
             repo.write().await.set_http_virtual_chunk_fetcher(fetcher);
-            Ok(JsValue::UNDEFINED)
+            Ok(())
         })
     }
 
@@ -81,9 +71,8 @@ impl JsRepository {
     ) -> Promise {
         let repo = Arc::clone(&self.0);
         let storage = Arc::clone(&storage.0);
-        spawn(async move {
-            repo.write().await.set_virtual_chunk_storage(&url_prefix, storage).js()?;
-            Ok(JsValue::UNDEFINED)
+        spawn_void(async move {
+            repo.write().await.set_virtual_chunk_storage(&url_prefix, storage).js()
         })
     }
 
@@ -94,14 +83,14 @@ impl JsRepository {
         authorize_virtual_chunk_access: JsValue,
         check_clean_root: Option<bool>,
     ) -> Promise {
-        let args = CreateArgs {
+        spawn(create_or_open(
+            Arc::clone(&storage.0),
             config,
             spec_version,
             authorize_virtual_chunk_access,
             check_clean_root,
-        };
-        let storage = Arc::clone(&storage.0);
-        spawn(async move { create_or_open(storage, args, false).await })
+            false,
+        ))
     }
 
     pub fn open(
@@ -130,14 +119,14 @@ impl JsRepository {
         authorize_virtual_chunk_access: JsValue,
         check_clean_root: Option<bool>,
     ) -> Promise {
-        let args = CreateArgs {
+        spawn(create_or_open(
+            Arc::clone(&storage.0),
             config,
             spec_version,
             authorize_virtual_chunk_access,
             check_clean_root,
-        };
-        let storage = Arc::clone(&storage.0);
-        spawn(async move { create_or_open(storage, args, true).await })
+            true,
+        ))
     }
 
     pub fn exists(storage: &JsStorage, storage_settings: JsValue) -> Promise {
@@ -181,10 +170,9 @@ impl JsRepository {
     #[wasm_bindgen(js_name = createBranch)]
     pub fn create_branch(&self, name: String, snapshot_id: String) -> Promise {
         let repo = Arc::clone(&self.0);
-        spawn(async move {
+        spawn_void(async move {
             let id = parse_snapshot_id(&snapshot_id).map_err(js_error)?;
-            repo.read().await.create_branch(&name, &id).await.js()?;
-            Ok(JsValue::UNDEFINED)
+            repo.read().await.create_branch(&name, &id).await.js()
         })
     }
 
@@ -201,10 +189,9 @@ impl JsRepository {
     #[wasm_bindgen(js_name = createTag)]
     pub fn create_tag(&self, name: String, snapshot_id: String) -> Promise {
         let repo = Arc::clone(&self.0);
-        spawn(async move {
+        spawn_void(async move {
             let id = parse_snapshot_id(&snapshot_id).map_err(js_error)?;
-            repo.read().await.create_tag(&name, &id).await.js()?;
-            Ok(JsValue::UNDEFINED)
+            repo.read().await.create_tag(&name, &id).await.js()
         })
     }
 
@@ -241,28 +228,20 @@ impl JsRepository {
         from_snapshot_id: Option<String>,
     ) -> Promise {
         let repo = Arc::clone(&self.0);
-        spawn(async move {
+        spawn_void(async move {
             let to_id = parse_snapshot_id(&to_snapshot_id).map_err(js_error)?;
             let from_id = from_snapshot_id
                 .map(|s| parse_snapshot_id(&s))
                 .transpose()
                 .map_err(js_error)?;
-            repo.read()
-                .await
-                .reset_branch(&branch, &to_id, from_id.as_ref())
-                .await
-                .js()?;
-            Ok(JsValue::UNDEFINED)
+            repo.read().await.reset_branch(&branch, &to_id, from_id.as_ref()).await.js()
         })
     }
 
     #[wasm_bindgen(js_name = deleteBranch)]
     pub fn delete_branch(&self, branch: String) -> Promise {
         let repo = Arc::clone(&self.0);
-        spawn(async move {
-            repo.read().await.delete_branch(&branch).await.js()?;
-            Ok(JsValue::UNDEFINED)
-        })
+        spawn_void(async move { repo.read().await.delete_branch(&branch).await.js() })
     }
 
     #[wasm_bindgen(js_name = lookupTag)]
@@ -276,10 +255,7 @@ impl JsRepository {
     #[wasm_bindgen(js_name = deleteTag)]
     pub fn delete_tag(&self, tag: String) -> Promise {
         let repo = Arc::clone(&self.0);
-        spawn(async move {
-            repo.read().await.delete_tag(&tag).await.js()?;
-            Ok(JsValue::UNDEFINED)
-        })
+        spawn_void(async move { repo.read().await.delete_tag(&tag).await.js() })
     }
 
     #[wasm_bindgen(js_name = lookupSnapshot)]
@@ -317,9 +293,9 @@ impl JsRepository {
     #[wasm_bindgen(js_name = saveConfig)]
     pub fn save_config(&self) -> Promise {
         let repo = Arc::clone(&self.0);
-        spawn(async move {
+        spawn_void(async move {
             repo.read().await.save_config().await.js()?;
-            Ok(JsValue::UNDEFINED)
+            Ok(())
         })
     }
 
@@ -388,9 +364,8 @@ impl JsRepository {
     #[wasm_bindgen(js_name = setFeatureFlag)]
     pub fn set_feature_flag(&self, name: String, setting: Option<bool>) -> Promise {
         let repo = Arc::clone(&self.0);
-        spawn(async move {
-            repo.read().await.set_feature_flag(&name, setting).await.js()?;
-            Ok(JsValue::UNDEFINED)
+        spawn_void(async move {
+            repo.read().await.set_feature_flag(&name, setting).await.js()
         })
     }
 
@@ -421,15 +396,19 @@ impl JsRepository {
     }
 }
 
+/// `create`, or `openOrCreate` if `open_existing`.
 async fn create_or_open(
-    storage: StorageRef,
-    args: CreateArgs,
+    storage: Arc<dyn Storage + Send + Sync>,
+    config: JsValue,
+    spec_version: Option<u32>,
+    authorize_virtual_chunk_access: JsValue,
+    check_clean_root: Option<bool>,
     open_existing: bool,
 ) -> JsResult<JsValue> {
-    let config = config(args.config)?;
-    let version = convert_spec_version(args.spec_version).map_err(js_error)?;
-    let creds = credentials(args.authorize_virtual_chunk_access)?;
-    let check_clean_root = args.check_clean_root.unwrap_or(true);
+    let config = self::config(config)?;
+    let version = convert_spec_version(spec_version).map_err(js_error)?;
+    let creds = credentials(authorize_virtual_chunk_access)?;
+    let check_clean_root = check_clean_root.unwrap_or(true);
     macro_rules! build {
         ($builder:expr) => {{
             let builder = $builder

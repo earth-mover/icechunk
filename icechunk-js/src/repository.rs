@@ -108,63 +108,50 @@ pub struct JsVersionOptions {
     pub snapshot_id: Option<String>,
 }
 
+/// The version named by a snapshot id, tag or branch, in that order of precedence.
+fn version_info(
+    snapshot_id: Option<String>,
+    tag: Option<String>,
+    branch: Option<String>,
+) -> Result<Option<VersionInfo>, String> {
+    Ok(if let Some(snap) = snapshot_id {
+        Some(VersionInfo::SnapshotId(parse_snapshot_id(&snap)?))
+    } else if let Some(tag) = tag {
+        Some(VersionInfo::TagRef(tag))
+    } else {
+        branch.map(VersionInfo::BranchTipRef)
+    })
+}
+
 pub(crate) fn version_options_to_version_info(
     opts: JsVersionOptions,
 ) -> Result<VersionInfo, String> {
-    if let Some(snap) = opts.snapshot_id {
-        Ok(VersionInfo::SnapshotId(parse_snapshot_id(&snap)?))
-    } else if let Some(tag) = opts.tag {
-        Ok(VersionInfo::TagRef(tag))
-    } else if let Some(branch) = opts.branch {
-        Ok(VersionInfo::BranchTipRef(branch))
-    } else {
-        Err("One of branch, tag, or snapshot_id must be provided".to_string())
-    }
+    version_info(opts.snapshot_id, opts.tag, opts.branch)?
+        .ok_or_else(|| "One of branch, tag, or snapshot_id must be provided".to_string())
 }
 
 /// The version a read-only session opens: defaults to the tip of `main`.
 pub(crate) fn readonly_session_version(
     options: Option<ReadonlySessionOptions>,
 ) -> Result<VersionInfo, String> {
-    let Some(opts) = options else {
-        return Ok(VersionInfo::BranchTipRef("main".to_string()));
+    let version = match options {
+        Some(opts) => version_info(opts.snapshot_id, opts.tag, opts.branch)?,
+        None => None,
     };
-    if let Some(snap) = opts.snapshot_id {
-        Ok(VersionInfo::SnapshotId(parse_snapshot_id(&snap)?))
-    } else if let Some(tag) = opts.tag {
-        Ok(VersionInfo::TagRef(tag))
-    } else if let Some(branch) = opts.branch {
-        Ok(VersionInfo::BranchTipRef(branch))
-    } else {
-        Ok(VersionInfo::BranchTipRef("main".to_string()))
-    }
+    Ok(version.unwrap_or_else(|| VersionInfo::BranchTipRef("main".to_string())))
 }
 
 /// The `(from, to)` versions of a diff.
 pub(crate) fn diff_versions(
     options: JsDiffOptions,
 ) -> Result<(VersionInfo, VersionInfo), String> {
-    let from = if let Some(snap) = options.from_snapshot_id {
-        VersionInfo::SnapshotId(parse_snapshot_id(&snap)?)
-    } else if let Some(tag) = options.from_tag {
-        VersionInfo::TagRef(tag)
-    } else if let Some(branch) = options.from_branch {
-        VersionInfo::BranchTipRef(branch)
-    } else {
-        return Err("One of from_branch, from_tag, or from_snapshot_id must be provided"
-            .to_string());
-    };
-    let to = if let Some(snap) = options.to_snapshot_id {
-        VersionInfo::SnapshotId(parse_snapshot_id(&snap)?)
-    } else if let Some(tag) = options.to_tag {
-        VersionInfo::TagRef(tag)
-    } else if let Some(branch) = options.to_branch {
-        VersionInfo::BranchTipRef(branch)
-    } else {
-        return Err(
-            "One of to_branch, to_tag, or to_snapshot_id must be provided".to_string()
-        );
-    };
+    let from =
+        version_info(options.from_snapshot_id, options.from_tag, options.from_branch)?
+            .ok_or(
+                "One of from_branch, from_tag, or from_snapshot_id must be provided",
+            )?;
+    let to = version_info(options.to_snapshot_id, options.to_tag, options.to_branch)?
+        .ok_or("One of to_branch, to_tag, or to_snapshot_id must be provided")?;
     Ok((from, to))
 }
 

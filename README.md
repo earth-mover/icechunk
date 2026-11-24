@@ -61,20 +61,19 @@ graph TD
 `icechunk` builds for `wasm32-unknown-unknown` with `default-features = false`.
 There it runs on the JavaScript event loop, with no Tokio runtime or threads:
 
-- Async traits such as `Storage` do not require `Send` futures in the browser, so
-  a backend can await JS promises (for example `fetch`). Implement them with
+- Async traits such as `Storage` do not require `Send` futures, so a backend can
+  await JS promises (for example `fetch`). Implement them with
   `#[icechunk_storage::maybe_send_async_trait]` instead of `#[async_trait]`; it
   keeps `Send` futures on every other target.
-- `icechunk::rt` spawns tasks with `wasm_bindgen_futures::spawn_local`, uses JS
-  timers for sleeps, and runs blocking work (decompression, decoding) inline.
-  Run icechunk in a Web Worker to keep a page responsive with large repositories.
-- `zstd-sys` compiles C code: build with `clang` and set
-  `AR_wasm32_unknown_unknown=llvm-ar`. Apple's and GNU's `ar` write archives the
-  wasm linker cannot index, and zstd silently goes missing at link time.
-- Garbage collection and expiration still use Tokio timers, and are not supported
-  in the browser yet.
+- `icechunk::rt` runs tasks and timers on the JS event loop and blocking work
+  (decompression, decoding) inline. Use a Web Worker to keep a page responsive
+  with large repositories.
+- `zstd-sys` compiles C code: build with `clang` and
+  `AR_wasm32_unknown_unknown=llvm-ar`. Other `ar`s write archives the wasm linker
+  cannot index, and zstd silently goes missing at link time.
+- Garbage collection and expiration are not supported yet (they use Tokio timers).
 
-The JavaScript package [`@earthmover/icechunk`](../icechunk-js) is built this way
+The JavaScript package [`@earthmover/icechunk`](https://github.com/earth-mover/icechunk/tree/main/icechunk-js) is built this way
 for browsers.
 
 ## Icechunk Overview

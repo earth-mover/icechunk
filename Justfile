@@ -203,7 +203,7 @@ export AR_wasm32_unknown_unknown := env("AR_wasm32_unknown_unknown", "llvm-ar")
 
 [group('test')]
 [script]
-[doc("Run the browser (wasm32-unknown-unknown) Rust tests in icechunk-js under node; needs clang, llvm-ar, node and wasm-bindgen-test-runner matching Cargo.lock")]
+[doc("Run icechunk-js's browser (wasm32-unknown-unknown) Rust tests under node (needs wasm-bindgen-test-runner matching Cargo.lock)")]
 wasm-browser-test *args:
   # don't fail on existing warnings in no-default-features wasm cfgs
   export RUSTFLAGS=""
@@ -794,7 +794,7 @@ js-test *args: js-install
 
 [group('js')]
 [script]
-[doc("Build icechunk-js for the browser (wasm32-unknown-unknown) with wasm-bindgen into icechunk-js/wasm-bindgen/web (`browser-release` for the published build); needs clang, llvm-ar and wasm-bindgen matching Cargo.lock")]
+[doc("Build icechunk-js for the browser into icechunk-js/wasm-bindgen/web (needs clang, llvm-ar and wasm-bindgen matching Cargo.lock)")]
 js-build-browser cargo_profile="dev":
   # don't fail on existing warnings in no-default-features wasm cfgs
   export RUSTFLAGS=""

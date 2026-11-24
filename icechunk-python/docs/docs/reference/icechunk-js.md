@@ -15,8 +15,8 @@ npm install @earthmover/icechunk zarrita
 ```
 
 Node.js loads a native addon on Linux (x64 and arm64, glibc), macOS (arm64 and x64) and Windows (x64).
-The same package works in the browser: bundlers pick its WebAssembly build through the `browser`
-export condition. No install flags or cross-origin isolation headers are needed; see [Browser](#browser).
+In the browser, bundlers pick the package's WebAssembly build through the `browser` export
+condition. No install flags or cross-origin isolation headers are needed; see [Browser](#browser).
 
 ## Quick start
 
@@ -154,8 +154,8 @@ In the browser, the native storage backends are not available. Instead, use:
 - **Fetch storage** for read-only access to publicly-accessible repositories over HTTP/HTTPS
 - **Custom storage** with a JavaScript-provided backend (e.g., using `fetch`, `@aws-sdk/client-s3`, or a proxy you run)
 
-The browser build runs on the thread that imports it, with no worker threads: decompressing and
-parsing large snapshots and manifests happens there. For large repositories, use icechunk from a
+The browser build runs on the thread that imports it, with no worker threads. For large
+repositories, use it from a
 [module Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker#module) to keep the
 page responsive. While an operation such as a commit is using a session, getters like
 `session.snapshotId` return the state from before it started instead of waiting.
@@ -230,18 +230,10 @@ export default {
 }
 ```
 
-To load the `.wasm` yourself, for example with esbuild, in a service worker, with server-side
-rendering, or under a strict Content Security Policy, import `@earthmover/icechunk/web/init` and
-call `init()` (or `initSync()`) once before anything else:
-
-```typescript
-import { init, Repository, Storage } from '@earthmover/icechunk/web/init'
-
-await init({ module_or_path: '/assets/icechunk_js_bg.wasm' })
-```
-
-A Content Security Policy needs `script-src 'wasm-unsafe-eval'`, and the server must send `.wasm`
-files as `application/wasm`.
+A strict Content Security Policy needs `script-src 'wasm-unsafe-eval'`, and the server must send
+`.wasm` files as `application/wasm`. To load the `.wasm` yourself (esbuild, service workers,
+server-side rendering), see `@earthmover/icechunk/web/init` in the
+[package README](https://github.com/earth-mover/icechunk/tree/main/icechunk-js#using-in-the-browser).
 
 ## Examples
 

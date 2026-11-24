@@ -9,7 +9,7 @@ use js_sys::Promise;
 use tokio::sync::RwLock;
 use wasm_bindgen::prelude::*;
 
-use super::{IntoJsResult as _, JsResult, js_error, spawn, to_js};
+use super::{IntoJsResult as _, JsResult, js_error, spawn, spawn_void, to_js};
 use crate::config::JsRepositoryConfig;
 use crate::repository::JsDiff;
 use crate::session::{JsSession, mode_name};
@@ -56,48 +56,36 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
 }
 
-fn remember(lock: &SharedSession, summary: Rc<Summary>) {
+/// The session's state now, or the last one seen if an operation holds it.
+fn summary(lock: &SharedSession) -> JsResult<Rc<Summary>> {
+    let current = lock.try_read().ok().map(|session| Rc::new(Summary::from(&*session)));
     LAST_SEEN.with_borrow_mut(|seen| {
         seen.retain(|(session, _)| session.strong_count() > 0);
-        match seen
+        let entry = seen
             .iter_mut()
-            .find(|(session, _)| std::ptr::eq(session.as_ptr(), Arc::as_ptr(lock)))
-        {
-            Some(entry) => entry.1 = summary,
-            None => seen.push((Arc::downgrade(lock), summary)),
+            .find(|(session, _)| std::ptr::eq(session.as_ptr(), Arc::as_ptr(lock)));
+        match (current, entry) {
+            (Some(current), Some(entry)) => {
+                entry.1 = Rc::clone(&current);
+                Ok(current)
+            }
+            (Some(current), None) => {
+                seen.push((Arc::downgrade(lock), Rc::clone(&current)));
+                Ok(current)
+            }
+            (None, Some(entry)) => Ok(Rc::clone(&entry.1)),
+            (None, None) => Err(js_error(
+                "busy: another operation is using this session; await it first",
+            )),
         }
-    });
-}
-
-/// Record the session's state now, so getters have something to report if an
-/// operation is holding it later. Call it whenever a session is handed to JS.
-pub(crate) fn remember_now(lock: &SharedSession) {
-    if let Ok(session) = lock.try_read() {
-        remember(lock, Rc::new(Summary::from(&*session)));
-    }
-}
-
-fn summary(lock: &SharedSession) -> JsResult<Rc<Summary>> {
-    if let Ok(session) = lock.try_read() {
-        let summary = Rc::new(Summary::from(&*session));
-        remember(lock, Rc::clone(&summary));
-        return Ok(summary);
-    }
-    LAST_SEEN
-        .with_borrow(|seen| {
-            seen.iter()
-                .find(|(session, _)| std::ptr::eq(session.as_ptr(), Arc::as_ptr(lock)))
-                .map(|(_, summary)| Rc::clone(summary))
-        })
-        .ok_or_else(|| {
-            js_error("busy: another operation is using this session; await it first")
-        })
+    })
 }
 
 impl JsSession {
-    /// A JS handle for `session`, with its state recorded for the getters.
+    /// A JS handle for `session`. Records its state, so the getters have
+    /// something to report if an operation is holding it later.
     pub(crate) fn browser(session: SharedSession) -> Self {
-        remember_now(&session);
+        let _ = summary(&session);
         JsSession(session)
     }
 }
@@ -143,10 +131,7 @@ impl JsSession {
     #[wasm_bindgen(js_name = discardChanges)]
     pub fn discard_changes(&self) -> Promise {
         let session = Arc::clone(&self.0);
-        spawn(async move {
-            session.write().await.discard_changes().js()?;
-            Ok(JsValue::UNDEFINED)
-        })
+        spawn_void(async move { session.write().await.discard_changes().js() })
     }
 
     #[wasm_bindgen(getter, js_name = isFork)]
@@ -175,10 +160,9 @@ impl JsSession {
     #[wasm_bindgen(js_name = moveNode)]
     pub fn move_node(&self, from_path: String, to_path: String) -> Promise {
         let session = Arc::clone(&self.0);
-        spawn(async move {
+        spawn_void(async move {
             let (from, to) = (path(&from_path)?, path(&to_path)?);
-            session.write().await.move_node(from, to).await.js()?;
-            Ok(JsValue::UNDEFINED)
+            session.write().await.move_node(from, to).await.js()
         })
     }
 
@@ -195,10 +179,9 @@ impl JsSession {
     pub fn merge(&self, other: &JsSession) -> Promise {
         let session = Arc::clone(&self.0);
         let other = Arc::clone(&other.0);
-        spawn(async move {
+        spawn_void(async move {
             let other = other.read().await.clone();
-            session.write().await.merge(other).await.js()?;
-            Ok(JsValue::UNDEFINED)
+            session.write().await.merge(other).await.js()
         })
     }
 
@@ -228,10 +211,9 @@ impl JsSession {
 
     pub fn rebase(&self) -> Promise {
         let session = Arc::clone(&self.0);
-        spawn(async move {
+        spawn_void(async move {
             let solver = icechunk::conflicts::detector::ConflictDetector;
-            session.write().await.rebase(&solver).await.js()?;
-            Ok(JsValue::UNDEFINED)
+            session.write().await.rebase(&solver).await.js()
         })
     }
 }

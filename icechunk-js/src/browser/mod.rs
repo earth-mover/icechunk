@@ -1,13 +1,12 @@
 //! wasm-bindgen bindings for the browser (`wasm32-unknown-unknown`).
 //!
-//! These mirror the napi API described by `index.d.ts`: the same classes,
-//! method names and plain-object shapes, so the same TypeScript types apply.
-//! wasm-bindgen cannot export an `async fn` that borrows `self`, so async
-//! methods clone what they need and return a `Promise` from [`spawn`].
+//! These mirror the napi API in `index.d.ts`, so the same TypeScript types
+//! apply. wasm-bindgen cannot export an `async fn` that borrows `self`, so
+//! async methods clone what they need and return a `Promise` from [`spawn`].
 //!
-//! Getters cannot wait for a lock: in the browser a blocking read would spin
-//! forever. `Session` getters fall back to the last state they saw while an
-//! operation (a commit, a write) holds the session; see `session.rs`.
+//! Getters cannot wait for a lock (a blocking read would spin forever), so
+//! `Session` getters report the last state they saw while an operation holds
+//! the session; see `session.rs`.
 
 mod repository;
 mod session;
@@ -84,11 +83,13 @@ pub(crate) fn from_js_optional<T: DeserializeOwned>(
 }
 
 /// Run `fut` on the JS event loop and return its result as a `Promise`.
-pub(crate) fn spawn<F>(fut: F) -> Promise
-where
-    F: Future<Output = JsResult<JsValue>> + 'static,
-{
+pub(crate) fn spawn(fut: impl Future<Output = JsResult<JsValue>> + 'static) -> Promise {
     wasm_bindgen_futures::future_to_promise(fut)
+}
+
+/// [`spawn`] for operations that resolve to `undefined`.
+pub(crate) fn spawn_void(fut: impl Future<Output = JsResult<()>> + 'static) -> Promise {
+    spawn(async { fut.await.map(|()| JsValue::UNDEFINED) })
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen]

@@ -7,7 +7,7 @@ use icechunk::store::{Store, StoreErrorKind};
 use js_sys::{Promise, Uint8Array};
 use wasm_bindgen::prelude::*;
 
-use super::{IntoJsResult as _, JsResult, from_js, spawn, to_js};
+use super::{IntoJsResult as _, JsResult, from_js, spawn, spawn_void, to_js};
 use crate::session::JsSession;
 use crate::store::{JsRangeQuery, JsStore, normalize_key};
 
@@ -40,9 +40,8 @@ impl JsStore {
 
     pub fn set(&self, key: String, value: Vec<u8>) -> Promise {
         let store = Arc::clone(&self.0);
-        spawn(async move {
-            store.set(normalize_key(&key), Bytes::from(value)).await.js()?;
-            Ok(JsValue::UNDEFINED)
+        spawn_void(async move {
+            store.set(normalize_key(&key), Bytes::from(value)).await.js()
         })
     }
 
@@ -53,10 +52,7 @@ impl JsStore {
 
     pub fn delete(&self, key: String) -> Promise {
         let store = Arc::clone(&self.0);
-        spawn(async move {
-            store.delete(normalize_key(&key)).await.js()?;
-            Ok(JsValue::UNDEFINED)
-        })
+        spawn_void(async move { store.delete(normalize_key(&key)).await.js() })
     }
 
     pub fn list(&self) -> Promise {
@@ -134,31 +130,21 @@ impl JsStore {
 
     pub fn clear(&self) -> Promise {
         let store = Arc::clone(&self.0);
-        spawn(async move {
-            store.clear().await.js()?;
-            Ok(JsValue::UNDEFINED)
-        })
+        spawn_void(async move { store.clear().await.js() })
     }
 
     #[wasm_bindgen(js_name = setIfNotExists)]
     pub fn set_if_not_exists(&self, key: String, value: Vec<u8>) -> Promise {
         let store = Arc::clone(&self.0);
-        spawn(async move {
-            store
-                .set_if_not_exists(normalize_key(&key), Bytes::from(value))
-                .await
-                .js()?;
-            Ok(JsValue::UNDEFINED)
+        spawn_void(async move {
+            store.set_if_not_exists(normalize_key(&key), Bytes::from(value)).await.js()
         })
     }
 
     #[wasm_bindgen(js_name = deleteDir)]
     pub fn delete_dir(&self, prefix: String) -> Promise {
         let store = Arc::clone(&self.0);
-        spawn(async move {
-            store.delete_dir(normalize_key(&prefix)).await.js()?;
-            Ok(JsValue::UNDEFINED)
-        })
+        spawn_void(async move { store.delete_dir(normalize_key(&prefix)).await.js() })
     }
 
     pub fn getsize(&self, key: String) -> Promise {

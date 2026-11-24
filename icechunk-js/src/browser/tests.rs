@@ -41,12 +41,8 @@ async fn yield_to_js() {
 /// A `Storage` whose futures are not `Send`, backed by another storage.
 #[derive(Debug, Serialize, Deserialize)]
 struct JsYieldStorage {
-    #[serde(skip, default = "unreachable_backend")]
+    #[serde(skip)]
     backend: Option<Arc<dyn Storage + Send + Sync>>,
-}
-
-fn unreachable_backend() -> Option<Arc<dyn Storage + Send + Sync>> {
-    None
 }
 
 impl JsYieldStorage {

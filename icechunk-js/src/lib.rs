@@ -3,10 +3,9 @@
 //! JavaScript bindings for icechunk.
 //!
 //! Node (native) is bound with napi; the browser (`wasm32-unknown-unknown`,
-//! `cfg(browser)`) with wasm-bindgen. The classes and
-//! the plain-object types are declared once and shared. Each binding has its
-//! own method shims: the napi ones next to the types, the wasm-bindgen ones in
-//! [`browser`].
+//! `cfg(browser)`) with wasm-bindgen. The classes and plain-object types are
+//! shared. The napi method shims sit next to the types, the wasm-bindgen ones
+//! in [`browser`].
 
 mod config;
 mod errors;
