@@ -43,20 +43,20 @@ impl From<JsRangeQuery> for ByteRange {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use chrono::{DateTime, Utc};
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::format::manifest::{
     Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
 };
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::format::{ChunkIndices, Path};
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::storage::ETag;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::store::SetVirtualRefsResult;
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 /// Create a checksum from either an etag string or a last-modified datetime
 /// etag_checksum takes precedence if both are provided
 fn create_checksum(
@@ -70,7 +70,7 @@ fn create_checksum(
 }
 
 /// Specification for a virtual chunk reference
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi(object, js_name = "VirtualChunkSpec")]
 #[derive(Clone, Debug)]
 pub struct JsVirtualChunkSpec {
@@ -228,7 +228,7 @@ impl JsStore {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi]
 impl JsStore {
     /// Set a single virtual reference to a chunk

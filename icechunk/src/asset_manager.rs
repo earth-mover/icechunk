@@ -1089,8 +1089,6 @@ impl AssetManager {
                             self.storage_settings.retries().max_backoff_ms().into(),
                         )),
                 );
-                #[cfg(feature = "napi-send-contract")]
-                let retry = retry.sleep(tokio::time::sleep);
                 let chunk = retry
                     .when(|e| RETRYABLE_ERROR.is_match(&format!("{e:?}")))
                     .notify(|err, duration| {

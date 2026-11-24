@@ -14,11 +14,8 @@ For your default platform:
 npm install @earthmover/icechunk zarrita
 ```
 
-Explicitly for WASM:
-
-```bash
-npm install @earthmover/icechunk --cpu=wasm32 zarrita
-```
+The same package works in the browser: bundlers pick its WebAssembly build through the `browser`
+export condition. See the [package README](https://github.com/earth-mover/icechunk/tree/main/icechunk-js#using-in-the-browser).
 
 ## Quick start
 

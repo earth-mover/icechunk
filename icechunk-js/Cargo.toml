@@ -26,17 +26,13 @@ typetag = "0.2.22"
 rand = "0.10.1"
 icechunk-storage = { path = "../icechunk-storage" }
 
-# Node bindings (native and wasm32-wasip1-threads) use napi; the browser build
-# (wasm32-unknown-unknown) uses wasm-bindgen. build.rs sets `cfg(browser)`.
+# Node (native) is bound with napi; the browser build (wasm32-unknown-unknown)
+# with wasm-bindgen. build.rs sets `cfg(browser)` for the latter, but Cargo
+# cannot see it, so the tables spell the target out.
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+icechunk = { path = "../icechunk" }
 napi = { version = "3.9.0", features = ["async", "tokio_rt", "serde-json", "chrono_date"] }
 napi-derive = "~3.5"
-
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
-icechunk = { path = "../icechunk" }
-
-[target.'cfg(all(target_family = "wasm", not(target_os = "unknown")))'.dependencies]
-icechunk = { path = "../icechunk", default-features = false, features = ["napi-send-contract"] }
 
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 icechunk = { path = "../icechunk", default-features = false }

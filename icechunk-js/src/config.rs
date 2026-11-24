@@ -1,4 +1,4 @@
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use std::collections::HashMap;
 use std::num::{NonZeroU16, NonZeroU64};
 
@@ -13,10 +13,10 @@ use icechunk::storage::{
     ConcurrencySettings, RetriesSettings, Settings, TimeoutSettings,
 };
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::virtual_chunks::VirtualChunkContainer;
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use crate::storage::JsObjectStoreConfig;
 
 /// Compression algorithm
@@ -224,7 +224,7 @@ impl From<JsStorageSettings> for Settings {
 }
 
 /// Virtual chunk container configuration
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi(object, js_name = "VirtualChunkContainer")]
 #[derive(Clone, Debug)]
 pub struct JsVirtualChunkContainer {
@@ -253,7 +253,7 @@ pub struct JsVirtualChunkContainer {
 ///   }
 /// }
 /// ```
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[cfg_attr(not(browser), napi(object, js_name = "RepositoryConfig"))]
 #[cfg_attr(
     browser,
@@ -277,13 +277,9 @@ pub struct JsRepositoryConfig {
 }
 
 /// Repository configuration (WASM build — no virtual chunk support)
-#[cfg(target_family = "wasm")]
-#[cfg_attr(not(browser), napi(object, js_name = "RepositoryConfig"))]
-#[cfg_attr(
-    browser,
-    derive(serde::Serialize, serde::Deserialize),
-    serde(rename_all = "camelCase")
-)]
+#[cfg(browser)]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 #[derive(Clone, Debug)]
 pub struct JsRepositoryConfig {
     pub inline_chunk_threshold_bytes: Option<u32>,
@@ -353,7 +349,7 @@ impl From<RepositoryConfig> for JsRepositoryConfig {
                     .map(|v| v as i64),
             }),
             manifest: value.manifest.and_then(|m| serde_json::to_value(m).ok()),
-            #[cfg(not(target_family = "wasm"))]
+            #[cfg(not(browser))]
             virtual_chunk_containers: None, // Cannot easily round-trip VirtualChunkContainer
         }
     }
@@ -368,7 +364,7 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
             .map(|v| serde_json::from_value(v).map_err(|e| e.to_string()))
             .transpose()?;
 
-        #[cfg(not(target_family = "wasm"))]
+        #[cfg(not(browser))]
         let virtual_chunk_containers = value
             .virtual_chunk_containers
             .map(|containers| {
@@ -382,7 +378,7 @@ impl TryFrom<JsRepositoryConfig> for RepositoryConfig {
                     .collect::<Result<HashMap<_, _>, String>>()
             })
             .transpose()?;
-        #[cfg(target_family = "wasm")]
+        #[cfg(browser)]
         let virtual_chunk_containers = None;
 
         Ok(RepositoryConfig {

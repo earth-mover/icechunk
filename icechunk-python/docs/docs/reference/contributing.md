@@ -344,17 +344,16 @@ cargo install cargo-deny
 
 ##### WASM Compiler Setup (macOS)
 
-This setup is needed to compile `icechunk` or the `icechunk-js` WASM bindings for `wasm32-wasip1-threads`.
-You need the Rust target and a C toolchain with WebAssembly support, because `zstd-sys` compiles C code.
-The `js` pixi environment (`pixi shell -m icechunk-python/pyproject.toml -e js`) already provides both.
-Follow these steps only if you build without pixi.
+This setup is needed to compile `icechunk` for `wasm32-wasip1-threads`, or the `icechunk-js` browser build
+for `wasm32-unknown-unknown`. You need the Rust target and a C toolchain with WebAssembly support,
+because `zstd-sys` compiles C code.
 
 1. Install the Rust target. Your active toolchain must be at least the workspace's
    `rust-version` (see the root `Cargo.toml`). If it is older, run `rustup update` first:
 
     ```bash
     rustc --version
-    rustup target add wasm32-wasip1-threads
+    rustup target add wasm32-wasip1-threads wasm32-unknown-unknown
     ```
 
 2. Install a WASM-capable C toolchain. Apple CLT `clang` does not include WASM targets by default:
@@ -370,6 +369,9 @@ Follow these steps only if you build without pixi.
     export CC_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang
     export CXX_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/clang++
     export AR_wasm32_wasip1_threads=/opt/homebrew/opt/llvm/bin/llvm-ar
+    # the browser build: Apple's clang compiles it, but its `ar` writes archives
+    # the wasm linker cannot index, so zstd silently goes missing
+    export AR_wasm32_unknown_unknown=/opt/homebrew/opt/llvm/bin/llvm-ar
     ```
 
 4. `tokio` on WASM currently requires the unstable cfg. This repository sets it automatically for `wasm32-wasip1-threads` in `.cargo/config.toml`.
@@ -380,19 +382,14 @@ Follow these steps only if you build without pixi.
     cargo check -p icechunk --no-default-features --target wasm32-wasip1-threads
     ```
 
-6. To build and test the `icechunk-js` WASM bindings, keep the variables from step 3 set and run:
+6. To build and test the `icechunk-js` browser build, also install the `wasm-bindgen` CLI at the version
+   in `Cargo.lock` (`cargo install wasm-bindgen-cli --version <version>`), keep the variables from step 3
+   set, and run:
 
     ```bash
-    just js-build-wasi
-    just js-test-wasi
+    just js-build-browser
+    just js-test-browser
     ```
-
-    Don't call `yarn build --target wasm32-wasip1-threads` directly. The recipe points `RUSTC` at the real
-    toolchain binary, not the rustup proxy, so `napi-build` can link `crt1-reactor.o`. It also clears `CFLAGS`.
-    Without those settings, napi fails with `Failed to copy artifact`, because the module is missing its
-    `_initialize` export.
-    The build also rewrites the tracked loader files (`index.d.ts`, `icechunk.wasi-browser.js`) for the WASM target.
-    Don't commit those changes unless you meant to change the bindings.
 
 #### Building
 

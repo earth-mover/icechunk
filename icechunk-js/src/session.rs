@@ -11,7 +11,7 @@ use {
     std::ops::Deref as _,
 };
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use futures::TryStreamExt;
 
 #[cfg_attr(not(browser), napi(js_name = "Session"))]
@@ -156,7 +156,7 @@ impl JsSession {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi]
 impl JsSession {
     /// Get all virtual chunk locations referenced by this session

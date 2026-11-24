@@ -24,16 +24,12 @@ use crate::session::JsSession;
 #[cfg(not(browser))]
 use crate::storage::JsStorage;
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use crate::storage::JsCredentials;
 
-#[cfg(target_family = "wasm")]
-#[cfg_attr(not(browser), napi(object, js_name = "Credentials"))]
-#[cfg_attr(
-    browser,
-    derive(serde::Serialize, serde::Deserialize),
-    serde(rename_all = "camelCase")
-)]
+#[cfg(browser)]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JsCredentials {
     /// WASM currently supports only { type: 'HttpAccess' }.
     pub r#type: String,
@@ -60,13 +56,13 @@ pub(crate) fn parse_snapshot_id(id: &str) -> Result<SnapshotId, String> {
 pub(crate) fn convert_credentials(
     creds: Option<HashMap<String, Option<JsCredentials>>>,
 ) -> Result<HashMap<String, Option<Credentials>>, String> {
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(not(browser))]
     {
         Ok(creds
             .map(|c| c.into_iter().map(|(k, v)| (k, v.map(|c| c.into()))).collect())
             .unwrap_or_default())
     }
-    #[cfg(target_family = "wasm")]
+    #[cfg(browser)]
     {
         creds
             .unwrap_or_default()

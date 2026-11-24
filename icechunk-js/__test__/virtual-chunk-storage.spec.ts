@@ -3,10 +3,10 @@ import * as zarr from 'zarrita'
 
 import { Repository, Storage, wasmBindgen } from './binding'
 
-// WASM builds cannot configure virtual chunk containers, so these tests write
-// the repository with the native binding only. Reading through a registered
-// Storage works the same on both builds; the browser path is exercised manually.
-const nativeOnly = process.env.NAPI_RS_FORCE_WASI || wasmBindgen ? test.skip : test
+// The browser build cannot configure virtual chunk containers, so these tests
+// write the repository with the native binding only. Reading through a
+// registered Storage works the same on both builds.
+const nativeOnly = wasmBindgen ? test.skip : test
 
 const PREFIX = 's3://source-bucket/data/'
 const AUTH = { [PREFIX]: { type: 'S3' as const, field0: { type: 'Anonymous' as const } } }

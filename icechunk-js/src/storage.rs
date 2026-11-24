@@ -23,7 +23,7 @@ use {
     serde::{Deserialize, Deserializer, Serialize, Serializer},
 };
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use std::collections::HashMap;
 
 #[cfg_attr(not(browser), napi(js_name = "Storage"))]
@@ -600,7 +600,7 @@ impl Storage for JsCallbackStorage {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 mod native {
     use super::*;
 
@@ -1064,7 +1064,7 @@ mod native {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 pub(crate) use native::*;
 
 #[cfg(not(browser))]
@@ -1113,12 +1113,12 @@ impl JsStorage {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 fn default_s3_options() -> icechunk::config::S3Options {
     icechunk::config::S3Options::default()
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi]
 impl JsStorage {
     #[napi(factory)]

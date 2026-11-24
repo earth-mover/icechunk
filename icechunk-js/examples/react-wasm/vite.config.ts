@@ -1,18 +1,12 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import wasm from 'vite-plugin-wasm'
-import topLevelAwait from 'vite-plugin-top-level-await'
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(), wasm(), topLevelAwait()],
+  plugins: [react(), tailwindcss()],
+  // pre-bundling would separate icechunk's module from the .wasm it loads
+  // from next to itself (`new URL(..., import.meta.url)`)
   optimizeDeps: {
-    exclude: ['@earthmover/icechunk', '@earthmover/icechunk-wasm32-wasi'],
-  },
-  server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
+    exclude: ['@earthmover/icechunk'],
   },
 })

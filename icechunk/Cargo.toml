@@ -134,7 +134,6 @@ default = [
   "object-store-fs",
   "redirect",
 ]
-napi-send-contract = []
 s3 = ["dep:icechunk-s3"]
 object-store-s3 = ["icechunk-arrow-object-store/s3"]
 object-store-gcs = ["icechunk-arrow-object-store/gcs"]
