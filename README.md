@@ -47,7 +47,7 @@ graph TD
 
 | Crate | Description |
 |-------|-------------|
-| **icechunk-macros** | Procedural macros, including `maybe_send_async_trait` (see [WebAssembly](#webassembly-browsers)) |
+| **icechunk-macros** | Procedural macro helpers for tests and internal use |
 | **icechunk-types** | Shared foundational types (`Path`, `ETag`, `Move`, error wrappers) used across all crates |
 | **icechunk-format** | Binary format types and serialization (snapshots, manifests, transaction logs, repo info) |
 | **icechunk-storage** | Storage trait definitions and common storage utilities |
@@ -55,26 +55,6 @@ graph TD
 | **icechunk-s3** | Native AWS S3 storage backend (optional feature) |
 | **icechunk** | Core storage engine: transactions, version control, repositories |
 | **icechunk-python** | PyO3 bindings exposing the engine to Python |
-
-## WebAssembly (browsers)
-
-`icechunk` builds for `wasm32-unknown-unknown` with `default-features = false`.
-There it runs on the JavaScript event loop, with no Tokio runtime or threads:
-
-- Async traits such as `Storage` do not require `Send` futures, so a backend can
-  await JS promises (for example `fetch`). Implement them with
-  `#[icechunk_storage::maybe_send_async_trait]` instead of `#[async_trait]`; it
-  keeps `Send` futures on every other target.
-- `icechunk::rt` runs tasks and timers on the JS event loop and blocking work
-  (decompression, decoding) inline. Use a Web Worker to keep a page responsive
-  with large repositories.
-- `zstd-sys` compiles C code: build with `clang` and
-  `AR_wasm32_unknown_unknown=llvm-ar`. Other `ar`s write archives the wasm linker
-  cannot index, and zstd silently goes missing at link time.
-- Garbage collection and expiration are not supported yet (they use Tokio timers).
-
-The JavaScript package [`@earthmover/icechunk`](https://github.com/earth-mover/icechunk/tree/main/icechunk-js) is built this way
-for browsers.
 
 ## Icechunk Overview
 

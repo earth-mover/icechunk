@@ -129,13 +129,17 @@ jobs:
       - name: Install dependencies
         run: yarn install
       - name: Build
-        run: yarn build --target ${{ matrix.target }} --use-napi-cross
+        run: yarn build --target "$TARGET" --use-napi-cross
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
       - name: Report the glibc the binding needs
         # aws-lc compiles against the host headers, so check the real baseline
         run: |
-          echo "${{ matrix.target }}: needs $(objdump -T ${{ env.APP_NAME }}.*.node | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "$TARGET: needs $(objdump -T "$APP_NAME".*.node | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -1)" | tee -a "$GITHUB_STEP_SUMMARY"
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
       - name: Upload artifact
         uses: actions/upload-artifact@v7.0.2
         with:
