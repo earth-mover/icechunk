@@ -49,7 +49,7 @@ In-memory storage works everywhere. The following backends are available in Node
 
 #### Fetch Storage (read-only, works everywhere)
 
-For read-only access to a publicly hosted Icechunk repository, use the built-in fetch-based storage. This works on both native and WASM builds, making it the easiest way to open a repository in the browser:
+For read-only access to a publicly hosted Icechunk repository, use the built-in fetch-based storage. This works in Node.js and in the browser, making it the easiest way to open a repository in the browser:
 
 ```typescript
 import { Repository } from '@earthmover/icechunk'
@@ -65,7 +65,7 @@ The repository must be on S3-compatible storage with public read access and XML 
 
 #### Custom Storage Backends
 
-For WASM builds (or any environment where the built-in backends aren't suitable), you can provide your own storage implementation in JavaScript using `Storage.newCustom()`:
+In the browser (or anywhere the built-in backends aren't suitable), you can provide your own storage implementation in JavaScript using `Storage.newCustom()`:
 
 ```typescript
 const storage = Storage.newCustom({
@@ -90,6 +90,8 @@ const storage = Storage.newCustom({
 > **Note:** Callbacks use the Node.js error-first convention — the first argument is always `null` (reserved for errors) and the actual arguments follow. Use `_err` to skip it.
 
 This is the primary way to use cloud storage in the browser, where native Rust networking is unavailable. Each callback method maps to an operation on the underlying `Storage` trait. See the exported `Storage*` TypeScript interfaces for the full type signatures.
+
+To support writes, `putObject` must honor `previousVersion`: with no `previousVersion`, overwrite; with one that has neither `etag` nor `generation`, create only if the object is missing; otherwise write only if the object's ETag still matches. Return `{ kind: 'not_on_latest_version' }` when the condition fails. icechunk relies on this to update branches safely. Behind S3, that means sending `If-None-Match: *` / `If-Match` and mapping `412` to `not_on_latest_version`; a proxy in between must pass those headers and the `ETag` through.
 
 #### Virtual Chunks
 
@@ -135,8 +137,8 @@ TIFF compression/predictor codecs still need support in your Zarr reader.
 To control how a container's chunks are fetched, register a `Storage` for its
 URL prefix. A chunk at `{prefix}{path}` is read as `path` with the storage's
 `getObjectRange`, so `Storage.newCustom(...)`, the fetch storage, or a native
-backend can serve virtual chunks. This works for any container type on native
-builds. WASM builds support HTTP and S3-style containers, but cannot load
+backend can serve virtual chunks. This works for any container type in Node.js.
+The browser build supports HTTP and S3-style containers, but cannot load
 repositories that configure GCS or Azure containers. For example, this reads
 public `s3://` references in the browser over the bucket's HTTPS endpoint:
 
@@ -172,13 +174,14 @@ cross-origin isolation (COOP/COEP) headers.
 To open a public repository, use fetch storage:
 
 ```typescript
-import { Repository, createFetchStorage } from '@earthmover/icechunk'
+import { Repository } from '@earthmover/icechunk'
+import { createFetchStorage } from '@earthmover/icechunk/fetch-storage'
 
 const repo = await Repository.open(createFetchStorage('https://my-bucket.s3.us-west-2.amazonaws.com/my-repo.icechunk'))
 ```
 
-`@earthmover/icechunk/fetch-storage` works too. For more control, implement a
-storage backend with `Storage.newCustom()` and any JS networking library.
+For more control, implement a storage backend with `Storage.newCustom()` and any
+JS networking library.
 
 Things to know:
 
@@ -222,9 +225,9 @@ Things to know:
   matches) and return `{ kind: 'not_on_latest_version' }` when the condition
   fails. icechunk relies on this to update branches safely.
 - `@earthmover/icechunk/web` is the browser build under an explicit name, for
-  tools that do not apply the `browser` condition. Import everything from one
-  entry point: a `Storage` from one build does not work with another build's
-  `Repository`.
+  tools that do not apply the `browser` condition. If you import it, take
+  `createFetchStorage` from it too, not from `@earthmover/icechunk/fetch-storage`:
+  a `Storage` from one build does not work with another build's `Repository`.
 
 ## Examples
 
