@@ -27,6 +27,7 @@ aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
 aws-smithy-http-client.workspace = true
 aws-smithy-runtime.workspace = true
+aws-smithy-runtime-api.workspace = true
 aws-smithy-types-convert.workspace = true
 bytes.workspace = true
 chrono.workspace = true
@@ -46,6 +47,10 @@ aws-smithy-http-client = { workspace = true, features = ["test-util"] }
 http.workspace = true
 serde_json.workspace = true
 test-log.workspace = true
+
+[package.metadata.cargo-machete]
+# version floor only; BehaviorVersion is imported through aws-config
+ignored = ["aws-smithy-runtime-api"]
 
 [lints]
 workspace = true

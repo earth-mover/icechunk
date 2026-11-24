@@ -39,7 +39,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@v0.11.0
+      - uses: prefix-dev/setup-pixi@v0.11.3
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false
@@ -49,7 +49,7 @@ jobs:
       # Runs after setup-pixi so the cache key hashes the pixi-pinned rustc,
       # not the runner image's drifting rustup stable
       - name: Cache Dependencies
-        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
         with:
           # The rust cache includes a dep on the Python version (when building icechunk-python)
           # so we need to bump the version here whenever Python version is updated
@@ -78,7 +78,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@v0.11.0
+      - uses: prefix-dev/setup-pixi@v0.11.3
         with:
           pixi-version: ${{ env.PIXI_VERSION }}
           cache: false

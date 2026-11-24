@@ -34,12 +34,14 @@ assert_fs = "1.1.4"
 async-recursion = "1.1.1"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
-aws-config = "1.8.15"
+aws-config = "1.13.2"
 aws-credential-types = "1.2.14"
 # the default "rustls" feature pulls rustls 0.21 through the hyper 0.14 client
-aws-sdk-s3 = { version = "1.127.0", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
+aws-sdk-s3 = { version = "1.159.0", default-features = false, features = ["default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
 aws-smithy-http-client = { version = "1.5.0", default-features = false, features = ["rustls-aws-lc"] }
 aws-smithy-runtime = "1.11.3"
+# floor for BehaviorVersion::v2026_11_17, which aws-config 1.13.2 does not require
+aws-smithy-runtime-api = "1.22.0"
 aws-smithy-types-convert = { version = "0.61.1", features = ["convert-chrono", "convert-streams"] }
 backon = "1.6.0"
 base32 = "0.5.1"

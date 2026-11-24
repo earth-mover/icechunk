@@ -1,4 +1,8 @@
 //! Runtime-provided HTTP transport for virtual chunks, including WASM.
+#![expect(
+    deprecated,
+    reason = "setHttpVirtualChunkFetcher is not deprecated in JS; it is built on the core shim"
+)]
 use async_trait::async_trait;
 use bytes::Bytes;
 use icechunk::{

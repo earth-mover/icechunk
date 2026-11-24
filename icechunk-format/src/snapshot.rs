@@ -54,7 +54,7 @@ impl ArrayShape {
     }
 
     pub fn get(&self, ax: usize) -> Option<DimensionShape> {
-        if ax > self.len() - 1 { None } else { Some(self.0[ax].clone()) }
+        self.0.get(ax).cloned()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &DimensionShape> {
@@ -250,7 +250,7 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
     type Error = IcechunkFormatError;
 
     fn try_from(value: generated::NodeSnapshot<'a>) -> Result<Self, Self::Error> {
-        #[expect(clippy::expect_used, clippy::panic)]
+        #[expect(clippy::expect_used)]
         let node_data: NodeData = match value.node_data_type() {
             generated::NodeData::Array => value
                 .node_data_as_array()
@@ -259,7 +259,17 @@ impl<'a> TryFrom<generated::NodeSnapshot<'a>> for NodeSnapshot {
             generated::NodeData::Group => {
                 value.node_data_as_group().expect("Bug in flatbuffers library").into()
             }
-            x => panic!("Invalid node data type in flatbuffers file {x:?}"),
+            // The flatbuffers verifier accepts unknown union discriminants
+            _ => {
+                return Err(IcechunkFormatErrorKind::InvalidFlatBuffer(
+                    flatbuffers::InvalidFlatbuffer::InconsistentUnion {
+                        field: Cow::Borrowed("node_data"),
+                        field_type: Cow::Borrowed("node_data_type"),
+                        error_trace: Default::default(),
+                    },
+                ))
+                .capture();
+            }
         };
         let res = NodeSnapshot {
             id: value.id().into(),
@@ -998,6 +1008,46 @@ mod tests {
         strategies::{ShapeDim, manifest_file_info, node_snapshot, shapes_and_dims},
     };
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn unknown_node_data_type_is_an_error_not_a_panic() {
+        let mut builder = flatbuffers::FlatBufferBuilder::new();
+        let id = generated::ObjectId8::new(&[0u8; 8]);
+        let path = builder.create_string("/a");
+        let user_data = builder.create_vector::<u8>(&[]);
+        let node_data = generated::GroupNodeData::create(
+            &mut builder,
+            &generated::GroupNodeDataArgs {},
+        );
+        let node = generated::NodeSnapshot::create(
+            &mut builder,
+            &generated::NodeSnapshotArgs {
+                id: Some(&id),
+                path: Some(path),
+                user_data: Some(user_data),
+                node_data_type: generated::NodeData(99),
+                node_data: Some(node_data.as_union_value()),
+                extra: None,
+            },
+        );
+        builder.finish(node, None);
+        let node =
+            flatbuffers::root::<generated::NodeSnapshot<'_>>(builder.finished_data())
+                .expect("the flatbuffers verifier accepts unknown union discriminants");
+        assert!(NodeSnapshot::try_from(node).is_err());
+    }
+
+    #[test]
+    fn array_shape_get_out_of_range() {
+        // 0-d (scalar) arrays have an empty shape
+        let scalar = ArrayShape::new([]).unwrap();
+        assert_eq!(scalar.get(0), None);
+
+        let shape = ArrayShape::new([(10, 2)]).unwrap();
+        assert_eq!(shape.get(0), Some(DimensionShape::new(10, 2)));
+        assert_eq!(shape.get(1), None);
+    }
+
     use proptest::prelude::*;
     use std::iter::{self};
 
