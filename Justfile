@@ -816,3 +816,21 @@ js-test-wasi *args: js-install
   trap 'yarn config unset supportedArchitectures.cpu; yarn install' EXIT
   yarn install
   NAPI_RS_FORCE_WASI=1 yarn test "$@"
+
+[group('js')]
+[script]
+[doc("Build icechunk-js for the browser (wasm32-unknown-unknown) with wasm-bindgen into icechunk-js/wasm-bindgen/{web,node}; needs clang, llvm-ar and wasm-bindgen matching Cargo.lock")]
+js-build-browser cargo_profile="dev":
+  # don't fail on existing warnings in no-default-features wasm cfgs
+  export RUSTFLAGS=""
+  export CFLAGS="" CXXFLAGS=""
+  cargo build -p icechunk-js --target wasm32-unknown-unknown --profile {{cargo_profile}}
+  out_dir={{ if cargo_profile == "dev" { "debug" } else { cargo_profile } }}
+  wasm="${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$out_dir/icechunk_js.wasm"
+  wasm-bindgen --target web --out-dir icechunk-js/wasm-bindgen/web "$wasm"
+  wasm-bindgen --target nodejs --out-dir icechunk-js/wasm-bindgen/node "$wasm"
+
+[group('js')]
+[doc("Run icechunk-js tests against the browser build under node (needs js-build-browser)")]
+js-test-browser *args: js-install
+  cd icechunk-js && ICECHUNK_JS_BINDING=wasm-bindgen yarn test "$@"

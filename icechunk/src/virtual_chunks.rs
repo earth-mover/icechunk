@@ -13,7 +13,6 @@ use std::{
     sync::Arc,
 };
 
-use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::{TryStreamExt as _, stream::FuturesOrdered};
 #[cfg(any(
@@ -355,7 +354,7 @@ pub struct HttpVirtualChunkResponse {
 #[deprecated(
     note = "register a `Storage` for the container instead, with `VirtualChunkResolver::with_container_storage` or `Repository::set_virtual_chunk_storage`"
 )]
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 pub trait HttpVirtualChunkFetcher: std::fmt::Debug + Send + Sync {
     #[expect(deprecated)]
     async fn fetch(
@@ -2152,7 +2151,7 @@ mod http_callback_tests {
         etag: Option<String>,
         modified: Option<u32>,
     }
-    #[async_trait]
+    #[icechunk_storage::maybe_send_async_trait]
     impl HttpVirtualChunkFetcher for Fetcher {
         async fn fetch(
             &self,

@@ -1,13 +1,16 @@
+#[cfg(not(browser))]
 pub(crate) trait IntoNapiResult<T> {
     fn map_napi_err(self) -> napi::Result<T>;
 }
 
+#[cfg(not(browser))]
 impl<T, E: std::error::Error + 'static> IntoNapiResult<T> for Result<T, E> {
     fn map_napi_err(self) -> napi::Result<T> {
         self.map_err(|e| to_napi_error(&e))
     }
 }
 
+#[cfg(not(browser))]
 pub(crate) fn to_napi_error(error: &(dyn std::error::Error + 'static)) -> napi::Error {
     napi::Error::from_reason(chain_message(error))
 }

@@ -2,7 +2,7 @@ import test from 'ava'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import { Storage, Repository } from '../index'
+import { Storage, Repository } from './binding'
 import type { S3StaticCredentials } from '../index'
 
 // The refreshable-credential factories are native-only (not in the WASI build).

@@ -223,6 +223,43 @@ jobs:
       - name: Test bindings
         run: just js-test-wasi
 
+  test-browser:
+    # wasm-bindgen build for wasm32-unknown-unknown, run with the same specs
+    # under node. Not published yet; see `just js-build-browser`.
+    name: Test browser target (wasm-bindgen)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install just and wasm-bindgen
+        uses: taiki-e/install-action@v2.90.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          # keep in sync with the wasm-bindgen version in Cargo.lock
+          tool: just,wasm-bindgen@0.2.114
+      - name: Install Rust target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Install LLVM toolchain for wasm C deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm
+      - name: Setup node
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 22
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          key: js-browser
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
+        run: just js-build-browser
+      - name: Test bindings
+        run: just js-test-browser
+
   publish:
     name: Publish
     if: github.event_name == 'workflow_dispatch'
