@@ -121,7 +121,7 @@ impl JsStore {
 
     #[wasm_bindgen(getter)]
     pub fn session(&self) -> JsSession {
-        JsSession::new_from_arc(self.0.session())
+        JsSession::browser(self.0.session())
     }
 
     #[wasm_bindgen(js_name = isEmpty)]

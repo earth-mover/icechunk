@@ -24,6 +24,10 @@
       "browser": "./browser.js",
       "default": "./index.js"
     },
+    "./web": {
+      "types": "./web.d.ts",
+      "default": "./web.mjs"
+    },
     "./fetch-storage": {
       "types": "./fetch-storage.d.ts",
       "default": "./fetch-storage.mjs"
@@ -37,7 +41,13 @@
     "index.d.ts",
     "index.js",
     "browser.js",
+    "web.mjs",
+    "web.d.ts",
+    "wasm-bindgen/web/icechunk_js.js",
+    "wasm-bindgen/web/icechunk_js_bg.wasm",
+    "wasm-bindgen/web/package.json",
     "fetch-storage.mjs",
+    "fetch-storage-backend.mjs",
     "fetch-storage.d.ts",
     "http-virtual-chunks.mjs",
     "http-virtual-chunks.d.ts"
@@ -63,6 +73,7 @@
     "bench": "node --import @oxc-node/core/register benchmark/bench.ts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
+    "check:web-types": "tsc -p tsconfig.web-types.json",
     "format": "run-p format:prettier format:rs format:toml",
     "format:prettier": "prettier . -w",
     "format:toml": "taplo format",

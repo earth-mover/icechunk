@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Repository, Storage } from './binding'
+import { Repository, Storage, wasmBindgen } from './binding'
 import type { StorageVersionInfo } from './binding'
 
 const GROUP = new TextEncoder().encode('{"zarr_format":3,"node_type":"group"}')
@@ -14,7 +14,7 @@ const GROUP = new TextEncoder().encode('{"zarr_format":3,"node_type":"group"}')
  * A failed condition is `not_on_latest_version`. This is what a fetch backend
  * talking to S3 (or to a proxy in front of it) must reproduce.
  */
-function memoryBackend({ raceUpdates = false } = {}) {
+function memoryBackend({ raceUpdates = false, writeDelayMs = 0 } = {}) {
   const objects = new Map<string, { data: Uint8Array; etag: string; modified: Date }>()
   const stats = { conditionalPuts: 0, rejectedPuts: 0 }
   // With `raceUpdates`, the first conditional update waits for a second one,
@@ -63,6 +63,7 @@ function memoryBackend({ raceUpdates = false } = {}) {
       { path, data, previousVersion }: { path: string; data: Uint8Array; previousVersion?: StorageVersionInfo | null },
     ) => {
       await barrier(previousVersion)
+      if (writeDelayMs) await new Promise((resolve) => setTimeout(resolve, writeDelayMs))
       return conflicts(path, previousVersion) ? { kind: 'not_on_latest_version' } : write(path, data)
     },
     copyObject: async (
@@ -165,4 +166,28 @@ test('when two commits race, the storage rejects one write and only one commit l
   const landed = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []))
   t.is(landed.length, 1, JSON.stringify(results.map((r) => r.status === 'rejected' && String(r.reason))))
   t.is(await (await Repository.open(backend.storage())).lookupBranch('main'), landed[0])
+})
+
+// napi getters block until the commit releases the session; the browser build
+// cannot block, so they report the state from before the commit instead of
+// throwing. (Not run on napi: blocking the JS thread there would deadlock
+// against this JS storage's callbacks.)
+const browserOnly = wasmBindgen ? test : test.skip
+browserOnly('session getters keep answering while a commit holds the session', async (t) => {
+  const backend = memoryBackend({ writeDelayMs: 20 })
+  const repo = await Repository.create(backend.storage())
+  const session = await repo.writableSession('main')
+  await session.store.set('zarr.json', GROUP)
+  const before = session.snapshotId
+  t.true(session.hasUncommittedChanges)
+
+  const committing = session.commit('slow')
+  await new Promise((resolve) => setTimeout(resolve, 5)) // the commit is now waiting on a write
+  t.is(session.snapshotId, before)
+  t.true(session.hasUncommittedChanges)
+  t.is(session.branch, 'main')
+
+  const snapshot = await committing
+  t.is(session.snapshotId, snapshot)
+  t.false(session.hasUncommittedChanges)
 })

@@ -2466,6 +2466,7 @@ dependencies = [
  "typetag",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2567,25 +2568,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing-error",
  "typed-path",
-]
-
-[[package]]
-name = "icechunk-wasm-tests"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "bytes",
- "chrono",
- "futures",
- "icechunk",
- "icechunk-storage",
- "js-sys",
- "serde",
- "serde_json",
- "tokio",
- "typetag",
- "wasm-bindgen-futures",
- "wasm-bindgen-test",
 ]
 
 [[package]]

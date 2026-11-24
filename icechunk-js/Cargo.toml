@@ -47,5 +47,9 @@ serde_bytes = "0.11.19"
 wasm-bindgen = "0.2.114"
 wasm-bindgen-futures = "0.4.64"
 
+# `just wasm-browser-test`: src/browser/tests.rs under wasm-bindgen-test-runner
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3.64"
+
 [build-dependencies]
 napi-build = "~2.3"

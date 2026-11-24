@@ -9,7 +9,6 @@ members = [
   "icechunk-python",
   "icechunk-macros",
   "icechunk-js",
-  "icechunk-wasm-tests",
 ]
 default-members = ["icechunk"]
 resolver = "2"
@@ -194,6 +193,14 @@ codegen-units = 8
 # Optimized profile for benchmarking with maturin/PyO3 compatibility
 # maturin doesn't work well with --profile bench for ... reasons.
 # keep this in sync with `bench` above.
+# the published browser build of icechunk-js (`just js-build-browser browser-release`):
+# download size matters more than the last bit of speed
+[profile.browser-release]
+inherits = "release"
+opt-level = "s"
+lto = "fat"
+strip = true
+
 [profile.perf]
 inherits = "release"
 opt-level = 2

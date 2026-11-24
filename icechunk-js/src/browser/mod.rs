@@ -5,15 +5,18 @@
 //! wasm-bindgen cannot export an `async fn` that borrows `self`, so async
 //! methods clone what they need and return a `Promise` from [`spawn`].
 //!
-//! Getters that need a lock use `try_read`: in the browser a blocking read
-//! would spin forever, so a getter called while an operation holds the lock
-//! throws instead of waiting.
+//! Getters cannot wait for a lock: in the browser a blocking read would spin
+//! forever. `Session` getters fall back to the last state they saw while an
+//! operation (a commit, a write) holds the session; see `session.rs`.
 
 mod repository;
 mod session;
 mod storage;
 mod store;
 mod virtual_chunks;
+
+#[cfg(test)]
+mod tests;
 
 use std::future::Future;
 
@@ -86,6 +89,21 @@ where
     F: Future<Output = JsResult<JsValue>> + 'static,
 {
     wasm_bindgen_futures::future_to_promise(fut)
+}
+
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error(message: &str);
+}
+
+/// Report panics on the console. Without this a panic surfaces only as
+/// `RuntimeError: unreachable`, with no message.
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+fn start() {
+    std::panic::set_hook(Box::new(|info| {
+        console_error(&format!("icechunk panicked: {info}"))
+    }));
 }
 
 /// A read lock for a synchronous getter, or an error if an operation holds

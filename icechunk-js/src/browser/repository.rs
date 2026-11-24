@@ -31,7 +31,7 @@ fn repository(repo: Repository) -> JsValue {
 }
 
 fn session(session: icechunk::session::Session) -> JsValue {
-    JsSession::new(session).into()
+    JsSession::browser(Arc::new(RwLock::new(session))).into()
 }
 
 /// The arguments `create` and `openOrCreate` share.

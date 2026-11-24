@@ -211,6 +211,43 @@ export default defineConfig({
 
 See the [NAPI-RS WebAssembly docs](https://napi.rs/docs/concepts/webassembly) for more details.
 
+### Without cross-origin isolation: `@earthmover/icechunk/web` (preview)
+
+`@earthmover/icechunk/web` is a second browser build, made with wasm-bindgen. It
+has the same API as the default browser build and needs none of the setup above:
+no `--cpu=wasm32` install, no COOP/COEP headers, no Vite plugins. It ships in the
+main package.
+
+```typescript
+import { Repository, createFetchStorage } from '@earthmover/icechunk/web'
+
+const repo = await Repository.open(createFetchStorage('https://my-bucket.s3.us-west-2.amazonaws.com/my-repo.icechunk'))
+```
+
+Things to know:
+
+- **Use one build per app.** Import everything, including `createFetchStorage`,
+  from `@earthmover/icechunk/web`. A `Storage` made by the default entry point
+  (or by `@earthmover/icechunk/fetch-storage`) does not work with this build's
+  `Repository`.
+- **It runs on the thread that imports it.** There are no worker threads, so
+  decompressing and parsing large snapshots and manifests happens on that thread.
+  For large repositories, import it in a [module Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker#module)
+  to keep the page responsive.
+- **It loads its `.wasm` on import**, from next to the module
+  (`new URL('icechunk_js_bg.wasm', import.meta.url)`), using top-level `await`.
+  Vite and webpack 5 handle this; with Vite, add `'@earthmover/icechunk'` to
+  `optimizeDeps.exclude`. A strict Content Security Policy needs
+  `script-src 'wasm-unsafe-eval'`, and the server must send `.wasm` files as
+  `application/wasm`.
+- **Session getters never block.** While an operation such as a commit is using a
+  session, getters like `session.snapshotId` return the state from before it
+  started. The native build waits for the operation instead.
+- **Writing** works through `Storage.newCustom()`. A custom storage's `putObject`
+  must honor `previousVersion` (create-if-missing, or write only if the ETag
+  matches) and return `{ kind: 'not_on_latest_version' }` when the condition
+  fails. icechunk relies on this to update branches safely.
+
 ## Examples
 
 See [`examples/react-wasm`](examples/react-wasm) for an interactive React app demonstrating repository management, branching, tagging, and Zarr store operations in the browser.
@@ -237,6 +274,15 @@ See [WASM Compiler Setup (macOS)](../icechunk-python/docs/docs/reference/contrib
 Use the `just` recipes rather than calling `yarn build --target wasm32-wasip1-threads` directly.
 The recipes set `RUSTC` and clear `CFLAGS`. Without them the build fails with
 `Failed to copy artifact`, or produces a module that hangs on load.
+
+To build and test `@earthmover/icechunk/web` (needs `clang`, `llvm-ar`, and the
+`wasm-bindgen` CLI at the version in `Cargo.lock`):
+
+```bash
+just js-build-browser   # or `just js-build-browser browser-release` for the published build
+just js-test-browser    # the ava specs against web.mjs, under node
+just wasm-browser-test  # Rust-side browser tests (needs wasm-bindgen-test-runner)
+```
 
 > [!IMPORTANT]
 > Building requires the workspace's minimum Rust version (`rust-version` in the root `Cargo.toml`).
