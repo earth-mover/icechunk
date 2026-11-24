@@ -183,7 +183,8 @@ pub async fn create_tag(
     }
 }
 
-#[async_recursion]
+#[cfg_attr(not(all(target_family = "wasm", target_os = "unknown")), async_recursion)]
+#[cfg_attr(all(target_family = "wasm", target_os = "unknown"), async_recursion(?Send))]
 #[instrument(skip(storage, ctx))]
 pub async fn update_branch(
     storage: &(dyn Storage + Send + Sync),
@@ -409,8 +410,8 @@ pub async fn fetch_tag(
             }
             Err(err) => Err(err.inject()),
         }
-    }
-    .boxed();
+    };
+    let fut1 = crate::compat::maybe_send_boxed!(fut1);
     let fut2 = async move {
         let path = format!("{V1_REFS_FILE_PATH}/{delete_marker_path}");
         match storage.get_object(ctx, path.as_str(), None).await {
@@ -420,8 +421,8 @@ pub async fn fetch_tag(
             }
             Err(err) => Err(err.inject()),
         }
-    }
-    .boxed();
+    };
+    let fut2 = crate::compat::maybe_send_boxed!(fut2);
 
     if let Some((content, is_deleted)) = FuturesOrdered::from_iter([fut1, fut2])
         .collect::<Vec<RefResult<Bytes>>>()

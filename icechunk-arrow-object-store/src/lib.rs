@@ -590,7 +590,7 @@ impl Display for ObjectStorage {
 
 impl sealed::Sealed for ObjectStorage {}
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 #[typetag::serde]
 impl Storage for ObjectStorage {
     fn storage_info(&self) -> StorageInfo {

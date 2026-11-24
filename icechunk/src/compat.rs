@@ -26,3 +26,13 @@ macro_rules! ic_boxed {
 }
 
 pub(crate) use ic_boxed;
+
+// Browsers need non-`Send` futures; napi needs `Send` ones. They cannot both hold.
+#[cfg(all(
+    target_family = "wasm",
+    target_os = "unknown",
+    feature = "napi-send-contract"
+))]
+compile_error!("`napi-send-contract` is not supported on wasm32-unknown-unknown");
+
+pub use icechunk_storage::{MaybeSend, MaybeSendBoxStream, maybe_send_boxed};

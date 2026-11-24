@@ -3,7 +3,6 @@ use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
@@ -252,7 +251,7 @@ impl<'de> Deserialize<'de> for JsCallbackStorage {
 
 impl icechunk_storage::sealed::Sealed for JsCallbackStorage {}
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 #[typetag::serde(name = "js_callback_storage")]
 impl Storage for JsCallbackStorage {
     fn storage_info(&self) -> StorageInfo {

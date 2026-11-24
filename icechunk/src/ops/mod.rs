@@ -138,7 +138,7 @@ where
         .build();
 
     op.retry(backoff)
-        .sleep(tokio::time::sleep)
+        .sleep(crate::rt::sleep)
         .when(|e| {
             matches!(
                 e,
@@ -158,7 +158,7 @@ where
 
 /// Aborts the task it holds when dropped, so a cancelled or early-returning
 /// caller takes its background task down with it on every path.
-pub(crate) struct AbortOnDrop<T>(pub(crate) tokio::task::JoinHandle<T>);
+pub(crate) struct AbortOnDrop<T>(pub(crate) crate::rt::JoinHandle<T>);
 
 impl<T> AbortOnDrop<T> {
     /// Abort the task and wait for it to actually stop. Dropping only requests

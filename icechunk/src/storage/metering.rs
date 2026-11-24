@@ -9,7 +9,6 @@ use std::{
     time::Instant,
 };
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, stream::BoxStream};
@@ -161,7 +160,7 @@ impl fmt::Display for MeteringStorage {
 
 impl sealed::Sealed for MeteringStorage {}
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 #[typetag::serde]
 impl Storage for MeteringStorage {
     fn storage_info(&self) -> StorageInfo {

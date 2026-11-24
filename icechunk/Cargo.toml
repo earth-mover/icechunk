@@ -80,6 +80,17 @@ tokio = { workspace = true, features = [
   "io-util",
 ] }
 
+# Browser (wasm32-unknown-unknown): no Tokio runtime, tasks run on the JS
+# event loop. See `src/rt.rs`.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+gloo-timers = { version = "0.3.0", features = ["futures"] }
+wasm-bindgen-futures = "0.4.64"
+# Randomness comes from `crypto.getRandomValues`. Libraries normally leave this
+# choice to the application, but icechunk already requires a JS host here (it
+# runs tasks on the JS event loop), so enabling it saves every app the step.
+getrandom = { version = "0.4", features = ["wasm_js"] }
+uuid = { workspace = true, features = ["js"] }
+
 [target.'cfg(unix)'.dependencies]
 rlimit.workspace = true
 
@@ -169,4 +180,5 @@ harness = false
 bench = false
 
 [package.metadata.cargo-machete]
-ignored = ["serde_bytes"]
+# getrandom and uuid are only listed to turn on their browser backends
+ignored = ["serde_bytes", "getrandom", "uuid"]

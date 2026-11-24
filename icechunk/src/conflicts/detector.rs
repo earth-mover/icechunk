@@ -6,7 +6,6 @@ use std::{
     sync::Mutex,
 };
 
-use async_trait::async_trait;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 
 use crate::{
@@ -20,7 +19,7 @@ use super::{Conflict, ConflictResolution, ConflictSolver};
 #[derive(Debug, Clone)]
 pub struct ConflictDetector;
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 impl ConflictSolver for ConflictDetector {
     async fn solve(
         &self,

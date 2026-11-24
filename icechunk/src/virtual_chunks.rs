@@ -264,7 +264,7 @@ impl VirtualChunkContainer {
 }
 
 /// Trait for fetching byte ranges from external data sources.
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 pub trait ChunkFetcher: std::fmt::Debug + private::Sealed + Send + Sync {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64;
     fn max_concurrent_requests_for_object(&self) -> NonZeroU16;
@@ -1081,7 +1081,7 @@ impl S3Fetcher {
 impl private::Sealed for S3Fetcher {}
 
 #[cfg(feature = "s3")]
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 impl ChunkFetcher for S3Fetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
         self.settings.concurrency().ideal_concurrent_request_size()
@@ -1207,7 +1207,7 @@ struct HttpCallbackChunkFetcher {
 
 impl private::Sealed for HttpCallbackChunkFetcher {}
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 #[expect(deprecated)]
 impl ChunkFetcher for HttpCallbackChunkFetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
@@ -1266,7 +1266,7 @@ struct StorageChunkFetcher {
 
 impl private::Sealed for StorageChunkFetcher {}
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 impl ChunkFetcher for StorageChunkFetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
         self.settings.concurrency().ideal_concurrent_request_size()
@@ -1482,7 +1482,7 @@ impl ObjectStoreFetcher {
     feature = "object-store-azure",
     feature = "object-store-http"
 ))]
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 impl ChunkFetcher for ObjectStoreFetcher {
     fn ideal_concurrent_request_size(&self) -> NonZeroU64 {
         self.settings.concurrency().ideal_concurrent_request_size()

@@ -2,7 +2,6 @@
 
 use std::{ops::Range, pin::Pin, sync::Arc};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, stream::BoxStream};
@@ -332,7 +331,7 @@ impl std::fmt::Display for RedirectStorage {
     }
 }
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 #[typetag::serde]
 impl Storage for RedirectStorage {
     fn storage_info(&self) -> StorageInfo {

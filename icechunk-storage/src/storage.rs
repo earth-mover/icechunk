@@ -24,7 +24,6 @@ use tokio::io::AsyncBufRead;
 use tokio_util::io::StreamReader;
 use tracing::{instrument, warn};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;
 
@@ -575,7 +574,23 @@ pub fn filter_ids_by_id_prefix<'a>(
 }
 
 /// Implementations are free to assume files are never overwritten.
-#[async_trait]
+///
+/// On `wasm32-unknown-unknown` (browsers) the futures returned by this trait
+/// are not required to be `Send`, so backends built on `fetch` can implement
+/// it. Every other target, including `wasm32-wasip1-threads`, keeps `Send`
+/// futures. Implementations must match, so annotate them with
+/// [`maybe_send_async_trait`](crate::maybe_send_async_trait) instead of
+/// `#[async_trait]`:
+///
+/// ```ignore
+/// #[icechunk_storage::maybe_send_async_trait]
+/// #[typetag::serde]
+/// impl Storage for MyStorage { /* ... */ }
+/// ```
+///
+/// A crate that only ever targets the browser can use `#[async_trait(?Send)]`
+/// directly.
+#[crate::maybe_send_async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// Return structured metadata about this storage backend for display/repr.

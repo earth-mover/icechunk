@@ -488,7 +488,7 @@ async fn open(
 
     let storage_c = Arc::clone(&storage);
     let settings_c = settings.clone();
-    let fetch_version = tokio::spawn(Repository::fetch_spec_version_labelled(
+    let fetch_version = crate::rt::spawn(Repository::fetch_spec_version_labelled(
         storage_c,
         Some(settings_c),
         attribution.clone(),

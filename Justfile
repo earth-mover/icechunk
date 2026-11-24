@@ -195,6 +195,22 @@ wasm-build:
   export CFLAGS="" CXXFLAGS=""
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
 
+# Browser target (wasm32-unknown-unknown). The archiver must be llvm-ar: Apple
+# and GNU ar write no symbol index for wasm objects, so rust-lld silently skips
+# zstd's C code and the module ends up importing `ZSTD_*` from `env`.
+export CC_wasm32_unknown_unknown := env("CC_wasm32_unknown_unknown", "clang")
+export AR_wasm32_unknown_unknown := env("AR_wasm32_unknown_unknown", "llvm-ar")
+
+[group('test')]
+[script]
+[doc("Run icechunk's browser (wasm32-unknown-unknown) tests under node; needs clang, llvm-ar, node and wasm-bindgen-test-runner matching Cargo.lock")]
+wasm-browser-test *args:
+  # don't fail on existing warnings in no-default-features wasm cfgs
+  export RUSTFLAGS=""
+  export CFLAGS="" CXXFLAGS=""
+  export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER:-wasm-bindgen-test-runner}"
+  cargo test -p icechunk-wasm-tests --target wasm32-unknown-unknown "$@"
+
 [group('test')]
 [script]
 [doc("Run icechunk lib tests with no default features (wasm feature-set proxy)")]

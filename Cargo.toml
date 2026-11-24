@@ -9,6 +9,7 @@ members = [
   "icechunk-python",
   "icechunk-macros",
   "icechunk-js",
+  "icechunk-wasm-tests",
 ]
 default-members = ["icechunk"]
 resolver = "2"
