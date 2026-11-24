@@ -37,7 +37,7 @@ The package is [`@earthmover/icechunk`](https://www.npmjs.com/package/@earthmove
 1. Go to the [`JS CI` github action](https://github.com/earth-mover/icechunk/actions/workflows/js-ci.yaml).
 1. Click `Run workflow` and select the branch to run the workflow from (you most likely want to use `main`).
 1. Click the green `Run workflow` button to launch.
-1. The workflow builds the native binaries for macOS, Windows, Linux, and WASI, tests each one, then publishes to npm.
+1. The workflow builds the native binaries for macOS, Windows, and Linux plus the browser (wasm-bindgen) build, tests each one, then publishes to npm.
 
 The `publish` job only runs on a manual `workflow_dispatch`. Push and pull request runs build and test but never publish. Every manual run publishes to npm, so do not dispatch this workflow for any other reason.
 

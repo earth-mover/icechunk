@@ -1,21 +1,30 @@
-use std::ops::Deref as _;
 use std::sync::Arc;
 
-use icechunk::format::Path;
-use icechunk::session::Session;
+use icechunk::session::{Session, SessionMode};
+#[cfg(not(browser))]
 use napi_derive::napi;
 use tokio::sync::RwLock;
+#[cfg(not(browser))]
+use {
+    crate::config::JsRepositoryConfig, crate::errors::IntoNapiResult,
+    crate::repository::JsDiff, crate::store::JsStore, icechunk::format::Path,
+    std::ops::Deref as _,
+};
 
-use crate::config::JsRepositoryConfig;
-use crate::errors::IntoNapiResult;
-use crate::repository::JsDiff;
-use crate::store::JsStore;
-
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use futures::TryStreamExt;
 
-#[napi(js_name = "Session")]
+#[cfg_attr(not(browser), napi(js_name = "Session"))]
+#[cfg_attr(browser, wasm_bindgen::prelude::wasm_bindgen(js_name = Session))]
 pub struct JsSession(pub(crate) Arc<RwLock<Session>>);
+
+pub(crate) fn mode_name(mode: SessionMode) -> String {
+    match mode {
+        SessionMode::Readonly => "readonly".to_string(),
+        SessionMode::Writable => "writable".to_string(),
+        SessionMode::Rearrange => "rearrange".to_string(),
+    }
+}
 
 impl JsSession {
     pub fn new(session: Session) -> Self {
@@ -27,6 +36,7 @@ impl JsSession {
     }
 }
 
+#[cfg(not(browser))]
 #[napi]
 impl JsSession {
     #[napi(getter)]
@@ -80,11 +90,7 @@ impl JsSession {
 
     #[napi(getter)]
     pub fn mode(&self) -> String {
-        match self.0.blocking_read().mode() {
-            icechunk::session::SessionMode::Readonly => "readonly".to_string(),
-            icechunk::session::SessionMode::Writable => "writable".to_string(),
-            icechunk::session::SessionMode::Rearrange => "rearrange".to_string(),
-        }
+        mode_name(self.0.blocking_read().mode())
     }
 
     #[napi(getter)]
@@ -150,7 +156,7 @@ impl JsSession {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi]
 impl JsSession {
     /// Get all virtual chunk locations referenced by this session

@@ -2,7 +2,16 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- `icechunk-js`: the browser build is now wasm-bindgen instead of napi WASI, with the same API. It needs no `--cpu=wasm32` install, cross-origin isolation (COOP/COEP) headers or Vite plugins. It runs on the thread that imports it, and session getters return the state from before a running operation instead of blocking. `@earthmover/icechunk-wasm32-wasi` is no longer published.
+- Rust only: the `napi-send-contract` feature of `icechunk` is removed.
+
 ### Features
+
+- `icechunk-js`: native Node.js binaries for Linux arm64 (glibc) and Intel macOS.
+- `icechunk-js`: `@earthmover/icechunk/web` names the browser build explicitly, and `@earthmover/icechunk/web/init` loads its `.wasm` only when you call `init()` or `initSync()` (for esbuild, service workers and server-side rendering). Both export a `createFetchStorage` for their own `Storage`.
+- Rust only: `icechunk` builds for `wasm32-unknown-unknown` (browsers). `Storage` and the other async traits do not require `Send` futures there (`#[icechunk_storage::maybe_send_async_trait]`), and `icechunk::rt` runs tasks on the JS event loop ([#2574](https://github.com/earth-mover/icechunk/issues/2574)).
 
 - Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
   - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.

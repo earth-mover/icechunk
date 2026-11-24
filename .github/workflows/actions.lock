@@ -30,6 +30,7 @@ workflows:
         - 'actions/upload-artifact@v7.0.2'
         - 'prefix-dev/setup-pixi@v0.11.3'
         - 'swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31'
+        - 'taiki-e/install-action@v2.90.1'
     '.github/workflows/pr-review-bot.yml':
         - 'earth-mover/pr-review-bot@main'
     '.github/workflows/publish-rust-library.yml':

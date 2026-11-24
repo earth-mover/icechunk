@@ -1,18 +1,27 @@
 use std::sync::Arc;
 
-use bytes::Bytes;
-use futures::TryStreamExt;
 use icechunk::format::ByteRange;
-use icechunk::store::{Store, StoreErrorKind};
-use napi::bindgen_prelude::{Buffer, Uint8Array};
+use icechunk::store::Store;
+#[cfg(not(browser))]
 use napi_derive::napi;
-
-use crate::errors::IntoNapiResult;
-use crate::session::JsSession;
+#[cfg(not(browser))]
+use {
+    crate::errors::IntoNapiResult,
+    crate::session::JsSession,
+    bytes::Bytes,
+    futures::TryStreamExt,
+    icechunk::store::StoreErrorKind,
+    napi::bindgen_prelude::{Buffer, Uint8Array},
+};
 
 /// Range query matching zarrita's RangeQuery type:
 ///   { offset: number, length: number } | { suffixLength: number }
-#[napi(object, js_name = "RangeQuery")]
+#[cfg_attr(not(browser), napi(object, js_name = "RangeQuery"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub struct JsRangeQuery {
     pub offset: Option<f64>,
@@ -20,36 +29,34 @@ pub struct JsRangeQuery {
     pub suffix_length: Option<f64>,
 }
 
-/// On WASM, some icechunk futures (e.g. from `get_chunk_reader`, `get_chunk_writer`)
-/// are not `Send` because WASM is single-threaded. However, napi's async runtime
-/// requires `Send` futures. This wrapper unsafely implements `Send` on WASM where
-/// it is safe because there is only one thread.
-///
-/// We wrap the `Arc<Store>` so that all futures produced from it are considered Send.
-#[cfg(target_family = "wasm")]
-struct SendStore(Arc<Store>);
+impl From<JsRangeQuery> for ByteRange {
+    fn from(range: JsRangeQuery) -> Self {
+        if let Some(suffix) = range.suffix_length {
+            ByteRange::Last(suffix as u64)
+        } else {
+            let offset = range.offset.unwrap_or(0.0) as u64;
+            match range.length {
+                Some(len) => ByteRange::from_offset_with_length(offset, len as u64),
+                None => ByteRange::from_offset(offset),
+            }
+        }
+    }
+}
 
-#[cfg(target_family = "wasm")]
-// SAFETY: WASM is single-threaded, so Send is not actually needed
-unsafe impl Send for SendStore {}
-// SAFETY: WASM is single-threaded, so Sync is not actually needed
-#[cfg(target_family = "wasm")]
-unsafe impl Sync for SendStore {}
-
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use chrono::{DateTime, Utc};
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::format::manifest::{
     Checksum, SecondsSinceEpoch, VirtualChunkLocation, VirtualChunkRef,
 };
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::format::{ChunkIndices, Path};
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::storage::ETag;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use icechunk::store::SetVirtualRefsResult;
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 /// Create a checksum from either an etag string or a last-modified datetime
 /// etag_checksum takes precedence if both are provided
 fn create_checksum(
@@ -63,7 +70,7 @@ fn create_checksum(
 }
 
 /// Specification for a virtual chunk reference
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi(object, js_name = "VirtualChunkSpec")]
 #[derive(Clone, Debug)]
 pub struct JsVirtualChunkSpec {
@@ -76,15 +83,17 @@ pub struct JsVirtualChunkSpec {
     pub last_modified: Option<DateTime<Utc>>,
 }
 
-#[napi(js_name = "Store")]
+#[cfg_attr(not(browser), napi(js_name = "Store"))]
+#[cfg_attr(browser, wasm_bindgen::prelude::wasm_bindgen(js_name = Store))]
 pub struct JsStore(pub(crate) Arc<Store>);
 
 /// Strip leading slash from key to be compatible with zarrita's AbsolutePath type.
 /// zarrita passes keys like "/zarr.json" but icechunk expects "zarr.json".
-fn normalize_key(key: &str) -> &str {
+pub(crate) fn normalize_key(key: &str) -> &str {
     key.strip_prefix('/').unwrap_or(key)
 }
 
+#[cfg(not(browser))]
 #[napi]
 impl JsStore {
     #[napi]
@@ -108,15 +117,7 @@ impl JsStore {
         key: String,
         range: JsRangeQuery,
     ) -> napi::Result<Option<Uint8Array>> {
-        let byte_range = if let Some(suffix) = range.suffix_length {
-            ByteRange::Last(suffix as u64)
-        } else {
-            let offset = range.offset.unwrap_or(0.0) as u64;
-            match range.length {
-                Some(len) => ByteRange::from_offset_with_length(offset, len as u64),
-                None => ByteRange::from_offset(offset),
-            }
-        };
+        let byte_range = ByteRange::from(range);
         let key = normalize_key(&key);
         match self.0.get(key, &byte_range).await {
             Ok(bytes) => Ok(Some(Uint8Array::from(bytes.to_vec()))),
@@ -227,7 +228,7 @@ impl JsStore {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi]
 impl JsStore {
     /// Set a single virtual reference to a chunk

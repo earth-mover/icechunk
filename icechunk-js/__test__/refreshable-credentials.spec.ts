@@ -2,10 +2,10 @@ import test from 'ava'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 
-import { Storage, Repository } from '../index'
+import { Storage, Repository } from './binding'
 import type { S3StaticCredentials } from '../index'
 
-// The refreshable-credential factories are native-only (not in the WASI build).
+// The refreshable-credential factories are native-only (not in the browser build).
 const nativeTest = typeof Storage.newS3WithRefreshableCredentials === 'function' ? test : test.skip
 
 // A minimal S3 stand-in: it answers every request with 404 and records the

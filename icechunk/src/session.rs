@@ -8,6 +8,7 @@
 //! - **Writable**: Can read and write chunks/metadata
 //! - **Rearrange**: Can move/rename nodes (no chunk writes)
 
+use crate::rt::JoinError;
 use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -23,7 +24,6 @@ use std::{
     sync::Arc,
 };
 use thiserror::Error;
-use tokio::task::JoinError;
 use tracing::{Instrument as _, Span, debug, info, instrument, trace, warn};
 
 use crate::{
@@ -1009,7 +1009,8 @@ impl Session {
             panic!("bug in reindex")
         };
 
-        let mut original_chunks = self.chunk_coordinates(array_path).await?.boxed();
+        let mut original_chunks =
+            crate::compat::maybe_send_boxed!(self.chunk_coordinates(array_path).await?);
         let mut change_set = ChangeSet::for_edits();
         let mut destinations = HashSet::new();
 
@@ -3301,7 +3302,7 @@ async fn do_flush(
     let new_snapshot = Arc::new(new_snapshot);
     let new_snapshot_c = Arc::clone(&new_snapshot);
     let asset_manager = Arc::clone(&flush_data.asset_manager);
-    let snapshot_timestamp = tokio::spawn(
+    let snapshot_timestamp = crate::rt::spawn(
         async move {
             asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
             asset_manager.get_snapshot_last_modified(&new_snapshot_c.id()).await
@@ -3321,7 +3322,7 @@ async fn do_flush(
             Some(previous_log) => {
                 let snapshot_id = new_snapshot_id.clone();
                 let span = Span::current();
-                tokio::task::spawn_blocking(move || {
+                crate::rt::spawn_blocking(move || {
                     let _entered = span.entered();
                     TransactionLog::merge(
                         &snapshot_id,

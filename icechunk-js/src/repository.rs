@@ -8,42 +8,61 @@ use icechunk::format::SnapshotId;
 use icechunk::format::format_constants::SpecVersionBin;
 use icechunk::format::snapshot::SnapshotInfo;
 use icechunk::repository::{Repository, VersionInfo};
+#[cfg(not(browser))]
 use napi_derive::napi;
+#[cfg(not(browser))]
 use tokio::sync::RwLock;
 
-use crate::config::{JsRepositoryConfig, JsStorageSettings};
+use crate::config::JsRepositoryConfig;
+#[cfg(not(browser))]
+use crate::config::JsStorageSettings;
+#[cfg(not(browser))]
 use crate::errors::IntoNapiResult;
+use crate::errors::chain_message;
+#[cfg(not(browser))]
 use crate::session::JsSession;
+#[cfg(not(browser))]
 use crate::storage::JsStorage;
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use crate::storage::JsCredentials;
 
-#[cfg(target_family = "wasm")]
-#[napi(object, js_name = "Credentials")]
+#[cfg(browser)]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct JsCredentials {
     /// WASM currently supports only { type: 'HttpAccess' }.
     pub r#type: String,
 }
 
-fn convert_config(
+pub(crate) fn convert_config(
     config: Option<JsRepositoryConfig>,
-) -> napi::Result<Option<RepositoryConfig>> {
-    config
-        .map(|c| RepositoryConfig::try_from(c).map_err(napi::Error::from_reason))
+) -> Result<Option<RepositoryConfig>, String> {
+    config.map(RepositoryConfig::try_from).transpose()
+}
+
+pub(crate) fn convert_spec_version(
+    spec_version: Option<u32>,
+) -> Result<Option<SpecVersionBin>, String> {
+    spec_version
+        .map(|v| SpecVersionBin::try_from(v as u8).map_err(|e| chain_message(&e)))
         .transpose()
 }
 
-fn convert_credentials(
+pub(crate) fn parse_snapshot_id(id: &str) -> Result<SnapshotId, String> {
+    SnapshotId::try_from(id).map_err(|e| e.to_string())
+}
+
+pub(crate) fn convert_credentials(
     creds: Option<HashMap<String, Option<JsCredentials>>>,
-) -> napi::Result<HashMap<String, Option<Credentials>>> {
-    #[cfg(not(target_family = "wasm"))]
+) -> Result<HashMap<String, Option<Credentials>>, String> {
+    #[cfg(not(browser))]
     {
         Ok(creds
             .map(|c| c.into_iter().map(|(k, v)| (k, v.map(|c| c.into()))).collect())
             .unwrap_or_default())
     }
-    #[cfg(target_family = "wasm")]
+    #[cfg(browser)]
     {
         creds
             .unwrap_or_default()
@@ -54,9 +73,8 @@ fn convert_credentials(
                         if credential.r#type == "HttpAccess" {
                             Ok(Credentials::HttpAccess)
                         } else {
-                            Err(napi::Error::from_reason(
-                                "WASM virtual chunks support only HttpAccess credentials",
-                            ))
+                            Err("WASM virtual chunks support only HttpAccess credentials"
+                                .to_string())
                         }
                     })
                     .transpose()?;
@@ -66,36 +84,83 @@ fn convert_credentials(
     }
 }
 
-#[napi(object)]
+#[cfg_attr(not(browser), napi(object))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct ReadonlySessionOptions {
     pub branch: Option<String>,
     pub tag: Option<String>,
     pub snapshot_id: Option<String>,
 }
 
-#[napi(object, js_name = "VersionOptions")]
+#[cfg_attr(not(browser), napi(object, js_name = "VersionOptions"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct JsVersionOptions {
     pub branch: Option<String>,
     pub tag: Option<String>,
     pub snapshot_id: Option<String>,
 }
 
-fn version_options_to_version_info(opts: JsVersionOptions) -> napi::Result<VersionInfo> {
-    if let Some(snap) = opts.snapshot_id {
-        let id = SnapshotId::try_from(snap.as_str()).map_err(napi::Error::from_reason)?;
-        Ok(VersionInfo::SnapshotId(id))
-    } else if let Some(tag) = opts.tag {
-        Ok(VersionInfo::TagRef(tag))
-    } else if let Some(branch) = opts.branch {
-        Ok(VersionInfo::BranchTipRef(branch))
+/// The version named by a snapshot id, tag or branch, in that order of precedence.
+fn version_info(
+    snapshot_id: Option<String>,
+    tag: Option<String>,
+    branch: Option<String>,
+) -> Result<Option<VersionInfo>, String> {
+    Ok(if let Some(snap) = snapshot_id {
+        Some(VersionInfo::SnapshotId(parse_snapshot_id(&snap)?))
+    } else if let Some(tag) = tag {
+        Some(VersionInfo::TagRef(tag))
     } else {
-        Err(napi::Error::from_reason(
-            "One of branch, tag, or snapshot_id must be provided".to_string(),
-        ))
-    }
+        branch.map(VersionInfo::BranchTipRef)
+    })
 }
 
-#[napi(object, js_name = "SnapshotInfo")]
+pub(crate) fn version_options_to_version_info(
+    opts: JsVersionOptions,
+) -> Result<VersionInfo, String> {
+    version_info(opts.snapshot_id, opts.tag, opts.branch)?
+        .ok_or_else(|| "One of branch, tag, or snapshot_id must be provided".to_string())
+}
+
+/// The version a read-only session opens: defaults to the tip of `main`.
+pub(crate) fn readonly_session_version(
+    options: Option<ReadonlySessionOptions>,
+) -> Result<VersionInfo, String> {
+    let version = match options {
+        Some(opts) => version_info(opts.snapshot_id, opts.tag, opts.branch)?,
+        None => None,
+    };
+    Ok(version.unwrap_or_else(|| VersionInfo::BranchTipRef("main".to_string())))
+}
+
+/// The `(from, to)` versions of a diff.
+pub(crate) fn diff_versions(
+    options: JsDiffOptions,
+) -> Result<(VersionInfo, VersionInfo), String> {
+    let from =
+        version_info(options.from_snapshot_id, options.from_tag, options.from_branch)?
+            .ok_or(
+                "One of from_branch, from_tag, or from_snapshot_id must be provided",
+            )?;
+    let to = version_info(options.to_snapshot_id, options.to_tag, options.to_branch)?
+        .ok_or("One of to_branch, to_tag, or to_snapshot_id must be provided")?;
+    Ok((from, to))
+}
+
+#[cfg_attr(not(browser), napi(object, js_name = "SnapshotInfo"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct JsSnapshotInfo {
     pub id: String,
     pub parent_id: Option<String>,
@@ -118,7 +183,12 @@ impl From<SnapshotInfo> for JsSnapshotInfo {
     }
 }
 
-#[napi(object, js_name = "DiffResult")]
+#[cfg_attr(not(browser), napi(object, js_name = "DiffResult"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct JsDiff {
     pub new_groups: Vec<String>,
     pub new_arrays: Vec<String>,
@@ -130,7 +200,12 @@ pub struct JsDiff {
     pub moved_nodes: Vec<JsMovedNode>,
 }
 
-#[napi(object, js_name = "MovedNode")]
+#[cfg_attr(not(browser), napi(object, js_name = "MovedNode"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct JsMovedNode {
     pub from: String,
     pub to: String,
@@ -181,7 +256,12 @@ impl From<Diff> for JsDiff {
     }
 }
 
-#[napi(object, js_name = "FeatureFlag")]
+#[cfg_attr(not(browser), napi(object, js_name = "FeatureFlag"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct JsFeatureFlag {
     pub id: u32,
     pub name: String,
@@ -202,7 +282,12 @@ impl From<FeatureFlag> for JsFeatureFlag {
     }
 }
 
-#[napi(object, js_name = "DiffOptions")]
+#[cfg_attr(not(browser), napi(object, js_name = "DiffOptions"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct JsDiffOptions {
     pub from_branch: Option<String>,
     pub from_tag: Option<String>,
@@ -212,9 +297,11 @@ pub struct JsDiffOptions {
     pub to_snapshot_id: Option<String>,
 }
 
-#[napi(js_name = "Repository")]
-pub struct JsRepository(pub(crate) Arc<RwLock<Repository>>);
+#[cfg_attr(not(browser), napi(js_name = "Repository"))]
+#[cfg_attr(browser, wasm_bindgen::prelude::wasm_bindgen(js_name = Repository))]
+pub struct JsRepository(pub(crate) Arc<tokio::sync::RwLock<Repository>>);
 
+#[cfg(not(browser))]
 #[napi]
 impl JsRepository {
     /// Register an HTTP virtual-chunk callback before creating read sessions.
@@ -270,12 +357,11 @@ impl JsRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
         check_clean_root: Option<bool>,
     ) -> napi::Result<JsRepository> {
-        let config = convert_config(config)?;
-        let version = spec_version
-            .map(|v| SpecVersionBin::try_from(v as u8))
-            .transpose()
-            .map_napi_err()?;
-        let creds = convert_credentials(authorize_virtual_chunk_access)?;
+        let config = convert_config(config).map_err(napi::Error::from_reason)?;
+        let version =
+            convert_spec_version(spec_version).map_err(napi::Error::from_reason)?;
+        let creds = convert_credentials(authorize_virtual_chunk_access)
+            .map_err(napi::Error::from_reason)?;
         let builder = Repository::create(Arc::clone(&storage.0))
             .authorize_virtual_chunk_access(creds)
             .check_clean_root(check_clean_root.unwrap_or(true));
@@ -297,8 +383,9 @@ impl JsRepository {
         config: Option<JsRepositoryConfig>,
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
     ) -> napi::Result<JsRepository> {
-        let config = convert_config(config)?;
-        let creds = convert_credentials(authorize_virtual_chunk_access)?;
+        let config = convert_config(config).map_err(napi::Error::from_reason)?;
+        let creds = convert_credentials(authorize_virtual_chunk_access)
+            .map_err(napi::Error::from_reason)?;
         let builder = Repository::open(Arc::clone(&storage.0))
             .authorize_virtual_chunk_access(creds);
         let builder = match config {
@@ -317,12 +404,11 @@ impl JsRepository {
         authorize_virtual_chunk_access: Option<HashMap<String, Option<JsCredentials>>>,
         check_clean_root: Option<bool>,
     ) -> napi::Result<JsRepository> {
-        let config = convert_config(config)?;
-        let version = spec_version
-            .map(|v| SpecVersionBin::try_from(v as u8))
-            .transpose()
-            .map_napi_err()?;
-        let creds = convert_credentials(authorize_virtual_chunk_access)?;
+        let config = convert_config(config).map_err(napi::Error::from_reason)?;
+        let version =
+            convert_spec_version(spec_version).map_err(napi::Error::from_reason)?;
+        let creds = convert_credentials(authorize_virtual_chunk_access)
+            .map_err(napi::Error::from_reason)?;
         let builder = Repository::open_or_create(Arc::clone(&storage.0))
             .authorize_virtual_chunk_access(creds)
             .check_clean_root(check_clean_root.unwrap_or(true));
@@ -352,22 +438,8 @@ impl JsRepository {
         &self,
         options: Option<ReadonlySessionOptions>,
     ) -> napi::Result<JsSession> {
-        let version = match options {
-            Some(opts) => {
-                if let Some(snap) = opts.snapshot_id {
-                    let id = SnapshotId::try_from(snap.as_str())
-                        .map_err(napi::Error::from_reason)?;
-                    VersionInfo::SnapshotId(id)
-                } else if let Some(tag) = opts.tag {
-                    VersionInfo::TagRef(tag)
-                } else if let Some(branch) = opts.branch {
-                    VersionInfo::BranchTipRef(branch)
-                } else {
-                    VersionInfo::BranchTipRef("main".to_string())
-                }
-            }
-            None => VersionInfo::BranchTipRef("main".to_string()),
-        };
+        let version =
+            readonly_session_version(options).map_err(napi::Error::from_reason)?;
 
         let repo = self.0.read().await;
         let session = repo.readonly_session(&version).await.map_napi_err()?;
@@ -394,8 +466,7 @@ impl JsRepository {
         name: String,
         snapshot_id: String,
     ) -> napi::Result<()> {
-        let id = SnapshotId::try_from(snapshot_id.as_str())
-            .map_err(napi::Error::from_reason)?;
+        let id = parse_snapshot_id(&snapshot_id).map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         repo.create_branch(&name, &id).await.map_napi_err()
     }
@@ -413,8 +484,7 @@ impl JsRepository {
         name: String,
         snapshot_id: String,
     ) -> napi::Result<()> {
-        let id = SnapshotId::try_from(snapshot_id.as_str())
-            .map_err(napi::Error::from_reason)?;
+        let id = parse_snapshot_id(&snapshot_id).map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         repo.create_tag(&name, &id).await.map_napi_err()
     }
@@ -424,17 +494,10 @@ impl JsRepository {
         &self,
         snapshot_id: String,
     ) -> napi::Result<Vec<JsManifestFileInfo>> {
-        let id = SnapshotId::try_from(snapshot_id.as_str())
-            .map_err(napi::Error::from_reason)?;
+        let id = parse_snapshot_id(&snapshot_id).map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         let files = repo.lookup_manifest_files(&id).await.map_napi_err()?;
-        Ok(files
-            .map(|f| JsManifestFileInfo {
-                id: f.id.to_string(),
-                size_bytes: f.size_bytes as i64,
-                num_chunk_refs: f.num_chunk_refs,
-            })
-            .collect())
+        Ok(files.map(JsManifestFileInfo::from).collect())
     }
 
     // --- Branch operations ---
@@ -453,10 +516,10 @@ impl JsRepository {
         to_snapshot_id: String,
         from_snapshot_id: Option<String>,
     ) -> napi::Result<()> {
-        let to_id = SnapshotId::try_from(to_snapshot_id.as_str())
-            .map_err(napi::Error::from_reason)?;
+        let to_id =
+            parse_snapshot_id(&to_snapshot_id).map_err(napi::Error::from_reason)?;
         let from_id = from_snapshot_id
-            .map(|s| SnapshotId::try_from(s.as_str()).map_err(napi::Error::from_reason))
+            .map(|s| parse_snapshot_id(&s).map_err(napi::Error::from_reason))
             .transpose()?;
         let repo = self.0.read().await;
         repo.reset_branch(&branch, &to_id, from_id.as_ref()).await.map_napi_err()
@@ -490,8 +553,7 @@ impl JsRepository {
         &self,
         snapshot_id: String,
     ) -> napi::Result<JsSnapshotInfo> {
-        let id = SnapshotId::try_from(snapshot_id.as_str())
-            .map_err(napi::Error::from_reason)?;
+        let id = parse_snapshot_id(&snapshot_id).map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         let info = repo.lookup_snapshot(&id).await.map_napi_err()?;
         Ok(info.into())
@@ -544,34 +606,7 @@ impl JsRepository {
 
     #[napi]
     pub async fn diff(&self, options: JsDiffOptions) -> napi::Result<JsDiff> {
-        let from = if let Some(snap) = options.from_snapshot_id {
-            let id =
-                SnapshotId::try_from(snap.as_str()).map_err(napi::Error::from_reason)?;
-            VersionInfo::SnapshotId(id)
-        } else if let Some(tag) = options.from_tag {
-            VersionInfo::TagRef(tag)
-        } else if let Some(branch) = options.from_branch {
-            VersionInfo::BranchTipRef(branch)
-        } else {
-            return Err(napi::Error::from_reason(
-                "One of from_branch, from_tag, or from_snapshot_id must be provided",
-            ));
-        };
-
-        let to = if let Some(snap) = options.to_snapshot_id {
-            let id =
-                SnapshotId::try_from(snap.as_str()).map_err(napi::Error::from_reason)?;
-            VersionInfo::SnapshotId(id)
-        } else if let Some(tag) = options.to_tag {
-            VersionInfo::TagRef(tag)
-        } else if let Some(branch) = options.to_branch {
-            VersionInfo::BranchTipRef(branch)
-        } else {
-            return Err(napi::Error::from_reason(
-                "One of to_branch, to_tag, or to_snapshot_id must be provided",
-            ));
-        };
-
+        let (from, to) = diff_versions(options).map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         let diff = repo.diff(&from, &to).await.map_napi_err()?;
         Ok(diff.into())
@@ -627,7 +662,8 @@ impl JsRepository {
         options: JsVersionOptions,
     ) -> napi::Result<Vec<JsSnapshotInfo>> {
         use futures::TryStreamExt;
-        let version = version_options_to_version_info(options)?;
+        let version =
+            version_options_to_version_info(options).map_err(napi::Error::from_reason)?;
         let repo = self.0.read().await;
         let stream = repo.ancestry(&version).await.map_napi_err()?;
         let snapshots: Vec<SnapshotInfo> = stream.try_collect().await.map_napi_err()?;
@@ -635,9 +671,24 @@ impl JsRepository {
     }
 }
 
-#[napi(object, js_name = "ManifestFileInfo")]
+#[cfg_attr(not(browser), napi(object, js_name = "ManifestFileInfo"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub struct JsManifestFileInfo {
     pub id: String,
     pub size_bytes: i64,
     pub num_chunk_refs: u32,
+}
+
+impl From<icechunk::format::snapshot::ManifestFileInfo> for JsManifestFileInfo {
+    fn from(f: icechunk::format::snapshot::ManifestFileInfo) -> Self {
+        Self {
+            id: f.id.to_string(),
+            size_bytes: f.size_bytes as i64,
+            num_chunk_refs: f.num_chunk_refs,
+        }
+    }
 }

@@ -129,3 +129,6 @@ Cargo.lock
 !.yarn/sdks
 !.yarn/versions
 /npm
+
+# wasm-bindgen browser build (just js-build-browser)
+wasm-bindgen/

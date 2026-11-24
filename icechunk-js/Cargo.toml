@@ -15,8 +15,6 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-napi = { version = "3.9.0", features = ["async", "tokio_rt", "serde-json", "chrono_date"] }
-napi-derive = "~3.5"
 tokio = { version = "1", features = ["sync"] }
 bytes = "1"
 futures = "0.3"
@@ -28,11 +26,26 @@ typetag = "0.2.22"
 rand = "0.10.1"
 icechunk-storage = { path = "../icechunk-storage" }
 
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Node (native) is bound with napi; the browser build (wasm32-unknown-unknown)
+# with wasm-bindgen. build.rs sets `cfg(browser)` for the latter, but Cargo
+# cannot see it, so the tables spell the target out.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
 icechunk = { path = "../icechunk" }
+napi = { version = "3.9.0", features = ["async", "tokio_rt", "serde-json", "chrono_date"] }
+napi-derive = "~3.5"
 
-[target.'cfg(target_family = "wasm")'.dependencies]
-icechunk = { path = "../icechunk", default-features = false, features = ["napi-send-contract"] }
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+icechunk = { path = "../icechunk", default-features = false }
+js-sys = "0.3.91"
+send_wrapper = "0.6"
+serde-wasm-bindgen = "0.6"
+serde_bytes = "0.11.19"
+wasm-bindgen = "0.2.114"
+wasm-bindgen-futures = "0.4.64"
+
+# `just wasm-browser-test`: src/browser/tests.rs under wasm-bindgen-test-runner
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3.64"
 
 [build-dependencies]
 napi-build = "~2.3"

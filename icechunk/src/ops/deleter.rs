@@ -24,7 +24,9 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use tokio::{sync::mpsc, task::JoinSet};
+use tokio::sync::mpsc;
+
+use crate::rt::{JoinError, JoinSet};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -150,7 +152,7 @@ fn absorb_batch(
     consecutive_failures: &mut u32,
     prefix: &str,
     threshold: u32,
-    joined: Result<BatchOutcome, tokio::task::JoinError>,
+    joined: Result<BatchOutcome, JoinError>,
 ) -> DeleteResult<(u64, Absorbed)> {
     let BatchOutcome { seq, batch_len, batch, result } =
         joined.capture().map_err(DeleteError::Repository)?;
@@ -339,7 +341,7 @@ where
     // each message is one delete batch: up to `batch_size` (object key, size
     // in bytes) pairs, the key relative to `prefix`, the size for the summary
     let (tx, rx) = mpsc::channel::<Vec<(String, u64)>>(DELETE_QUEUE_BATCHES);
-    let mut deleter = AbortOnDrop(tokio::spawn(run_deletes(
+    let mut deleter = AbortOnDrop(crate::rt::spawn(run_deletes(
         Arc::clone(asset_manager.storage()),
         asset_manager.storage_settings().clone(),
         asset_manager.attribution_labels().clone(),
@@ -349,8 +351,10 @@ where
         Arc::clone(&progress),
     )));
     // held in a guard so every return path below aborts it
-    let _reporter =
-        AbortOnDrop(tokio::spawn(report_delete_progress(Arc::clone(&progress), prefix)));
+    let _reporter = AbortOnDrop(crate::rt::spawn(report_delete_progress(
+        Arc::clone(&progress),
+        prefix,
+    )));
 
     let collected: DeleteResult<()> = async {
         let mut batch: Vec<(String, u64)> = Vec::with_capacity(batch_size.get());
@@ -503,10 +507,7 @@ impl Deleter {
     /// Record one finished batch and let it steer the delete rate. Throttled
     /// batches go back in the queue; only throttling that persists after the
     /// quiet period has reached its cap counts toward `threshold`.
-    fn absorb(
-        &mut self,
-        joined: Result<BatchOutcome, tokio::task::JoinError>,
-    ) -> DeleteResult<()> {
+    fn absorb(&mut self, joined: Result<BatchOutcome, JoinError>) -> DeleteResult<()> {
         let (seq, absorbed) = absorb_batch(
             &mut self.report,
             &mut self.consecutive_failures,
@@ -650,7 +651,7 @@ async fn run_deletes(
         if let Some(quiet_until) = deleter.congestion.quiet_until() {
             let now = Instant::now();
             if quiet_until > now {
-                tokio::time::sleep(quiet_until - now).await;
+                crate::rt::sleep(quiet_until - now).await;
             }
         }
 
@@ -826,7 +827,7 @@ pub(crate) mod testing {
     }
     impl Sealed for FlakyDeletes {}
 
-    #[async_trait::async_trait]
+    #[icechunk_storage::maybe_send_async_trait]
     #[typetag::serde]
     impl Storage for FlakyDeletes {
         fn storage_info(&self) -> StorageInfo {

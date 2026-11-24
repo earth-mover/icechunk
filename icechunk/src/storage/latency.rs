@@ -11,7 +11,6 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, stream::BoxStream};
@@ -77,7 +76,7 @@ impl fmt::Display for LatencyStorage {
 
 impl sealed::Sealed for LatencyStorage {}
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 #[typetag::serde]
 impl Storage for LatencyStorage {
     fn storage_info(&self) -> StorageInfo {

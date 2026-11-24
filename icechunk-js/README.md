@@ -10,8 +10,9 @@ Install with `npm`
 npm install @earthmover/icechunk@alpha
 ```
 
-> [!NOTE]
-> When using in the browser, you must specify to install the wasm package with `--cpu=wasm32`
+Node.js loads a native addon (Linux x64/arm64 glibc, macOS arm64/x64, Windows x64).
+Browsers get a WebAssembly build of the same API from the same package; see
+[Using in the Browser](#using-in-the-browser).
 
 ```typescript
 import { Repository, Storage } from '@earthmover/icechunk'
@@ -36,7 +37,7 @@ const snapshotId = await session.commit('Create foo array')
 
 ### Storage Backends
 
-In-memory storage works on all platforms. The following backends are available on native (non-WASM) builds:
+In-memory storage works everywhere. The following backends are available in Node.js only:
 
 - **S3** — `Storage.newS3(bucket, prefix?, credentials?, options?)`
 - **R2** — `Storage.newR2(bucket?, prefix?, accountId?, credentials?, options?)`
@@ -48,7 +49,7 @@ In-memory storage works on all platforms. The following backends are available o
 
 #### Fetch Storage (read-only, works everywhere)
 
-For read-only access to a publicly hosted Icechunk repository, use the built-in fetch-based storage. This works on both native and WASM builds, making it the easiest way to open a repository in the browser:
+For read-only access to a publicly hosted Icechunk repository, use the built-in fetch-based storage. This works in Node.js and in the browser, making it the easiest way to open a repository in the browser:
 
 ```typescript
 import { Repository } from '@earthmover/icechunk'
@@ -64,7 +65,7 @@ The repository must be on S3-compatible storage with public read access and XML 
 
 #### Custom Storage Backends
 
-For WASM builds (or any environment where the built-in backends aren't suitable), you can provide your own storage implementation in JavaScript using `Storage.newCustom()`:
+In the browser (or anywhere the built-in backends aren't suitable), you can provide your own storage implementation in JavaScript using `Storage.newCustom()`:
 
 ```typescript
 const storage = Storage.newCustom({
@@ -90,9 +91,11 @@ const storage = Storage.newCustom({
 
 This is the primary way to use cloud storage in the browser, where native Rust networking is unavailable. Each callback method maps to an operation on the underlying `Storage` trait. See the exported `Storage*` TypeScript interfaces for the full type signatures.
 
+To support writes, `putObject` must honor `previousVersion`: with no `previousVersion`, overwrite; with one that has neither `etag` nor `generation`, create only if the object is missing; otherwise write only if the object's ETag still matches. Return `{ kind: 'not_on_latest_version' }` when the condition fails. icechunk relies on this to update branches safely. Behind S3, that means sending `If-None-Match: *` / `If-Match` and mapping `412` to `not_on_latest_version`; a proxy in between must pass those headers and the `ETag` through.
+
 #### Virtual Chunks
 
-Node.js supports the native virtual-chunk backends. WASM can read HTTP(S) virtual
+Node.js supports the native virtual-chunk backends. The browser build can read HTTP(S) virtual
 chunks through an explicit JavaScript callback. This reads the referenced byte
 ranges directly in the browser, without materializing the source data.
 
@@ -134,8 +137,8 @@ TIFF compression/predictor codecs still need support in your Zarr reader.
 To control how a container's chunks are fetched, register a `Storage` for its
 URL prefix. A chunk at `{prefix}{path}` is read as `path` with the storage's
 `getObjectRange`, so `Storage.newCustom(...)`, the fetch storage, or a native
-backend can serve virtual chunks. This works for any container type on native
-builds. WASM builds support HTTP and S3-style containers, but cannot load
+backend can serve virtual chunks. This works for any container type in Node.js.
+The browser build supports HTTP and S3-style containers, but cannot load
 repositories that configure GCS or Azure containers. For example, this reads
 public `s3://` references in the browser over the bucket's HTTPS endpoint:
 
@@ -160,56 +163,53 @@ allow CORS from your origin and expose `ETag` when references record ETag checks
 `setHttpVirtualChunkFetcher` is a convenience built on the same mechanism: it
 registers the callback for every HTTP container in the repository.
 
-## Using in the Browser (WASM)
+## Using in the Browser
 
-Install the package with the `--cpu=wasm32` flag to get the WASM binary:
+Bundlers resolve `@earthmover/icechunk` to its browser build (the `browser`
+export condition), a WebAssembly module built with wasm-bindgen. It has the
+same API as the Node.js build, minus the native-only storage backends and
+virtual reference writes. It needs no install flags and no cross-origin
+isolation (COOP/COEP) headers. Use [fetch storage](#fetch-storage-read-only-works-everywhere)
+to read a public repository, or [`Storage.newCustom()`](#custom-storage-backends)
+for anything else, including writes.
 
-```bash
-npm install @earthmover/icechunk --cpu=wasm32
-```
+Things to know:
 
-To open a public repository in the browser, use fetch storage:
+- **It runs on the thread that imports it**, with no worker threads. For large
+  repositories, import it in a
+  [module Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker#module)
+  to keep the page responsive.
+- **It loads its `.wasm` on import**, from next to the module, using top-level
+  `await`. Vite and webpack 5 handle this. With Vite, exclude the package from
+  dependency optimization:
 
-```typescript
-import { Repository } from '@earthmover/icechunk'
-import { createFetchStorage } from '@earthmover/icechunk/fetch-storage'
+  ```typescript
+  // vite.config.ts
+  export default defineConfig({
+    optimizeDeps: { exclude: ['@earthmover/icechunk'] },
+  })
+  ```
 
-const storage = createFetchStorage('https://my-bucket.s3.us-west-2.amazonaws.com/my-repo.icechunk')
-const repo = await Repository.open(storage)
-```
+  A strict Content Security Policy needs `script-src 'wasm-unsafe-eval'`, and
+  the server must send `.wasm` files as `application/wasm`.
+- **To load the `.wasm` yourself** (esbuild, service workers, server-side
+  rendering), import `@earthmover/icechunk/web/init` and call `init()` or
+  `initSync()` once before anything else. The file is
+  `wasm-bindgen/web/icechunk_js_bg.wasm` in the package.
 
-For more control, use `Storage.newCustom()` to implement your own storage backend with any JS networking library.
+  ```typescript
+  import { init, Repository, Storage } from '@earthmover/icechunk/web/init'
 
-The WASM build uses `SharedArrayBuffer` for threading, which requires your server to send these headers:
+  await init({ module_or_path: '/assets/icechunk_js_bg.wasm' })
+  ```
 
-```
-Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: require-corp
-```
-
-With Vite, you'll also need the `vite-plugin-wasm` and `vite-plugin-top-level-await` plugins, and must exclude the icechunk packages from dependency optimization:
-
-```typescript
-// vite.config.ts
-import wasm from 'vite-plugin-wasm'
-import topLevelAwait from 'vite-plugin-top-level-await'
-
-export default defineConfig({
-  plugins: [wasm(), topLevelAwait()],
-  optimizeDeps: {
-    exclude: ['@earthmover/icechunk', '@earthmover/icechunk-wasm32-wasi'],
-    include: ['@earthmover/icechunk > @earthmover/icechunk-wasm32-wasi'],
-  },
-  server: {
-    headers: {
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-  },
-})
-```
-
-See the [NAPI-RS WebAssembly docs](https://napi.rs/docs/concepts/webassembly) for more details.
+- **Session getters never block.** While an operation such as a commit is using a
+  session, getters like `session.snapshotId` return the state from before it
+  started. The Node.js build waits for the operation instead.
+- `@earthmover/icechunk/web` is the browser build under an explicit name, for
+  tools that do not apply the `browser` condition. If you import it, take
+  `createFetchStorage` from it too, not from `@earthmover/icechunk/fetch-storage`:
+  a `Storage` from one build does not work with another build's `Repository`.
 
 ## Examples
 
@@ -224,20 +224,16 @@ yarn build
 yarn test
 ```
 
-To build and test the WASM target, run these from the repository root:
+To build and test the browser build, run these from the repository root. See
+[WASM Compiler Setup (macOS)](../icechunk-python/docs/docs/reference/contributing.md#wasm-compiler-setup-macos)
+for the toolchain (`clang`, `llvm-ar`, the `wasm-bindgen` CLI).
 
 ```bash
-just js-build-wasi
-just js-test-wasi
+just js-build-browser   # or `just js-build-browser browser-release` for the published build
+just js-test-browser    # the ava specs against web.mjs, under node
+just wasm-browser-test  # Rust-side browser tests (needs wasm-bindgen-test-runner)
 ```
-
-The WASM build needs a C compiler that targets WebAssembly. The `js` pixi environment provides one.
-On macOS without pixi, Apple's `clang` cannot target WebAssembly, so install Homebrew LLVM first.
-See [WASM Compiler Setup (macOS)](../icechunk-python/docs/docs/reference/contributing.md#wasm-compiler-setup-macos).
-Use the `just` recipes rather than calling `yarn build --target wasm32-wasip1-threads` directly.
-The recipes set `RUSTC` and clear `CFLAGS`. Without them the build fails with
-`Failed to copy artifact`, or produces a module that hangs on load.
 
 > [!IMPORTANT]
 > Building requires the workspace's minimum Rust version (`rust-version` in the root `Cargo.toml`).
-> The `wasm32-wasip1-threads` target must be installed for that toolchain.
+> The browser build needs the `wasm32-unknown-unknown` target installed for that toolchain.

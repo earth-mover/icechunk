@@ -7,7 +7,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, stream::BoxStream};
@@ -60,7 +59,7 @@ impl fmt::Display for LoggingStorage {
 
 impl sealed::Sealed for LoggingStorage {}
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 #[typetag::serde]
 impl Storage for LoggingStorage {
     fn storage_info(&self) -> StorageInfo {

@@ -94,7 +94,7 @@ ci-code-quality $RUSTFLAGS="-D warnings":
   just py-pre-commit
 
 [group('ci')]
-[doc("Reproduce js-ci.yaml for the host target (WASI lane: js-build-wasi + js-test-wasi)")]
+[doc("Reproduce js-ci.yaml for the host target (browser lane: js-build-browser + js-test-browser)")]
 ci-js:
   just js-install
   just js-build
@@ -170,10 +170,10 @@ build *args:
 build-release *args:
   cargo build --release "$@"
 
-# WASI toolchain for wasm-build / js-build-wasi; inert for other targets.
+# WASI toolchain for wasm-build (icechunk on wasm32-wasip1-threads); inert for other targets.
 # wasi-sdk sysroots have a per-target include dir; Debian's wasi-libc doesn't.
 # conda's linux-64 CFLAGS carry -march=nocona. clang rejects that option for wasm.
-# cc-rs applies CFLAGS alongside the suffixed variables. Both wasm recipes clear CFLAGS.
+# cc-rs applies CFLAGS alongside the suffixed variables. The wasm recipes clear CFLAGS.
 # Without a wasi sysroot, as in the pixi js env, clang still searches /usr/include.
 # The host glibc headers then fail the wasm compile.
 # -nostdlibinc drops the system include paths and keeps clang's builtin ones.
@@ -194,6 +194,22 @@ wasm-build:
   export RUSTFLAGS=""
   export CFLAGS="" CXXFLAGS=""
   cargo build -p icechunk --no-default-features --target wasm32-wasip1-threads
+
+# Browser target (wasm32-unknown-unknown). The archiver must be llvm-ar: Apple
+# and GNU ar write no symbol index for wasm objects, so rust-lld silently skips
+# zstd's C code and the module ends up importing `ZSTD_*` from `env`.
+export CC_wasm32_unknown_unknown := env("CC_wasm32_unknown_unknown", "clang")
+export AR_wasm32_unknown_unknown := env("AR_wasm32_unknown_unknown", "llvm-ar")
+
+[group('test')]
+[script]
+[doc("Run icechunk-js's browser (wasm32-unknown-unknown) Rust tests under node (needs wasm-bindgen-test-runner matching Cargo.lock)")]
+wasm-browser-test *args:
+  # don't fail on existing warnings in no-default-features wasm cfgs
+  export RUSTFLAGS=""
+  export CFLAGS="" CXXFLAGS=""
+  export CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER="${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER:-wasm-bindgen-test-runner}"
+  cargo test -p icechunk-js --target wasm32-unknown-unknown "$@"
 
 [group('test')]
 [script]
@@ -230,7 +246,7 @@ import-hook-remove:
 
 # Use --all-features for the workspace but skip icechunk's `shuttle` feature,
 # which swaps tokio for shuttle-tokio and is incompatible with other crates.
-icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,otel,cli,napi-send-contract"
+icechunk_features := "s3,object-store-s3,object-store-gcs,object-store-azure,object-store-http,object-store-fs,redirect,logs,otel,cli"
 
 [group('lint')]
 [doc("Run clippy lints on all features and targets")]
@@ -778,25 +794,19 @@ js-test *args: js-install
 
 [group('js')]
 [script]
-[doc("Build icechunk-js for wasm32-wasip1-threads (same WASI toolchain env as wasm-build)")]
-js-build-wasi *args: js-install
-  cd icechunk-js
+[doc("Build icechunk-js for the browser into icechunk-js/wasm-bindgen/web (needs clang, llvm-ar and wasm-bindgen matching Cargo.lock)")]
+js-build-browser cargo_profile="dev":
+  # don't fail on existing warnings in no-default-features wasm cfgs
+  export RUSTFLAGS=""
   export CFLAGS="" CXXFLAGS=""
-  # napi-build 2.3.x derives the wasi sysroot from the RUSTC path. cargo passes a bare name.
-  # napi-build then drops crt1-reactor.o. The module loses the _initialize export.
-  # A module without _initialize hangs on require().
-  # Use the toolchain's real rustc, not `command -v rustc`: under rustup that is
-  # the ~/.cargo/bin proxy, whose parent directories hold no crt1-reactor.o.
-  export RUSTC="$(rustc --print sysroot)/bin/rustc"
-  yarn build --target wasm32-wasip1-threads "$@"
+  cargo build -p icechunk-js --target wasm32-unknown-unknown --profile {{cargo_profile}}
+  out_dir={{ if cargo_profile == "dev" { "debug" } else { cargo_profile } }}
+  wasm="${CARGO_TARGET_DIR:-target}/wasm32-unknown-unknown/$out_dir/icechunk_js.wasm"
+  wasm-bindgen --target web --out-dir icechunk-js/wasm-bindgen/web "$wasm"
+  # the glue is an ES module; the package itself is CommonJS by default
+  echo '{ "type": "module" }' > icechunk-js/wasm-bindgen/web/package.json
 
 [group('js')]
-[script]
-[doc("Run icechunk-js tests under WASI like CI's test-wasi lane (needs js-build-wasi)")]
-js-test-wasi *args: js-install
-  cd icechunk-js
-  # `yarn config set` writes .yarnrc.yml; restore host setup on exit
-  yarn config set supportedArchitectures.cpu "wasm32"
-  trap 'yarn config unset supportedArchitectures.cpu; yarn install' EXIT
-  yarn install
-  NAPI_RS_FORCE_WASI=1 yarn test "$@"
+[doc("Run icechunk-js tests against the browser build (web.mjs) under node (needs js-build-browser)")]
+js-test-browser *args: js-install
+  cd icechunk-js && ICECHUNK_JS_BINDING=wasm-bindgen yarn test "$@"

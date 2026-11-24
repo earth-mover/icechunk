@@ -52,6 +52,7 @@ pub mod migrations;
 pub mod ops;
 pub mod refs;
 pub mod repository;
+pub mod rt;
 pub mod session;
 pub mod storage;
 pub mod store;

@@ -4,7 +4,7 @@ title: JavaScript / TypeScript
 
 # Icechunk JavaScript / TypeScript
 
-The official [`@earthmover/icechunk`](https://www.npmjs.com/package/@earthmover/icechunk) package provides full read-write access to Icechunk repositories from JavaScript and TypeScript. It uses native Rust bindings (via NAPI-RS) for Node.js and WebAssembly for browser environments.
+The official [`@earthmover/icechunk`](https://www.npmjs.com/package/@earthmover/icechunk) package provides full read-write access to Icechunk repositories from JavaScript and TypeScript. It uses native Rust bindings (via NAPI-RS) in Node.js and a WebAssembly build (via wasm-bindgen) of the same API in browsers.
 
 ## Installation
 
@@ -14,11 +14,9 @@ For your default platform:
 npm install @earthmover/icechunk zarrita
 ```
 
-Explicitly for WASM:
-
-```bash
-npm install @earthmover/icechunk --cpu=wasm32 zarrita
-```
+Node.js loads a native addon on Linux (x64 and arm64, glibc), macOS (arm64 and x64) and Windows (x64).
+In the browser, bundlers pick the package's WebAssembly build through the `browser` export
+condition. No install flags or cross-origin isolation headers are needed; see [Browser](#browser).
 
 ## Quick start
 
@@ -119,7 +117,7 @@ console.log('Updated arrays:', diff.updatedArrays)
 
 ## Storage backends
 
-### Node.js (or NAPI compatible runtimes)
+### Node.js
 
 In Node.js, all cloud storage backends are available natively:
 
@@ -148,13 +146,19 @@ const tigris = Storage.newTigris('my-bucket', 'my-prefix', credentials, options)
 const http = Storage.newHttp('https://example.com/repo')
 ```
 
-### Browser (WASM)
+### Browser
 
-In browser environments, native storage backends are not available. Instead, use:
+In the browser, the native storage backends are not available. Instead, use:
 
 - **In-memory storage** for ephemeral repositories
-- **Custom storage** with a JavaScript-provided backend (e.g., using `fetch` or `@aws-sdk/client-s3`)
 - **Fetch storage** for read-only access to publicly-accessible repositories over HTTP/HTTPS
+- **Custom storage** with a JavaScript-provided backend (e.g., using `fetch`, `@aws-sdk/client-s3`, or a proxy you run)
+
+The browser build runs on the thread that imports it, with no worker threads. For large
+repositories, use it from a
+[module Worker](https://developer.mozilla.org/en-US/docs/Web/API/Worker/Worker#module) to keep the
+page responsive. While an operation such as a commit is using a session, getters like
+`session.snapshotId` return the state from before it started instead of waiting.
 
 #### Read-only fetch storage
 
@@ -179,52 +183,60 @@ const data = await zarr.get(arr)
 
 #### Custom storage
 
-For full control, implement the `StorageBackend` interface:
+For full control, implement the `StorageBackend` interface. Callbacks use the Node.js error-first
+convention: the first argument is always `null`, and the actual arguments follow.
 
 ```typescript
 import { Storage } from '@earthmover/icechunk'
 
 const storage = Storage.newCustom({
-  canWrite: async () => true,
-  getObjectRange: async ({ path, rangeStart, rangeEnd }) => {
+  canWrite: async (_err) => true,
+  getObjectRange: async (_err, { path, rangeStart, rangeEnd }) => {
     // Fetch bytes from your storage
     return { data, version: { etag } }
   },
-  putObject: async ({ path, data }) => {
-    // Write bytes to your storage
+  putObject: async (_err, { path, data, previousVersion }) => {
+    // Write bytes to your storage, honoring previousVersion (see below)
     return { kind: 'updated', newVersion: { etag } }
   },
-  copyObject: async ({ from, to }) => { /* ... */ },
-  listObjects: async (prefix) => [ /* ... */ ],
-  deleteBatch: async ({ prefix, batch }) => ({
+  copyObject: async (_err, { from, to, version }) => { /* ... */ },
+  listObjects: async (_err, prefix) => [ /* { id, createdAt, sizeBytes } */ ],
+  deleteBatch: async (_err, { prefix, batch }) => ({
     deletedObjects: 0,
     deletedBytes: 0,
   }),
-  getObjectLastModified: async (path) => new Date(),
-  getObjectConditional: async ({ path, previousVersion }) => { /* ... */ },
+  getObjectLastModified: async (_err, path) => new Date(),
+  getObjectConditional: async (_err, { path, previousVersion }) => { /* ... */ },
 })
 ```
 
-### WASM setup
+To support writes, `putObject` must honor `previousVersion`: with no `previousVersion`, overwrite;
+with one that has neither `etag` nor `generation`, create only if the object is missing; otherwise
+write only if the object's ETag still matches. Return `{ kind: 'not_on_latest_version' }` when the
+condition fails. Icechunk relies on this to update branches safely. Against S3, that means sending
+`If-None-Match: *` or `If-Match` and mapping a `412` response to `not_on_latest_version`. A bucket
+read from the browser must expose the `ETag` header through its CORS configuration.
 
-When using the WASM build with a bundler like Vite, you will need the following plugins:
+### Bundler setup
 
-```bash
-npm install vite-plugin-wasm vite-plugin-top-level-await
-```
+The browser build loads its `.wasm` file on import, from next to its JavaScript module, using
+top-level `await`. Vite and webpack 5 handle this. With Vite, exclude the package from dependency
+optimization:
 
 ```typescript
 // vite.config.ts
-import wasm from 'vite-plugin-wasm'
-import topLevelAwait from 'vite-plugin-top-level-await'
-
 export default {
-  plugins: [wasm(), topLevelAwait()],
+  optimizeDeps: { exclude: ['@earthmover/icechunk'] },
 }
 ```
 
+A strict Content Security Policy needs `script-src 'wasm-unsafe-eval'`, and the server must send
+`.wasm` files as `application/wasm`. To load the `.wasm` yourself (esbuild, service workers,
+server-side rendering), see `@earthmover/icechunk/web/init` in the
+[package README](https://github.com/earth-mover/icechunk/tree/main/icechunk-js#using-in-the-browser).
+
 ## Examples
 
-- **[Precipitate](https://github.com/earth-mover/precipitate)** ([live demo](https://precipitate.earthmover-sandbox.workers.dev/)) — Browser app for viewing MRMS precipitation data from a [dynamical.org](https://dynamical.org/) Icechunk repository using WASM, React, and Vite deployed to Cloudflare Workers.
+- **[Precipitate](https://github.com/earth-mover/precipitate)** ([live demo](https://precipitate.earthmover-sandbox.workers.dev/)) — Browser app for viewing MRMS precipitation data from a [dynamical.org](https://dynamical.org/) Icechunk repository using WebAssembly, React, and Vite deployed to Cloudflare Workers.
 - **[Node.js CLI](https://github.com/earth-mover/icechunk/tree/main/icechunk-js/examples/node-cli)** — Create repositories, manage branches/tags, and browse commit history from the command line.
-- **[React + WASM](https://github.com/earth-mover/icechunk/tree/main/icechunk-js/examples/react-wasm)** — Interactive browser app demonstrating in-memory repository management with WASM, React, and Vite
+- **[React + WASM](https://github.com/earth-mover/icechunk/tree/main/icechunk-js/examples/react-wasm)** — Interactive browser app demonstrating in-memory repository management with WebAssembly, React, and Vite

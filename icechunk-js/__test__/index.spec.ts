@@ -2,7 +2,7 @@ import test from 'ava'
 import assert from 'node:assert/strict'
 import * as zarr from 'zarrita'
 
-import { Storage, Repository, RepositoryConfig } from '../index'
+import { Storage, Repository, RepositoryConfig } from './binding'
 
 const decoder = new TextDecoder()
 function decodeBytes(data: Uint8Array): string {
