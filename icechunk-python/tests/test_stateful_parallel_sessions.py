@@ -1,4 +1,5 @@
 import pickle
+import sys
 import tempfile
 from collections.abc import Callable
 from typing import Any
@@ -6,6 +7,7 @@ from typing import Any
 import hypothesis.extra.numpy as npst
 import numpy as np
 import numpy.testing as npt
+import pytest
 from hypothesis import assume, note
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
@@ -14,6 +16,7 @@ import icechunk as ic
 import icechunk.testing.strategies as icst
 import zarr
 import zarr.testing.strategies as zrst
+from tests.conftest import fs_storage
 from zarr.abc.store import Store
 from zarr.testing.stateful import SyncStoreWrapper
 
@@ -33,13 +36,15 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
     2. Our invariant is that the serial and parallel branches are identical after merging.
     """
 
+    backend = "local_filesystem"
+
     def __init__(self) -> None:
         super().__init__()
 
         log_filter = "warn,icechunk::storage::object_store=error"
         ic.set_logs_filter(log_filter)
 
-        self.storage = ic.local_filesystem_storage(tempfile.mkdtemp())
+        self.storage = fs_storage(self.backend, tempfile.mkdtemp())
         self.repo = ic.Repository.create(self.storage)
         self.repo.create_branch("parallel", self.repo.lookup_branch("main"))
 
@@ -225,4 +230,11 @@ class SerialParallelStateMachine(RuleBasedStateMachine):
         ic.set_logs_filter(None)
 
 
+class FilesystemSerialParallelStateMachine(SerialParallelStateMachine):
+    backend = "filesystem"
+
+
 VersionControlTest = SerialParallelStateMachine.TestCase
+FilesystemVersionControlTest = pytest.mark.skipif(
+    sys.platform == "win32", reason="FilesystemStorage is Unix-only"
+)(FilesystemSerialParallelStateMachine.TestCase)

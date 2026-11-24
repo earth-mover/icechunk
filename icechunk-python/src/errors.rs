@@ -119,6 +119,7 @@ pub(crate) mod codes {
         READ_ONLY_STORE => "read-only-store",
         READ_ONLY_STORAGE => "read-only-storage",
         READ_ONLY_REPOSITORY => "read-only-repository",
+        MISSING_WRITER_FEATURES => "missing-writer-features",
         // invalid input
         INVALID_KEY => "invalid-key",
         INVALID_CHUNK_INDEX => "invalid-chunk-index",
@@ -166,6 +167,7 @@ pub(crate) mod codes {
         FEATURE_FLAG_DISABLED => "feature-flag-disabled",
         TAG_ERROR => "tag-error",
         INVALID_REPOSITORY_MIGRATION => "invalid-repository-migration",
+        LAYOUT_CONVERSION_IN_PROGRESS => "layout-conversion-in-progress",
         // storage / environment
         OBJECT_NOT_FOUND => "object-not-found",
         OBJECT_STORE => "object-store",
@@ -384,7 +386,9 @@ fn classify_repository(kind: &RepositoryErrorKind) -> Classified {
             actual_parent: None,
             code: codes::UPDATE_ATTEMPTS_EXHAUSTED,
         },
-        K::BadRepoVersion { .. } => class("FormatError", codes::UNSUPPORTED_SPEC_VERSION),
+        K::BadRepoVersion { .. } | K::StorageRefusesIc1 => {
+            class("FormatError", codes::UNSUPPORTED_SPEC_VERSION)
+        }
         K::PoisonLock => class("InternalError", codes::POISON_LOCK),
         _ => general(codes::UNKNOWN),
     }
@@ -403,6 +407,12 @@ fn classify_storage(kind: &StorageErrorKind) -> Classified {
         K::BadRedirect(_) => class("StorageError", codes::BAD_REDIRECT),
         K::Throttled { .. } => class("StorageError", codes::THROTTLED),
         K::Other(_) => class("StorageError", codes::STORAGE_OTHER),
+        K::LayoutConversionInProgress(_) => {
+            class("SessionStateError", codes::LAYOUT_CONVERSION_IN_PROGRESS)
+        }
+        K::MissingWriterFeatures { .. } => {
+            class("ReadOnlyError", codes::MISSING_WRITER_FEATURES)
+        }
     }
 }
 
@@ -462,8 +472,9 @@ fn classify_format(kind: &IcechunkFormatErrorKind) -> Classified {
         | K::InvalidFlatBuffer(_)
         | K::InvalidTimestamp
         | K::MissingLocationCompressionDictionary
-        | K::MissingRequiredField(_) => class("FormatError", codes::INVALID_FILE_FORMAT),
-        K::InvalidSpecVersion { .. } => {
+        | K::MissingRequiredField(_)
+        | K::MalformedRepoInfo(_) => class("FormatError", codes::INVALID_FILE_FORMAT),
+        K::InvalidSpecVersion { .. } | K::InvalidRepoInfoSpecVersion { .. } => {
             class("FormatError", codes::UNSUPPORTED_SPEC_VERSION)
         }
         K::UnsupportedOperationForVersion { .. } => {
@@ -488,6 +499,10 @@ fn classify_format(kind: &IcechunkFormatErrorKind) -> Classified {
         }
         K::InvalidArrayMetadata(_) => {
             class("InvalidInputError", codes::INVALID_ARRAY_METADATA)
+        }
+        // A caller's bug: they check what is about to be written, not stored data.
+        K::InvalidWriterFeatureName { .. } | K::InvalidWriterFeatureChange(_) => {
+            class("InternalError", codes::UNKNOWN)
         }
         _ => general(codes::UNKNOWN),
     }

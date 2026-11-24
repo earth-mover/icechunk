@@ -446,8 +446,9 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
-        icechunk.NoChangesToCommitError
-            If there are no changes to commit and allow_empty is False.
+        icechunk.SessionStateError
+            With kind `no-changes-to-commit` if there are no changes to commit
+            and allow_empty is False.
         """
         return self._session.commit(
             message,
@@ -495,8 +496,9 @@ class Session:
         ------
         icechunk.ConflictError
             If the session is out of date and a conflict occurs.
-        icechunk.NoChangesToCommitError
-            If there are no changes to commit and allow_empty is False.
+        icechunk.SessionStateError
+            With kind `no-changes-to-commit` if there are no changes to commit
+            and allow_empty is False.
         """
         return await self._session.commit_async(
             message,

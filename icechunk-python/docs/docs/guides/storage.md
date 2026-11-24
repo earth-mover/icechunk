@@ -312,7 +312,10 @@ Icechunk can be used with [Azure Blob Storage](https://azure.microsoft.com/en-us
 
 ### Filesystem Storage
 
-Icechunk can also be used on a [local filesystem](../reference/storage.md#icechunk.storage.local_filesystem_storage) by providing a path to the location of the store
+Icechunk can also store a repository in a filesystem, given the path to the location of the store. There are two filesystem backends:
+
+- [`local_filesystem_storage`](../reference/storage.md#icechunk.storage.local_filesystem_storage). Like every other backend, it stores repositories in the object store layout: it emulates an object store on the filesystem, with the repo info in a single `repo` file. It is not safe for concurrent commits.
+- [`filesystem_storage`](../reference/storage.md#icechunk.storage.filesystem_storage), experimental. It is safe for concurrent writers on filesystems that meet [its requirements](#requirements-and-limits-of-filesystem_storage), including network filesystems such as NFS. It stores repositories in [the filesystem layout](../reference/spec-filesystem-layout-v1.md), which other backends and older Icechunk versions can't open.
 
 === "Local filesystem"
 
@@ -320,12 +323,117 @@ Icechunk can also be used on a [local filesystem](../reference/storage.md#icechu
     icechunk.local_filesystem_storage("/path/to/my/dataset")
     ```
 
+=== "Filesystem (safe for concurrent writers)"
+
+    ```python
+    icechunk.filesystem_storage("/path/to/my/dataset")
+    ```
+
+!!! warning "Experimental"
+
+    `filesystem_storage` is experimental. Feedback on how it behaves on different filesystems is welcome on the [issue tracker](https://github.com/earth-mover/icechunk/issues). To test it on your filesystem and send us the results, see the [testing guide](https://github.com/earth-mover/icechunk/blob/main/icechunk-fs-stress/TESTING.md).
+
 #### Limitations
 
 !!! warning
-    File system Storage is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use file system storage in production if there is the possibility of concurrent commits.
+    `local_filesystem_storage` is not safe in the presence of concurrent commits. If two sessions are trying to commit at the same time, both operations may return successfully but one of the commits can be lost. Don't use `local_filesystem_storage` in production if there is the possibility of concurrent commits.
 
 - Icechunk currently does not work with a local filesystem storage backend on Windows. See [this issue](https://github.com/earth-mover/icechunk/issues/665) for more discussion. To work around, try using [WSL](https://learn.microsoft.com/en-us/windows/wsl/about) or a cloud storage backend.
+
+#### Requirements and limits of `filesystem_storage`
+
+- **Filesystem.** The filesystem must provide hard links, atomic rename by name and exclusive directory rename, and the whole repository must be on one filesystem, with no mount point inside it. Icechunk doesn't check for them.
+- **Other backends and older versions.** The repository lists the `filesystem-layout-v1` [writer feature](../reference/spec-v2-2.md#writer-features), which only `filesystem_storage` implements. The repository info is in `repo.d/`, and there is no `repo` file, so other backends, and Icechunk older than 2.4.0 with any backend, can't open it: they report that the repository doesn't exist. To use the repository with them, [convert it to the object store layout](#switching-an-existing-repo). Never write a `repo` file into the repository's root, by hand or by creating a repository there with another backend: that makes an unrelated repository, whose garbage collection can delete files of this one.
+- **Unix only.** `filesystem_storage` is available on Unix platforms only; elsewhere it raises an error when constructed.
+- <a id="reads-can-lag"></a>**Commit visibility can lag.** Unlike object stores, a commit made on one machine isn't always visible on another right away. Commits are never lost, but a reader can open a branch and get its previous tip without any error. How long a reader can lag depends on the filesystem and the client, but Icechunk makes a best effort to minimize this time, and the time collapses to zero in some filesystems. To hand a commit over between machines, pass its snapshot id and open it with [`Repository.readonly_session(snapshot_id=...)`](../reference/index.md#icechunk.Repository.readonly_session).
+- **Spurious conflicts.** In rare cases, when the filesystem loses the reply to a change and then many other changes land, or directory listings stay stale, the change reports a conflict although it landed. A change is never reported as done when it didn't land. Check the branch before retrying a commit that failed this way.
+- **Icechunk 1 repositories** are refused. See [Switching an existing repo](#switching-an-existing-repo).
+- **Conditional writes.** Repositories whose config disables `unsafe_use_conditional_create` or `unsafe_use_conditional_update` log a warning; the setting is ignored and the backend always uses its own conditional writes.
+
+`filesystem_storage` takes one optional setting, `fsync` (default `True`): whether to fsync data files after writes, and their directories before each change. Turning it off risks losing writes after an OS crash or power loss. The fsyncs of the repository info always run.
+
+```python
+icechunk.filesystem_storage("/path/to/my/dataset", fsync=False)
+```
+
+#### Stopping writers and copying a repository
+
+While the status is read-only, every modification of the repository is refused, garbage collection and expiration included, except status changes and the conversions. To stop every writer, for example before copying the repository, set the status to read-only:
+
+```python
+storage = icechunk.filesystem_storage("/path/to/my/dataset")
+repo = icechunk.Repository.open(storage)
+repo.set_status(icechunk.RepoStatus(icechunk.RepoAvailability.read_only))
+```
+
+To copy a repository consistently:
+
+1. Set the status to read-only, as above, and keep it until the copy is complete.
+2. Copy every entry under the repository's root, `repo.d/` included, in any order.
+3. Check the copy: its `repo.d/` has exactly one marker, `latest.<K>.<N>.<h>`, and `repo.d/<N>.<h>` has the SHA-256 `h` and the status read-only. Otherwise, start over.
+
+    ```python
+    import hashlib
+    from pathlib import Path
+
+    def sha256(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    copy = Path("/path/to/the/copy")
+    markers = [p.name for p in (copy / "repo.d").iterdir() if p.name.startswith("latest.")]
+    assert len(markers) == 1, "start over"
+    _, _, n, h = markers[0].split(".")
+    assert sha256(copy / "repo.d" / f"{n}.{h}") == h, "start over"
+    copied = icechunk.Repository.open(icechunk.filesystem_storage(str(copy)))
+    assert copied.get_status().availability == icechunk.RepoAvailability.read_only, "start over"
+    ```
+
+4. Set the status of the original back to online.
+
+The copy keeps the read-only status. On a filesystem, `filesystem_storage` can set it online and write to it. Other storage, such as an object store, needs the object store layout: convert a consistent copy made on a filesystem with `convert_to_object_store_layout()`, as described in [Switching an existing repo](#switching-an-existing-repo), upload it, and set its status to online. Or convert the original:
+
+1. Set the status of the original to read-only.
+2. Convert the original to the object store layout with `convert_to_object_store_layout()`.
+3. Copy it.
+4. If the original should stay in the filesystem layout, convert it back with `convert_to_filesystem_layout()`.
+5. Set the statuses of the original and the copy to online.
+
+#### Switching an existing repo
+
+Repositories created with `local_filesystem_storage`, another backend or an Icechunk version older than 2.4.0 are in the object store layout: `repo` is a single file. `filesystem_storage` refuses to open them, with an error that names `convert_to_filesystem_layout`, until they are converted once. [`FilesystemStorage.convert_to_object_store_layout`](../reference/storage.md#icechunk.storage.FilesystemStorage.convert_to_object_store_layout) converts a repository back.
+
+!!! warning "Conversions are administrative operations"
+
+    Run a conversion with nothing else using the repository: no writer in any process and no other conversion. What happens otherwise is undefined. If a conversion is interrupted, run the same command again, under the same condition, before anything else uses the repository.
+
+Both conversions change only the writer features and the ops log, and keep the repository's status, whatever it is. Neither copies or rewrites data.
+
+To convert a repository to the filesystem layout:
+
+1. Stop every writer of the repository.
+2. Convert it with [`FilesystemStorage.convert_to_filesystem_layout`](../reference/storage.md#icechunk.storage.FilesystemStorage.convert_to_filesystem_layout). It returns `True` if it converted the repository and `False` if it was in the filesystem layout already. If it is interrupted, run it again.
+
+    ```python
+    storage = icechunk.filesystem_storage("/path/to/my/dataset")
+    storage.convert_to_filesystem_layout()
+    repo = icechunk.Repository.open(storage)
+    ```
+
+3. From then on, use the repository only with `filesystem_storage`: other backends can't open it.
+
+To convert it back to the object store layout, stop every writer and run `convert_to_object_store_layout()`. It changes the repository to a version without the writer feature, creates `repo` with it, then deletes `repo.d/`. It never replaces an existing `repo`. It refuses to start while a `repo` file exists next to `repo.d/`, which an interrupted `convert_to_filesystem_layout()` leaves: run that again to complete it. A rerun of an interrupted `convert_to_object_store_layout()` keeps a `repo` it finds only if it holds a repository in the object store layout; otherwise it stops, keeping `repo.d/`, with an error that names the manual recovery. It returns `True` if it converted the repository and `False` if it was in the object store layout already. A run interrupted before its change leaves the repository usable.
+
+```python
+storage = icechunk.filesystem_storage("/path/to/my/dataset")
+storage.convert_to_object_store_layout()
+repo = icechunk.Repository.open(icechunk.local_filesystem_storage("/path/to/my/dataset"))
+```
+
+Also note:
+
+- Icechunk 1 repositories must first be migrated to Icechunk 2 with `local_filesystem_storage`. See [Migrate to 2.0](../reference/migration-2.md).
+- A repository config that disables conditional writes only logs a harmless warning; see **Conditional writes** in [Requirements and limits](#requirements-and-limits-of-filesystem_storage).
+- Pickled storage carries the absolute root path. With Dask or distributed, every worker must see the filesystem at the same path.
 
 ### HTTP Storage
 

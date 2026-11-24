@@ -12,7 +12,6 @@ Over time, an Icechunk Repository will accumulate many snapshots, not all of whi
 
 First create a Repository, configured so that there are no "inline" chunks. This will help illustrate that data is actually deleted.
 
-
 ```python exec="on" session="version" source="material-block"
 import icechunk as ic
 
@@ -25,7 +24,6 @@ repo = ic.Repository.create(
 ## Generate a few snapshots
 
 Let us generate a sequence of snapshots
-
 
 ```python exec="on" session="version" source="material-block"
 import zarr
@@ -43,12 +41,10 @@ for i in range(10):
 
 There are 10 snapshots
 
-
 ```python exec="on" session="version" source="material-block"
 ancestry = list(repo.ancestry(branch="main"))
 print("\n\n".join([str((a.id, a.written_at)) for a in ancestry]))
 ```
-
 
 ## Expire snapshots
 
@@ -57,12 +53,10 @@ print("\n\n".join([str((a.id, a.written_at)) for a in ancestry]))
 
 First we must expire snapshots. Here we will expire any snapshot older than the 5th one.
 
-
 ```python exec="on" session="version" source="material-block"
 expiry_time = ancestry[5].written_at
 print(expiry_time)
 ```
-
 
 ```python exec="on" session="version" source="material-block"
 expired = repo.expire_snapshots(older_than=expiry_time)
@@ -93,7 +87,6 @@ which the next step reclaims.
     can pass a snapshot's own `written_at` as the cutoff to expire everything
     older than it while keeping that snapshot itself.
 
-
 Confirm that these are the right snapshots (remember that ancestry list commits in decreasing order of `written_at` time):
 
 ```python exec="on" session="version" source="material-block"
@@ -114,11 +107,17 @@ print("\n\n".join([str((a.id, a.written_at)) for a in new_ancestry]))
 
 Use `Repository.garbage_collect` to delete data associated with expired snapshots
 
-
 ```python exec="on" session="version" source="material-block"
 results = repo.garbage_collect(expiry_time)
 print(results)
 ```
+
+!!! note "Busy repositories"
+    Expiration and garbage collection make a single attempt at writing their
+    update: if another change lands while it is written, they fail with a
+    `ConflictError` with `kind == ErrorKind.UPDATE_ATTEMPTS_EXHAUSTED`. Under
+    continuous commits from many writers they can keep failing;
+    run them when the commit rate is lower.
 
 ### Reading the summary
 

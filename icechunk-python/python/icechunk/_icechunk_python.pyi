@@ -1646,12 +1646,16 @@ class RepoUpdateRetryConfig:
             Default retry settings for all repo update operations. Any field
             left unset, or all of them when None, takes the repo update default:
             `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000.
+            Garbage collection and expiration write their update in a single
+            attempt; these settings bound how often they start over.
             Default: None
         """
     @property
     def default(self) -> StorageRetriesSettings | None:
         """
-        Default retry settings for all repo update operations.
+        Default retry settings for all repo update operations. Garbage
+        collection and expiration write their update in a single attempt;
+        these settings bound how often they start over.
 
         Default: None (effective defaults: `max_tries`=100, `initial_backoff_ms`=50, `max_backoff_ms`=30,000)
 
@@ -1941,7 +1945,10 @@ class RepositoryConfig:
         """
     def clear_virtual_chunk_containers(self) -> None:
         """
-        Clear all virtual chunk containers from the repository.
+        Clear the virtual chunk containers.
+
+        Containers whose store settings this library can't decode, such as
+        ones written by a newer Icechunk, stay.
         """
     @property
     def repo_update_retries(self) -> RepoUpdateRetryConfig | None:
@@ -2083,6 +2090,14 @@ class GCSummary:
         """
         Delete phases skipped because an earlier phase had failures, in order.
         Possible values: "transaction_logs", "manifests", "chunks".
+        """
+    @property
+    def storage_leftovers_deleted(self) -> int:
+        """
+        Leftovers of the storage backend's change protocol that it deleted:
+        superseded versions of the `repo` file, and files of crashed or
+        abandoned writes. Their bytes are included in `bytes_deleted`. Only
+        `filesystem_storage` has such leftovers.
         """
     def _repr_html_(self) -> str: ...
 
@@ -3282,6 +3297,131 @@ class LatencyStorage(Storage):
     def read_latency_ms(self, ms: int) -> None: ...
 
 @final
+class FilesystemStorage(Storage):
+    """The `Storage` returned by `filesystem_storage`.
+
+    It adds the operations specific to the repository format of
+    `filesystem_storage`.
+    """
+
+    def convert_to_filesystem_layout(self) -> bool:
+        """Convert a repository in the object store layout, as
+        `local_filesystem_storage` and Icechunk before 2.4.0 write it, to the
+        filesystem layout of `filesystem_storage`.
+
+        `filesystem_storage` refuses to open such a repository until it is
+        converted. The conversion backs `repo` up to `overwritten/`, builds
+        `repo.d/` from it and deletes `repo`. Only the writer features and the
+        ops log change; the status is kept, except that a stored offline or
+        undefined status is written as `RepoAvailability.read_only`.
+
+        This is an administrative operation: run it with nothing else using
+        the repository, no writer in any process and no other administrative
+        operation. Anything else is undefined behavior. If it is interrupted,
+        run it again under the same condition: the rerun completes the
+        conversion.
+
+        Returns
+        -------
+        bool
+            True if this call converted the repository, including when it
+            completed an interrupted conversion. False if it was in the
+            filesystem layout already.
+
+        Raises
+        ------
+        StorageError
+            With kind `object-not-found` if there is no repository, or kind
+            `storage-other` if `repo` can't be read or decoded, or if a rerun
+            finds `repo.d/` next to a `repo` it can't attribute to its earlier
+            run; that message names the manual recovery.
+        ReadOnlyError
+            With kind `missing-writer-features` if the repository lists writer
+            features this library doesn't implement.
+        SessionStateError
+            With kind `layout-conversion-in-progress` if a conversion to the
+            object store layout was interrupted: rerun `convert_to_object_store_layout`.
+        """
+    async def convert_to_filesystem_layout_async(self) -> bool:
+        """Convert a repository in the object store layout to the filesystem layout
+        of `filesystem_storage` (async version).
+
+        See `convert_to_filesystem_layout`.
+
+        Returns
+        -------
+        bool
+            True if this call converted the repository, False if it was in the
+            filesystem layout already.
+        """
+    def convert_to_object_store_layout(self) -> bool:
+        """Convert a repository in the filesystem layout of `filesystem_storage`
+        back to the object store layout that `local_filesystem_storage`, other
+        storage backends and Icechunk before 2.4.0 write.
+
+        The conversion backs the current version up to `overwritten/`, writes
+        it without the writer feature `filesystem-layout-v1` as `repo`, then
+        deletes `repo.d/`. It creates `repo` only if it doesn't exist, never
+        replacing one. Only the writer features and the ops log change; the
+        status is kept, except that a stored offline or undefined status is
+        written as `RepoAvailability.read_only`.
+
+        This is an administrative operation: run it with nothing else using
+        the repository, no writer in any process and no other administrative
+        operation. Anything else is undefined behavior. If it is interrupted,
+        run it again under the same condition: the rerun completes the
+        conversion, keeping a `repo` in the object store layout that it finds.
+        Until then, every write and garbage collection through
+        `filesystem_storage` fails with a `SessionStateError` of kind
+        `layout-conversion-in-progress` saying that a conversion to the object
+        store layout is in progress and to rerun it.
+
+        Other storage backends and Icechunk before 2.4.0 can't open a repository
+        in the filesystem layout. To get a copy that they can use: set the status
+        of the source to `RepoAvailability.read_only`, convert it to the object
+        store layout, copy it, convert the source back with
+        `convert_to_filesystem_layout` if it should stay in this layout, and
+        set the statuses to `RepoAvailability.online`.
+
+        Returns
+        -------
+        bool
+            True if this call converted the repository, False if it was in the
+            object store layout already, including when this call only cleaned up
+            after an interrupted conversion.
+
+        Raises
+        ------
+        StorageError
+            With kind `object-not-found` if there is no repository, or kind
+            `storage-other` if `repo` can't be read or decoded, if directory
+            listings are stale (nothing was changed: run it again once they
+            refresh), if `repo` exists next to `repo.d/`, which an interrupted
+            `convert_to_filesystem_layout` leaves (nothing was changed: rerun
+            `convert_to_filesystem_layout` to finish it), if something else
+            wrote `repo` while this conversion ran (its change landed and
+            `repo.d/` was kept: check `repo`, then rerun, which keeps `repo`),
+            or if a rerun finds a `repo` that isn't a repo info in the object
+            store layout (`repo.d/` was kept; that message names the manual
+            recovery).
+        ReadOnlyError
+            With kind `missing-writer-features` if the repository lists writer
+            features this library doesn't implement.
+        """
+    async def convert_to_object_store_layout_async(self) -> bool:
+        """Convert a repository in the filesystem layout of `filesystem_storage`
+        back to the object store layout (async version).
+
+        See `convert_to_object_store_layout`.
+
+        Returns
+        -------
+        bool
+            True if this call converted the repository, False if it was in the
+            object store layout already.
+        """
+
+@final
 class StorageObjectInfo:
     """Metadata for an object in storage.
 
@@ -3361,6 +3501,13 @@ class Storage:
     def new_in_memory(cls) -> Storage: ...
     @classmethod
     def new_local_filesystem(cls, path: str) -> Storage: ...
+    @classmethod
+    def new_filesystem(
+        cls,
+        path: str,
+        *,
+        fsync: bool = True,
+    ) -> FilesystemStorage: ...
     @classmethod
     def new_gcs(
         cls,

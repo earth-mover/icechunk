@@ -21,6 +21,7 @@ icechunk-format.workspace = true
 icechunk-storage.workspace = true
 icechunk-types.workspace = true
 icechunk-s3 = { workspace = true, optional = true }
+icechunk-fs = { workspace = true, optional = true }
 
 async-recursion.workspace = true
 async-stream.workspace = true
@@ -87,6 +88,8 @@ rlimit.workspace = true
 icechunk-macros.workspace = true
 # test-util exposes write-id injection for the lost-response regression tests.
 icechunk-s3 = { workspace = true, features = ["test-util"] }
+# fault-injection writes test-only writer features.
+icechunk-format = { workspace = true, features = ["fault-injection"] }
 
 assert_fs.workspace = true
 clap.workspace = true
@@ -116,6 +119,7 @@ workspace = true
 [features]
 default = [
   "s3",
+  "fs",
   "object-store-s3",
   "object-store-gcs",
   "object-store-azure",
@@ -125,6 +129,7 @@ default = [
 ]
 napi-send-contract = []
 s3 = ["dep:icechunk-s3"]
+fs = ["dep:icechunk-fs"]
 object-store-s3 = ["icechunk-arrow-object-store/s3"]
 object-store-gcs = ["icechunk-arrow-object-store/gcs"]
 object-store-azure = ["icechunk-arrow-object-store/azure"]

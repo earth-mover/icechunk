@@ -1,4 +1,5 @@
 pub(crate) mod capture;
+pub(crate) mod creation_race;
 
 use std::{env, sync::Arc};
 

@@ -7,17 +7,18 @@ import pytest
 import icechunk
 import zarr
 from icechunk._icechunk_python import RepoUpdateRetryConfig
+from tests.conftest import fs_storage
 
 
 @pytest.fixture(scope="function")
 def tmp_store(
-    tmpdir: Path, any_spec_version: int | None
+    tmpdir: Path, any_spec_version: int | None, fs_backend: str
 ) -> Generator[tuple[icechunk.IcechunkStore, str]]:
     repo_path = f"{tmpdir}"
     config = icechunk.RepositoryConfig.default()
     config.inline_chunk_threshold_bytes = 5
     repo = icechunk.Repository.open_or_create(
-        storage=icechunk.local_filesystem_storage(repo_path),
+        storage=fs_storage(fs_backend, repo_path, any_spec_version),
         config=config,
         create_version=any_spec_version,
     )

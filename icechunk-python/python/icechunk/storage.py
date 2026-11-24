@@ -4,6 +4,7 @@ from datetime import datetime
 from icechunk._icechunk_python import (
     ChecksumAlgorithm,
     ChunkType,
+    FilesystemStorage,
     GcsBearerCredential,
     ObjectStoreConfig,
     S3Options,
@@ -24,6 +25,7 @@ __all__ = [
     "AnyObjectStoreConfig",
     "ChecksumAlgorithm",
     "ChunkType",
+    "FilesystemStorage",
     "ObjectStoreConfig",
     "S3Options",
     "Storage",
@@ -33,6 +35,7 @@ __all__ = [
     "StorageTimeoutSettings",
     "azure_storage",
     "azure_store",
+    "filesystem_storage",
     "gcs_storage",
     "gcs_store",
     "hf_storage",
@@ -70,9 +73,50 @@ def in_memory_storage() -> Storage:
 def local_filesystem_storage(path: str) -> Storage:
     """Create a Storage instance that saves data in the local file system.
 
-    This Storage instance is not recommended for production data
+    This Storage instance is not recommended for production data.
+
+    It is not safe for concurrent commits: two sessions committing at once can
+    both succeed, losing one of the commits. Use `filesystem_storage` when
+    several writers may commit to the repository.
     """
     return Storage.new_local_filesystem(path)
+
+
+def filesystem_storage(path: str, *, fsync: bool = True) -> FilesystemStorage:
+    """Create a Storage instance that saves data in a filesystem, safe for concurrent writers.
+
+    This storage is experimental. Unlike `local_filesystem_storage`, it is safe
+    for concurrent writers on filesystems that meet the requirements in the
+    storage guide: hard links, atomic rename by name and exclusive directory
+    rename.
+
+    It stores the repository info in the filesystem layout: `repo.d/` holds
+    its versions, and the root has no `repo` object. The repository lists the
+    writer feature `filesystem-layout-v1`. Other storage backends and Icechunk
+    before 2.4.0 can't open it: to use it with them, convert it to
+    the object store layout with
+    `FilesystemStorage.convert_to_object_store_layout`, in place or on a copy.
+    Everything else is the same as in `local_filesystem_storage`.
+
+    Repositories in the object store layout are refused until converted with
+    `FilesystemStorage.convert_to_filesystem_layout`.
+
+    It is only available on Unix platforms; elsewhere it raises an error.
+    Icechunk 1 repositories are refused: migrate them to Icechunk 2 with
+    `local_filesystem_storage` first.
+
+    Parameters
+    ----------
+    path: str
+        The path to the root of the repository.
+    fsync: bool
+        Whether to fsync data files after writes, and their directories before
+        each change. Turning it off risks losing writes after an OS crash or
+        power loss; it never affects safety between concurrent writers. The
+        fsyncs of the change itself always run: those of the repository info
+        and a conversion's backup.
+    """
+    return Storage.new_filesystem(path, fsync=fsync)
 
 
 def http_storage(

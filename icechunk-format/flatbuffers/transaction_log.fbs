@@ -54,22 +54,24 @@ table MoveOperation {
 // --8<-- [end:move_operation]
 
 // --8<-- [start:transaction_log]
-// The initial snapshot's transaction log MUST have all lists empty.
-// The root group created during repository initialization is not
-// recorded in the transaction log.
+// The initial snapshot has no nodes, and its transaction log MUST have
+// all lists empty.
 //
 // All ObjectId8 lists below MUST be sorted in ascending byte order
 // (i.e. lexicographic comparison of the 8 raw bytes).
 //
-// TODO: verify this holds after amend merging — a node could
-// end up in both new_* and updated_* lists.
-// A group's node id MUST NOT appear in more than one of
-// new_groups, deleted_groups, or updated_groups.
-// Likewise for arrays across new_arrays, deleted_arrays, or updated_arrays.
-// For example, a group that is created and then has its metadata
-// modified within the same commit MUST appear only in new_groups.
+// A group's node id SHOULD appear in at most one of new_groups,
+// deleted_groups, or updated_groups, and likewise for arrays across
+// new_arrays, deleted_arrays, or updated_arrays. For example, a group
+// that is created and then has its metadata modified within the same
+// session SHOULD appear only in new_groups. The log of an amended commit
+// combines the lists of the logs it replaces, so a node id can appear
+// in more than one of them. Readers MUST accept a node id in more than
+// one list.
 table TransactionLog {
-  // MUST be identical to the id of the corresponding snapshot.
+  // MUST be identical to the id in the file name: the id of the
+  // corresponding snapshot or, for a log that is only listed in
+  // SnapshotInfo.pruned_ancestor_tx_logs, the id listed there.
   id: ObjectId12 (required);
 
   // Node ids of groups created in this transaction.

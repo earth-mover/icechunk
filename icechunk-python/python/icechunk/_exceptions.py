@@ -32,9 +32,25 @@ The tree::
 
 from enum import StrEnum
 
-from icechunk._icechunk_python import (
-    IcechunkError,
-)
+from icechunk._icechunk_python import IcechunkError
+
+# the Rust classifier looks every raised class up in this module
+__all__ = [
+    "AlreadyExistsError",
+    "ErrorKind",
+    "FormatError",
+    "IcechunkError",
+    "InternalError",
+    "InvalidInputError",
+    "NodeNotFoundError",
+    "NotFoundError",
+    "ReadOnlyError",
+    "RefNotFoundError",
+    "RepositoryNotFoundError",
+    "SessionStateError",
+    "SnapshotNotFoundError",
+    "StorageError",
+]
 
 
 class ErrorKind(StrEnum):
@@ -81,6 +97,7 @@ class ErrorKind(StrEnum):
     READ_ONLY_STORE = "read-only-store"
     READ_ONLY_STORAGE = "read-only-storage"
     READ_ONLY_REPOSITORY = "read-only-repository"
+    MISSING_WRITER_FEATURES = "missing-writer-features"
     # invalid input
     INVALID_KEY = "invalid-key"
     INVALID_CHUNK_INDEX = "invalid-chunk-index"
@@ -128,6 +145,7 @@ class ErrorKind(StrEnum):
     FEATURE_FLAG_DISABLED = "feature-flag-disabled"
     TAG_ERROR = "tag-error"
     INVALID_REPOSITORY_MIGRATION = "invalid-repository-migration"
+    LAYOUT_CONVERSION_IN_PROGRESS = "layout-conversion-in-progress"
     # storage / environment
     OBJECT_NOT_FOUND = "object-not-found"
     OBJECT_STORE = "object-store"

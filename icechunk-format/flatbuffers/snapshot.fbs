@@ -25,7 +25,8 @@ table ManifestFileInfoV2 {
     // The id of the manifest file in the repository's storage.
     id: ObjectId12;
 
-    // Total serialized size of the manifest in bytes.
+    // Exact length in bytes of the stored manifest file, including the
+    // binary file header. Readers MAY use it to fetch the file.
     size_bytes: uint64;
 
     // Total number of chunk references in the manifest.
@@ -161,6 +162,8 @@ table Snapshot {
   // The id of the parent snapshot.
   // In V1 snapshots: MUST be present for all snapshots except the initial one.
   // In V2 snapshots: MUST be empty (parent tracking moved to RepoInfo).
+  // Readers of a spec 2.x repository MUST ignore it, also in V1 snapshots:
+  // the parent recorded in the repo info is authoritative.
   parent_id: ObjectId12;
 
   // All nodes in this snapshot.
@@ -169,6 +172,7 @@ table Snapshot {
 
   // Time at which this snapshot was committed.
   // Non-leap microseconds since Jan 1, 1970 UTC.
+  // MUST be strictly greater than the flushed_at of the parent snapshot.
   flushed_at: uint64;
 
   // Commit message.
@@ -185,6 +189,8 @@ table Snapshot {
 
   // V2 replacement for manifest_files.
   // MUST be populated in V2 snapshots.
+  // MUST contain exactly one entry for each manifest referenced by a
+  // ManifestRef of any node in this snapshot, and no other entries.
   // MUST be sorted in ascending byte order of ManifestFileInfoV2.id.
   // Introduced in spec version 2.
   manifest_files_v2: [ManifestFileInfoV2];

@@ -2975,6 +2975,91 @@ impl PyLatencyStorage {
     }
 }
 
+/// The `Storage` returned by `filesystem_storage`, with the operations
+/// specific to its repository format.
+#[pyclass(name = "FilesystemStorage", extends = PyStorage)]
+#[derive(Debug)]
+pub(crate) struct PyFilesystemStorage {
+    #[cfg(unix)]
+    filesystem: Arc<storage::FilesystemStorage>,
+}
+
+impl PyFilesystemStorage {
+    #[cfg(unix)]
+    fn new(path: PathBuf, fsync: bool) -> PyResult<PyClassInitializer<Self>> {
+        let filesystem = Arc::new(
+            storage::FilesystemStorage::new(&path)
+                .map_err(PyIcechunkStoreError::StorageError)?
+                .with_fsync(fsync),
+        );
+        let base = PyStorage(Arc::clone(&filesystem) as Arc<dyn Storage + Send + Sync>);
+        Ok(PyClassInitializer::from(base).add_subclass(Self { filesystem }))
+    }
+
+    /// Fails with the platform error of `new_filesystem_storage_with`.
+    #[cfg(not(unix))]
+    fn new(path: PathBuf, fsync: bool) -> PyResult<PyClassInitializer<Self>> {
+        let storage = pyo3_async_runtimes::tokio::get_runtime()
+            .block_on(storage::new_filesystem_storage_with(
+                &path,
+                storage::FilesystemSettings::default().with_fsync(fsync),
+            ))
+            .map_err(PyIcechunkStoreError::StorageError)?;
+        Ok(PyClassInitializer::from(PyStorage(storage)).add_subclass(Self {}))
+    }
+}
+
+#[cfg(unix)]
+#[pymethods]
+impl PyFilesystemStorage {
+    fn convert_to_filesystem_layout(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                converted(filesystem.convert_to_filesystem_layout().await)
+            })
+        })
+    }
+
+    fn convert_to_filesystem_layout_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            converted(filesystem.convert_to_filesystem_layout().await)
+        })
+    }
+
+    fn convert_to_object_store_layout(&self, py: Python<'_>) -> PyResult<bool> {
+        let filesystem = Arc::clone(&self.filesystem);
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                converted(filesystem.convert_to_object_store_layout().await)
+            })
+        })
+    }
+
+    fn convert_to_object_store_layout_async<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, pyo3::PyAny>> {
+        let filesystem = Arc::clone(&self.filesystem);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            converted(filesystem.convert_to_object_store_layout().await)
+        })
+    }
+}
+
+/// Whether the call converted the repository.
+#[cfg(unix)]
+fn converted(
+    outcome: storage::StorageResult<storage::ConversionOutcome>,
+) -> PyResult<bool> {
+    let outcome = outcome.map_err(PyIcechunkStoreError::StorageError)?;
+    Ok(matches!(outcome, storage::ConversionOutcome::Converted))
+}
+
 /// Effective `(read, write)` extra-header vecs.
 type RoleHeaders = (Vec<(String, String)>, Vec<(String, String)>);
 
@@ -3200,6 +3285,17 @@ impl PyStorage {
                 Ok(PyStorage(storage))
             })
         })
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (path, *, fsync = true))]
+    pub(crate) fn new_filesystem<'py>(
+        _cls: &Bound<'py, PyType>,
+        py: Python<'py>,
+        path: PathBuf,
+        fsync: bool,
+    ) -> PyResult<Bound<'py, PyFilesystemStorage>> {
+        Bound::new(py, PyFilesystemStorage::new(path, fsync)?)
     }
 
     #[classmethod]

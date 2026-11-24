@@ -1,6 +1,9 @@
 import math
 import os
+import shutil
+import sys
 from enum import Enum
+from pathlib import Path
 from typing import Literal, cast
 
 import boto3
@@ -13,7 +16,14 @@ from packaging.version import Version
 
 import zarr
 import zarr.testing.strategies as zarr_st
-from icechunk import Repository, SpecVersion, in_memory_storage, local_filesystem_storage
+from icechunk import (
+    Repository,
+    SpecVersion,
+    Storage,
+    filesystem_storage,
+    in_memory_storage,
+    local_filesystem_storage,
+)
 
 # Zarr may gate rectilinear chunk grids behind a config flag.
 # Icechunk supports them, so enable unconditionally for tests.
@@ -86,20 +96,57 @@ class Permission(Enum):
                 return ("test123", "test123")
 
 
+FS_BACKENDS = [
+    "local_filesystem",
+    pytest.param(
+        "filesystem",
+        marks=pytest.mark.skipif(
+            sys.platform == "win32", reason="FilesystemStorage is Unix-only"
+        ),
+    ),
+]
+
+
+@pytest.fixture(params=FS_BACKENDS)
+def fs_backend(request: pytest.FixtureRequest) -> str:
+    return cast(str, request.param)
+
+
+def fs_storage(
+    backend: str, path: str, spec_version: SpecVersion | int | None = None
+) -> Storage:
+    if backend == "filesystem":
+        if spec_version == 1:
+            pytest.skip("FilesystemStorage refuses IC1 repos")
+        return filesystem_storage(path)
+    return local_filesystem_storage(path)
+
+
+def readable_path(path: str, backend: str, tmp_path: Path) -> str:
+    """The filesystem backend refuses repos in the object store layout: open a
+    converted copy."""
+    if backend != "filesystem":
+        return path
+    copy = tmp_path / "repo"
+    shutil.copytree(path, copy)
+    storage = filesystem_storage(str(copy))
+    assert storage.convert_to_filesystem_layout()
+    return str(copy)
+
+
 def parse_repo(
-    store: Literal["local", "memory"], path: str, spec_version: SpecVersion | int | None
+    store: Literal["local", "filesystem", "memory"],
+    path: str,
+    spec_version: SpecVersion | int | None,
 ) -> Repository:
-    if store == "local":
-        return Repository.create(
-            storage=local_filesystem_storage(path),
-            spec_version=spec_version,
-        )
     if store == "memory":
-        return Repository.create(
-            storage=in_memory_storage(),
-            spec_version=spec_version,
-        )
-    raise ValueError(f"Unknown store type: {store}")
+        storage = in_memory_storage()
+    elif store in ("local", "filesystem"):
+        backend = "local_filesystem" if store == "local" else store
+        storage = fs_storage(backend, path, spec_version)
+    else:
+        raise ValueError(f"Unknown store type: {store}")
+    return Repository.create(storage=storage, spec_version=spec_version)
 
 
 @pytest.fixture(scope="function")

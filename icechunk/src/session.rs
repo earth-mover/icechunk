@@ -66,7 +66,7 @@ use crate::{
     },
     refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
-    storage::{self, RequestAttribution, StorageContext, StorageErrorKind},
+    storage::{self, RequestAttribution, StorageContext, StorageErrorKind, WriteHint},
     virtual_chunks::{VirtualChunkContainer, VirtualChunkResolver},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
@@ -3303,7 +3303,9 @@ async fn do_flush(
     let asset_manager = Arc::clone(&flush_data.asset_manager);
     let snapshot_timestamp = tokio::spawn(
         async move {
-            asset_manager.write_snapshot(Arc::clone(&new_snapshot_c)).await?;
+            asset_manager
+                .write_snapshot(Arc::clone(&new_snapshot_c), WriteHint::NewObject)
+                .await?;
             asset_manager.get_snapshot_last_modified(&new_snapshot_c.id()).await
         }
         .in_current_span(),
@@ -3338,7 +3340,11 @@ async fn do_flush(
 
     flush_data
         .asset_manager
-        .write_transaction_log(new_snapshot_id.clone(), Arc::new(new_tx_log))
+        .write_transaction_log(
+            new_snapshot_id.clone(),
+            Arc::new(new_tx_log),
+            WriteHint::NewObject,
+        )
         .await
         .inject()?;
 
@@ -4356,7 +4362,7 @@ mod tests {
             None,
             nodes.iter().cloned().map(Ok::<NodeSnapshot, IcechunkFormatError>),
         )?);
-        asset_manager.write_snapshot(Arc::clone(&snapshot)).await?;
+        asset_manager.write_snapshot(Arc::clone(&snapshot), WriteHint::NewObject).await?;
         // FIXME:
         // update_branch(
         //     storage.as_ref(),
@@ -4379,6 +4385,7 @@ mod tests {
             100,
             None::<&()>,
             None,
+            &[],
         )
         .add_snapshot(
             SpecVersionBin::current(),

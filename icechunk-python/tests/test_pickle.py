@@ -14,31 +14,31 @@ from icechunk import (
     Repository,
     RepositoryConfig,
     S3StaticCredentials,
-    local_filesystem_storage,
     s3_storage,
 )
-from tests.conftest import Permission
+from tests.conftest import Permission, fs_storage
 
 
-def create_local_repo(path: str, spec_version: int | None) -> Repository:
+def create_local_repo(backend: str, path: str, spec_version: int | None) -> Repository:
     repo = Repository.create(
-        storage=local_filesystem_storage(path), spec_version=spec_version
+        storage=fs_storage(backend, path, spec_version), spec_version=spec_version
     )
     repo.set_default_commit_metadata({"author": "test"})
     return repo
 
 
 @pytest.fixture(scope="function")
-def tmp_repo(tmpdir: Path, any_spec_version: int | None) -> Repository:
+def tmp_repo(tmpdir: Path, any_spec_version: int | None, fs_backend: str) -> Repository:
     store_path = f"{tmpdir}"
     repo = create_local_repo(
+        fs_backend,
         store_path,
         spec_version=any_spec_version,
     )
     return repo
 
 
-def test_pickle_repository(tmpdir: Path, tmp_repo: Repository) -> None:
+def test_pickle_repository(tmpdir: Path, tmp_repo: Repository, fs_backend: str) -> None:
     pickled = pickle.dumps(tmp_repo)
     roundtripped = pickle.loads(pickled)
     assert tmp_repo.list_branches() == roundtripped.list_branches()
@@ -46,9 +46,10 @@ def test_pickle_repository(tmpdir: Path, tmp_repo: Repository) -> None:
     assert tmp_repo.default_commit_metadata() == {"author": "test"}
 
     storage = tmp_repo.storage
-    assert (
-        repr(storage) == f"<icechunk.Storage>\ntype: local filesystem\npath: {tmpdir}\n"
-    )
+    storage_type = {"local_filesystem": "local filesystem", "filesystem": "filesystem"}[
+        fs_backend
+    ]
+    assert repr(storage) == f"<icechunk.Storage>\ntype: {storage_type}\npath: {tmpdir}\n"
 
 
 def test_pickle_read_only(tmp_repo: Repository) -> None:

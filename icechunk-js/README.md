@@ -45,6 +45,9 @@ In-memory storage works on all platforms. The following backends are available o
 - **Tigris** — `Storage.newTigris(bucket, prefix?, credentials?, options?)`
 - **HTTP** — `Storage.newHttp(baseUrl, config?)`
 - **Local Filesystem** — `Storage.newLocalFilesystem(path)`
+- **Filesystem** (safe for concurrent writers, experimental, Unix only) — `Storage.newFilesystem(path)`
+  - It stores the repository in the filesystem layout, which other backends and Icechunk before 2.4.0 can't open. Convert it with `convertToObjectStoreLayout()` to use it with them.
+  - Its `convertToFilesystemLayout()` converts a repository written by `newLocalFilesystem` (needed before opening it), and `convertToObjectStoreLayout()` converts back; both resolve to whether they converted the repository. Run them with nothing else using the repository, and rerun one if it is interrupted.
 
 #### Fetch Storage (read-only, works everywhere)
 

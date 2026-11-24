@@ -14,9 +14,10 @@ use futures::{Stream, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DeleteObjectsResult, GetModifiedResult, ListInfo, RepositoryCreation, Settings,
-    Storage, StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, ETag, GetIfMatchResult, GetModifiedResult, ListInfo,
+    PutCondition, RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+    VersionedUpdateResult, WriteHint,
 };
 use icechunk_storage::sealed;
 
@@ -75,6 +76,18 @@ impl Storage for LoggingStorage {
         self.backend.can_write().await
     }
 
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        self.backend.writer_features().await
+    }
+
+    async fn create_location_if_needed(&self) -> StorageResult<()> {
+        self.backend.create_location_if_needed().await
+    }
+
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        self.backend.root_is_clean(ctx).await
+    }
+
     async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
         self.backend.can_create_repository().await
     }
@@ -86,14 +99,30 @@ impl Storage for LoggingStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("put_object".to_string(), path.to_string()));
+        self.backend.put_object(ctx, path, bytes, content_type, metadata, hint).await
+    }
+
+    async fn put_object_conditional(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("put_object".to_string(), path.to_string()));
         self.backend
-            .put_object(ctx, path, bytes, content_type, metadata, previous_version)
+            .put_object_conditional(ctx, path, bytes, content_type, metadata, condition)
             .await
     }
 
@@ -155,6 +184,19 @@ impl Storage for LoggingStorage {
         self.backend.delete_batch(ctx, prefix, batch).await
     }
 
+    async fn sweep_leftovers(
+        &self,
+        ctx: &StorageContext<'_>,
+        older_than: DateTime<Utc>,
+        dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("sweep_leftovers".to_string(), String::new()));
+        self.backend.sweep_leftovers(ctx, older_than, dry_run).await
+    }
+
     async fn get_object_last_modified(
         &self,
         ctx: &StorageContext<'_>,
@@ -181,14 +223,26 @@ impl Storage for LoggingStorage {
         ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
         self.fetch_log
             .lock()
             .expect("poison lock")
             .push(("get_object_range".to_string(), path.to_string()));
         self.backend.get_object_range(ctx, path, range).await
+    }
+
+    async fn get_object_range_if_match(
+        &self,
+        ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        self.fetch_log
+            .lock()
+            .expect("poison lock")
+            .push(("get_object_range_if_match".to_string(), path.to_string()));
+        self.backend.get_object_range_if_match(ctx, path, range, etag).await
     }
 }

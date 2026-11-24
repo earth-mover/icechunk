@@ -8,9 +8,11 @@ use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
 use icechunk::storage::{
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, Storage,
-    StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    DeleteObjectsResult, ETag, Generation, GetIfMatchResult, GetModifiedResult, ListInfo,
+    PutCondition, RepositoryCreation, Settings, Storage, StorageContext, StorageError,
+    StorageInfo, StorageResult, StorageWriterFeatures, VersionInfo,
+    VersionedUpdateResult, WriteHint, etag_matches, list_objects_filtered_by_id_prefix,
+    root_is_clean_by_listing,
 };
 use napi::bindgen_prelude::{Buffer, Promise};
 use napi::threadsafe_function::ThreadsafeFunction;
@@ -23,7 +25,22 @@ use crate::errors::IntoNapiResult;
 use std::collections::HashMap;
 
 #[napi(js_name = "Storage")]
-pub struct JsStorage(pub(crate) Arc<dyn Storage + Send + Sync>);
+pub struct JsStorage {
+    pub(crate) storage: Arc<dyn Storage + Send + Sync>,
+    /// Set by `newFilesystem`, for the operations specific to its format.
+    #[cfg(all(unix, not(target_family = "wasm")))]
+    filesystem: Option<Arc<icechunk::storage::FilesystemStorage>>,
+}
+
+impl JsStorage {
+    pub(crate) fn new(storage: Arc<dyn Storage + Send + Sync>) -> Self {
+        Self {
+            storage,
+            #[cfg(all(unix, not(target_family = "wasm")))]
+            filesystem: None,
+        }
+    }
+}
 
 // --- Custom JS-provided storage backend ---
 
@@ -250,7 +267,64 @@ impl<'de> Deserialize<'de> for JsCallbackStorage {
     }
 }
 
+impl JsCallbackStorage {
+    async fn call_put_object(
+        &self,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<JsStorageVersionInfo>,
+    ) -> StorageResult<VersionedUpdateResult> {
+        let args = JsStoragePutObjectArgs {
+            path: path.to_string(),
+            data: bytes.to_vec().into(),
+            content_type: content_type.map(|s| s.to_string()),
+            metadata: metadata
+                .into_iter()
+                .map(|(k, v)| JsStorageKeyValue { key: k, value: v })
+                .collect(),
+            previous_version,
+        };
+        let result = self
+            .put_object_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| js_storage_error("JS putObject call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS putObject failed", e))?;
+        result.into_rust()
+    }
+}
+
 impl icechunk_storage::sealed::Sealed for JsCallbackStorage {}
+
+impl JsCallbackStorage {
+    async fn call_get_object_range(
+        &self,
+        path: &str,
+        range: Option<&Range<u64>>,
+    ) -> StorageResult<JsStorageGetObjectResponse> {
+        let args = JsStorageGetObjectRangeArgs {
+            path: path.to_string(),
+            range_start: range.map(|r| r.start as f64),
+            range_end: range.map(|r| r.end as f64),
+        };
+        self.get_object_range_fn
+            .call_async(Ok(args))
+            .await
+            .map_err(|e| js_storage_error("JS getObjectRange call failed", e))?
+            .await
+            .map_err(|e| js_storage_error("JS getObjectRange failed", e))
+    }
+}
+
+fn bytes_stream(
+    data: Buffer,
+) -> Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>> {
+    let bytes = Bytes::from(data.to_vec());
+    Box::pin(futures::stream::once(async move { Ok(bytes) }))
+}
 
 #[async_trait]
 #[typetag::serde(name = "js_callback_storage")]
@@ -268,32 +342,73 @@ impl Storage for JsCallbackStorage {
             .map_err(|e| js_storage_error("JS canWrite failed", e))
     }
 
+    async fn default_settings(&self) -> StorageResult<Settings> {
+        Ok(Settings::default())
+    }
+
+    async fn writer_features(&self) -> StorageResult<StorageWriterFeatures> {
+        Ok(StorageWriterFeatures::new())
+    }
+
+    async fn can_create_repository(&self) -> StorageResult<RepositoryCreation> {
+        Ok(RepositoryCreation::Allowed)
+    }
+
+    async fn create_location_if_needed(&self) -> StorageResult<()> {
+        Ok(())
+    }
+
+    async fn list_objects_with_id_prefixes<'a>(
+        &'a self,
+        ctx: &StorageContext<'_>,
+        prefix: &str,
+        id_prefixes: &[String],
+    ) -> StorageResult<BoxStream<'a, StorageResult<ListInfo<String>>>> {
+        list_objects_filtered_by_id_prefix(self, ctx, prefix, id_prefixes).await
+    }
+
+    fn lists_id_prefixes_natively(&self) -> bool {
+        false
+    }
+
+    async fn sweep_leftovers(
+        &self,
+        _ctx: &StorageContext<'_>,
+        _older_than: chrono::DateTime<chrono::Utc>,
+        _dry_run: bool,
+    ) -> StorageResult<DeleteObjectsResult> {
+        Ok(DeleteObjectsResult::default())
+    }
+
+    async fn root_is_clean(&self, ctx: &StorageContext<'_>) -> StorageResult<bool> {
+        root_is_clean_by_listing(self, ctx).await
+    }
+
     async fn get_object_range(
         &self,
         _ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
-        let args = JsStorageGetObjectRangeArgs {
-            path: path.to_string(),
-            range_start: range.map(|r| r.start as f64),
-            range_end: range.map(|r| r.end as f64),
-        };
-        let response = self
-            .get_object_range_fn
-            .call_async(Ok(args))
-            .await
-            .map_err(|e| js_storage_error("JS getObjectRange call failed", e))?
-            .await
-            .map_err(|e| js_storage_error("JS getObjectRange failed", e))?;
+    ) -> StorageResult<Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>>
+    {
+        let response = self.call_get_object_range(path, range).await?;
+        Ok(bytes_stream(response.data))
+    }
 
-        let bytes = Bytes::from(response.data.to_vec());
-        let version = response.version.into();
-        let stream = futures::stream::once(async move { Ok(bytes) });
-        Ok((Box::pin(stream), version))
+    /// Compares the etag the callback returns: it has no way to send If-Match.
+    async fn get_object_range_if_match(
+        &self,
+        _ctx: &StorageContext<'_>,
+        path: &str,
+        range: Option<&Range<u64>>,
+        etag: &ETag,
+    ) -> StorageResult<GetIfMatchResult> {
+        let response = self.call_get_object_range(path, range).await?;
+        if etag_matches(etag, response.version.etag.as_deref())? {
+            Ok(GetIfMatchResult::Matched(bytes_stream(response.data)))
+        } else {
+            Ok(GetIfMatchResult::Modified)
+        }
     }
 
     async fn put_object(
@@ -303,26 +418,29 @@ impl Storage for JsCallbackStorage {
         bytes: Bytes,
         content_type: Option<&str>,
         metadata: Vec<(String, String)>,
-        previous_version: Option<&VersionInfo>,
+        _hint: WriteHint,
+    ) -> StorageResult<()> {
+        self.call_put_object(path, bytes, content_type, metadata, None)
+            .await?
+            .must_write()
+            .map(|_| ())
+    }
+
+    async fn put_object_conditional(
+        &self,
+        _ctx: &StorageContext<'_>,
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        condition: PutCondition<'_>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let args = JsStoragePutObjectArgs {
-            path: path.to_string(),
-            data: bytes.to_vec().into(),
-            content_type: content_type.map(|s| s.to_string()),
-            metadata: metadata
-                .into_iter()
-                .map(|(k, v)| JsStorageKeyValue { key: k, value: v })
-                .collect(),
-            previous_version: previous_version.map(|v| v.into()),
+        let previous_version = match condition {
+            PutCondition::Create => (&VersionInfo::for_creation()).into(),
+            PutCondition::IfVersion(v) => v.into(),
         };
-        let result = self
-            .put_object_fn
-            .call_async(Ok(args))
+        self.call_put_object(path, bytes, content_type, metadata, Some(previous_version))
             .await
-            .map_err(|e| js_storage_error("JS putObject call failed", e))?
-            .await
-            .map_err(|e| js_storage_error("JS putObject failed", e))?;
-        result.into_rust()
     }
 
     async fn copy_object(
@@ -931,7 +1049,7 @@ impl JsStorage {
     #[napi(factory)]
     pub async fn new_in_memory() -> napi::Result<JsStorage> {
         let storage = icechunk::storage::new_in_memory_storage().await.map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     /// Create a Storage backed by a JS object implementing the StorageBackend interface.
@@ -967,7 +1085,24 @@ impl JsStorage {
             get_object_last_modified_fn,
             get_object_conditional_fn,
         };
-        Ok(JsStorage(Arc::new(storage)))
+        Ok(JsStorage::new(Arc::new(storage)))
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn only_filesystem(method: &str) -> napi::Error {
+    napi::Error::from_reason(format!(
+        "{method} is only available on storage created with Storage.newFilesystem"
+    ))
+}
+
+#[cfg(all(unix, not(target_family = "wasm")))]
+impl JsStorage {
+    fn filesystem(
+        &self,
+        method: &str,
+    ) -> napi::Result<&icechunk::storage::FilesystemStorage> {
+        self.filesystem.as_deref().ok_or_else(|| only_filesystem(method))
     }
 }
 
@@ -979,13 +1114,105 @@ fn default_s3_options() -> icechunk::config::S3Options {
 #[cfg(not(target_family = "wasm"))]
 #[napi]
 impl JsStorage {
+    /// Storage on the local filesystem. Not safe for concurrent commits: a commit
+    /// can be lost. Use `newFilesystem` when several writers may commit.
     #[napi(factory)]
     pub async fn new_local_filesystem(path: String) -> napi::Result<JsStorage> {
         let storage =
             icechunk::storage::new_local_filesystem_storage(std::path::Path::new(&path))
                 .await
                 .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
+    }
+
+    /// Storage on a filesystem, safe for concurrent writers on filesystems that
+    /// meet the requirements in the Icechunk storage guide (hard links, atomic
+    /// rename by name, exclusive directory rename).
+    /// It stores the repository info in the filesystem layout: `repo.d/` holds
+    /// its versions, and there is no `repo` file. Other backends and Icechunk
+    /// before 2.4.0 can't open it; to use it with them, convert it
+    /// with `convertToObjectStoreLayout` first.
+    /// Repositories in the object store layout, as `newLocalFilesystem` and Icechunk
+    /// before 2.4.0 write them, are refused until converted, once, with
+    /// `convertToFilesystemLayout`. Experimental. Unix only.
+    #[napi(factory)]
+    pub async fn new_filesystem(path: String) -> napi::Result<JsStorage> {
+        #[cfg(unix)]
+        {
+            let filesystem = Arc::new(
+                icechunk::storage::FilesystemStorage::new(std::path::Path::new(&path))
+                    .map_napi_err()?,
+            );
+            Ok(JsStorage {
+                storage: Arc::clone(&filesystem) as Arc<dyn Storage + Send + Sync>,
+                filesystem: Some(filesystem),
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let storage =
+                icechunk::storage::new_filesystem_storage(std::path::Path::new(&path))
+                    .await
+                    .map_napi_err()?;
+            Ok(JsStorage::new(storage))
+        }
+    }
+
+    /// Converts a repository in the object store layout, as `newLocalFilesystem` and
+    /// Icechunk before 2.4.0 write it, to the filesystem layout of
+    /// `newFilesystem`, which refuses to open it until then. It changes only the
+    /// writer features and the update log, and keeps the repository's status,
+    /// except that a stored offline or undefined status is written as read-only.
+    /// Administrative: run it with nothing else using the repository, no writer
+    /// in any process and no other administrative operation; anything else is
+    /// undefined behavior. If it is interrupted, run it again under the same
+    /// condition: the rerun completes the conversion. Resolves to true if this
+    /// call converted the repository, including when it completed an
+    /// interrupted conversion; false if it was in the filesystem layout
+    /// already. Rejects if there is no repository.
+    #[napi]
+    pub async fn convert_to_filesystem_layout(&self) -> napi::Result<bool> {
+        #[cfg(unix)]
+        {
+            let outcome = self
+                .filesystem("convertToFilesystemLayout")?
+                .convert_to_filesystem_layout()
+                .await
+                .map_napi_err()?;
+            Ok(matches!(outcome, icechunk::storage::ConversionOutcome::Converted))
+        }
+        #[cfg(not(unix))]
+        Err(only_filesystem("convertToFilesystemLayout"))
+    }
+
+    /// Converts a repository in the filesystem layout of `newFilesystem` back to
+    /// the object store layout that `newLocalFilesystem`, other backends and
+    /// Icechunk before 2.4.0 write. It changes only the writer features and the
+    /// update log, and keeps the repository's status, except that a stored
+    /// offline or undefined status is written as read-only.
+    /// Administrative: run it with nothing else using the repository, no writer
+    /// in any process and no other administrative operation; anything else is
+    /// undefined behavior. If it is interrupted, run it again under the same
+    /// condition: the rerun completes the conversion. Until then, every write
+    /// and garbage collection through `newFilesystem` fails, saying that a
+    /// conversion to the object store layout is in progress and to rerun it.
+    /// To copy a filesystem-layout repository to other storage, convert it to
+    /// the object store layout first.
+    /// Resolves to true if this call converted the repository, false if it was
+    /// in the object store layout already; rejects if there is no repository.
+    #[napi]
+    pub async fn convert_to_object_store_layout(&self) -> napi::Result<bool> {
+        #[cfg(unix)]
+        {
+            let outcome = self
+                .filesystem("convertToObjectStoreLayout")?
+                .convert_to_object_store_layout()
+                .await
+                .map_napi_err()?;
+            Ok(matches!(outcome, icechunk::storage::ConversionOutcome::Converted))
+        }
+        #[cfg(not(unix))]
+        Err(only_filesystem("convertToObjectStoreLayout"))
     }
 
     #[napi(factory)]
@@ -1009,7 +1236,7 @@ impl JsStorage {
             None,
         )
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1033,7 +1260,7 @@ impl JsStorage {
             None,
         )
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1058,7 +1285,7 @@ impl JsStorage {
             None,
         )
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1080,7 +1307,7 @@ impl JsStorage {
         )
         .await
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1100,7 +1327,7 @@ impl JsStorage {
             Vec::new(),
         )
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1117,7 +1344,7 @@ impl JsStorage {
         )
         .await
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1128,7 +1355,7 @@ impl JsStorage {
     ) -> napi::Result<JsStorage> {
         let storage = icechunk::storage::new_http_storage(&base_url, config, headers)
             .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     // --- Refreshable credential factory methods ---
@@ -1161,7 +1388,7 @@ impl JsStorage {
             None,
         )
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1194,7 +1421,7 @@ impl JsStorage {
             None,
         )
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1228,7 +1455,7 @@ impl JsStorage {
             None,
         )
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1259,7 +1486,7 @@ impl JsStorage {
         )
         .await
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 
     #[napi(factory)]
@@ -1288,6 +1515,6 @@ impl JsStorage {
             Vec::new(),
         )
         .map_napi_err()?;
-        Ok(JsStorage(storage))
+        Ok(JsStorage::new(storage))
     }
 }

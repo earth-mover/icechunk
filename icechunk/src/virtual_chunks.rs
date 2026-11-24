@@ -85,8 +85,8 @@ use crate::{
     },
     private,
     storage::{
-        self, AttributionLabels, RequestAttribution, Storage, StorageContext,
-        split_in_multiple_requests, strip_quotes,
+        self, AttributionLabels, GetIfMatchResult, RequestAttribution, Storage,
+        StorageContext, split_in_multiple_requests, strip_quotes,
     },
 };
 #[cfg(feature = "s3")]
@@ -97,16 +97,37 @@ pub type ContainerName = String;
 /// Configuration for an external data source that virtual chunks can reference.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VirtualChunkContainer {
-    // name is no longer needed, but we keep it for compatibility with
-    // old serialized configurations
-    // We use default because for a while after 1.0 we were skipping
-    // serialization if None. Then we learned rmp_serde doesn't really
-    // support optional fields, so serialization was broken
+    // Relative virtual chunk locations (`vcc://<name>/<path>`) resolve by
+    // this name (spec 2.2). We use default because for a while after 1.0 we
+    // were skipping serialization if None, and old configurations lack it.
     #[serde(default)]
     pub name: Option<ContainerName>,
 
     url_prefix: String,
     pub store: ObjectStoreConfig,
+}
+
+/// A virtual chunk container of a stored repository configuration whose
+/// store settings we can't decode (they may come from a future version).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UndecodableVirtualChunkContainer {
+    name: Option<ContainerName>,
+    /// `None` when the entry's `url_prefix` doesn't decode either
+    url_prefix: Option<String>,
+}
+
+impl UndecodableVirtualChunkContainer {
+    pub(crate) fn new(name: Option<ContainerName>, url_prefix: Option<String>) -> Self {
+        Self { name, url_prefix }
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn url_prefix(&self) -> Option<&str> {
+        self.url_prefix.as_deref()
+    }
 }
 
 pub type VirtualChunkCredentialsError = String;
@@ -384,6 +405,8 @@ pub struct VirtualChunkResolver {
     container_fetchers: HashMap<String, Arc<dyn ChunkFetcher>>,
     #[serde(default)]
     attribution_labels: AttributionLabels,
+    #[serde(default)]
+    undecodable_containers: Vec<UndecodableVirtualChunkContainer>,
 }
 
 fn new_cache() -> ChunkFetcherCache {
@@ -433,7 +456,21 @@ impl VirtualChunkResolver {
             fetchers: new_cache(),
             container_fetchers: HashMap::new(),
             attribution_labels: AttributionLabels::default(),
+            undecodable_containers: Vec::new(),
         }
+    }
+
+    /// Containers whose store settings don't decode: locations under them
+    /// resolve, and reading them fails with a clear error.
+    pub fn with_undecodable_containers(
+        mut self,
+        containers: impl Iterator<Item = UndecodableVirtualChunkContainer>,
+    ) -> Self {
+        let mut containers: Vec<_> =
+            containers.filter(|cont| cont.url_prefix.is_some()).collect();
+        containers.sort_by_key(|cont| std::cmp::Reverse(cont.url_prefix().map(str::len)));
+        self.undecodable_containers = containers;
+        self
     }
 
     pub fn with_attribution(mut self, labels: AttributionLabels) -> Self {
@@ -509,6 +546,7 @@ impl VirtualChunkResolver {
             fetchers: new_cache(),
             container_fetchers,
             attribution_labels: self.attribution_labels.clone(),
+            undecodable_containers: self.undecodable_containers.clone(),
         }
     }
 
@@ -536,6 +574,31 @@ impl VirtualChunkResolver {
         self.containers.iter().find(|c| c.name.as_deref() == Some(name))
     }
 
+    /// Fails when the container with the longest prefix matching the absolute
+    /// `location` is one whose store settings don't decode.
+    fn fail_if_undecodable(&self, location: &str) -> Result<(), VirtualReferenceError> {
+        let Some((cont, url_prefix)) =
+            self.undecodable_containers.iter().find_map(|cont| {
+                let url_prefix = cont.url_prefix()?;
+                location.starts_with(url_prefix).then_some((cont, url_prefix))
+            })
+        else {
+            return Ok(());
+        };
+        if self
+            .matching_container_by_url(location)
+            .is_some_and(|decodable| decodable.url_prefix.len() >= url_prefix.len())
+        {
+            return Ok(());
+        }
+        Err(VirtualReferenceError::capture(
+            VirtualReferenceErrorKind::UndecodableVirtualChunkContainer {
+                url_prefix: url_prefix.to_string(),
+                name: cont.name.clone(),
+            },
+        ))
+    }
+
     /// Expand a chunk location to an absolute URL. For `vcc://name/path` locations,
     /// resolves the name to a container's `url_prefix`. For absolute URLs, returns as-is.
     pub fn expand_location(
@@ -555,13 +618,20 @@ impl VirtualChunkResolver {
         };
         let name = &rest[..slash];
         let relative_path = &rest[slash + 1..];
-        let cont = self
+        let url_prefix = self
             .matching_container_by_name(name)
+            .map(VirtualChunkContainer::url_prefix)
+            .or_else(|| {
+                self.undecodable_containers
+                    .iter()
+                    .find(|cont| cont.name() == Some(name))
+                    .and_then(UndecodableVirtualChunkContainer::url_prefix)
+            })
             .ok_or_else(|| {
                 VirtualReferenceErrorKind::NoContainerForName(name.to_string())
             })
             .capture()?;
-        Ok(format!("{}{}", cont.url_prefix(), relative_path))
+        Ok(format!("{url_prefix}{relative_path}"))
     }
 
     async fn get_fetcher(
@@ -597,6 +667,7 @@ impl VirtualChunkResolver {
         attribution: RequestAttribution<'_>,
     ) -> Result<Bytes, VirtualReferenceError> {
         let location = self.expand_location(chunk_location)?;
+        self.fail_if_undecodable(&location)?;
 
         // The parsed `url` is used only for the scheme/host/port and for matching
         // a container.
@@ -623,6 +694,9 @@ impl VirtualChunkResolver {
         &self,
         location: &VirtualChunkLocation,
     ) -> Result<(), VirtualReferenceError> {
+        if let Ok(expanded) = self.expand_location(location.url()) {
+            self.fail_if_undecodable(&expanded)?;
+        }
         let cont = self
             .matching_container(location)
             .ok_or_else(|| {
@@ -1292,26 +1366,20 @@ impl ChunkFetcher for StorageChunkFetcher {
             ))
         })?;
         let ctx = StorageContext::new(&self.settings, attribution);
-        let (stream, version) = self
-            .storage
-            .get_object_range(&ctx, path, Some(&range))
-            .await
-            .map_err(|e| fetch_error(Box::new(e)))?;
         let modified = || {
             VirtualReferenceError::capture(VirtualReferenceErrorKind::ObjectModified(
                 chunk_location.to_string(),
             ))
         };
-        match checksum {
-            Some(Checksum::ETag(expected)) => match &version.etag {
-                Some(actual) if strip_quotes(&actual.0) == strip_quotes(&expected.0) => {}
-                Some(_) => return Err(modified()),
-                None => {
-                    return Err(fetch_error(
-                        "the reference has an ETag checksum, but the storage returned no ETag to verify it"
-                            .into(),
-                    ));
-                }
+        let stream = match checksum {
+            Some(Checksum::ETag(expected)) => match self
+                .storage
+                .get_object_range_if_match(&ctx, path, Some(&range), expected)
+                .await
+                .map_err(|e| fetch_error(Box::new(e)))?
+            {
+                GetIfMatchResult::Matched(stream) => stream,
+                GetIfMatchResult::Modified => return Err(modified()),
             },
             Some(Checksum::LastModified(SecondsSinceEpoch(seconds))) => {
                 let last_modified = self
@@ -1322,9 +1390,17 @@ impl ChunkFetcher for StorageChunkFetcher {
                 if last_modified.timestamp() > i64::from(*seconds) {
                     return Err(modified());
                 }
+                self.storage
+                    .get_object_range(&ctx, path, Some(&range))
+                    .await
+                    .map_err(|e| fetch_error(Box::new(e)))?
             }
-            None => {}
-        }
+            None => self
+                .storage
+                .get_object_range(&ctx, path, Some(&range))
+                .await
+                .map_err(|e| fetch_error(Box::new(e)))?,
+        };
         let mut parts: Vec<Bytes> =
             stream.try_collect().await.map_err(|e| fetch_error(Box::new(e)))?;
         let bytes = if parts.len() == 1 {
@@ -2283,7 +2359,7 @@ mod http_callback_tests {
 mod container_storage_tests {
     use super::*;
     use crate::storage::{
-        UNATTRIBUTED_LABELS, VersionedUpdateResult, new_in_memory_storage,
+        PutCondition, UNATTRIBUTED_LABELS, VersionedUpdateResult, new_in_memory_storage,
     };
 
     async fn setup(
@@ -2293,13 +2369,13 @@ mod container_storage_tests {
         let settings = storage::Settings::default();
         let ctx = StorageContext::unattributed(&settings);
         let VersionedUpdateResult::Updated { new_version } = storage
-            .put_object(
+            .put_object_conditional(
                 &ctx,
                 "dir/f.nc",
                 Bytes::from((0u8..100).collect::<Vec<_>>()),
                 None,
                 vec![],
-                None,
+                PutCondition::Create,
             )
             .await
             .unwrap()

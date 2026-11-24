@@ -51,6 +51,12 @@ export declare class Repository {
   featureFlags(): Promise<Array<FeatureFlag>>
   enabledFeatureFlags(): Promise<Array<FeatureFlag>>
   disabledFeatureFlags(): Promise<Array<FeatureFlag>>
+  /**
+   * Icechunk before 2.4.0 ignores every flag except `move_node`, `create_tag`
+   * and `delete_tag`, so disabling another flag doesn't stop writers using an
+   * older Icechunk. To stop every writer, set the status to read-only (with
+   * Python or Rust) instead.
+   */
   setFeatureFlag(name: string, setting?: boolean | undefined | null): Promise<void>
   rearrangeSession(branch: string): Promise<JsSession>
   ancestry(options: VersionOptions): Promise<Array<SnapshotInfo>>
@@ -90,7 +96,57 @@ export declare class Storage {
    * especially useful for WASM builds where native Rust networking is unavailable.
    */
   static newCustom(backend: { canWrite: () => Promise<boolean>; getObjectRange: (args: StorageGetObjectRangeArgs) => Promise<StorageGetObjectResponse>; putObject: (args: StoragePutObjectArgs) => Promise<StorageVersionedUpdateResult>; copyObject: (args: StorageCopyObjectArgs) => Promise<StorageVersionedUpdateResult>; listObjects: (prefix: string) => Promise<Array<StorageListInfo>>; deleteBatch: (args: StorageDeleteBatchArgs) => Promise<StorageDeleteObjectsResult>; getObjectLastModified: (path: string) => Promise<Date>; getObjectConditional: (args: StorageGetObjectConditionalArgs) => Promise<StorageGetModifiedResult> }): Storage
+  /**
+   * Storage on the local filesystem. Not safe for concurrent commits: a commit
+   * can be lost. Use `newFilesystem` when several writers may commit.
+   */
   static newLocalFilesystem(path: string): Promise<Storage>
+  /**
+   * Storage on a filesystem, safe for concurrent writers on filesystems that
+   * meet the requirements in the Icechunk storage guide (hard links, atomic
+   * rename by name, exclusive directory rename).
+   * It stores the repository info in the filesystem layout: `repo.d/` holds
+   * its versions, and there is no `repo` file. Other backends and Icechunk
+   * before 2.4.0 can't open it; to use it with them, convert it
+   * with `convertToObjectStoreLayout` first.
+   * Repositories in the object store layout, as `newLocalFilesystem` and Icechunk
+   * before 2.4.0 write them, are refused until converted, once, with
+   * `convertToFilesystemLayout`. Experimental. Unix only.
+   */
+  static newFilesystem(path: string): Promise<Storage>
+  /**
+   * Converts a repository in the object store layout, as `newLocalFilesystem` and
+   * Icechunk before 2.4.0 write it, to the filesystem layout of
+   * `newFilesystem`, which refuses to open it until then. It changes only the
+   * writer features and the update log, and keeps the repository's status,
+   * except that a stored offline or undefined status is written as read-only.
+   * Administrative: run it with nothing else using the repository, no writer
+   * in any process and no other administrative operation; anything else is
+   * undefined behavior. If it is interrupted, run it again under the same
+   * condition: the rerun completes the conversion. Resolves to true if this
+   * call converted the repository, including when it completed an
+   * interrupted conversion; false if it was in the filesystem layout
+   * already. Rejects if there is no repository.
+   */
+  convertToFilesystemLayout(): Promise<boolean>
+  /**
+   * Converts a repository in the filesystem layout of `newFilesystem` back to
+   * the object store layout that `newLocalFilesystem`, other backends and
+   * Icechunk before 2.4.0 write. It changes only the writer features and the
+   * update log, and keeps the repository's status, except that a stored
+   * offline or undefined status is written as read-only.
+   * Administrative: run it with nothing else using the repository, no writer
+   * in any process and no other administrative operation; anything else is
+   * undefined behavior. If it is interrupted, run it again under the same
+   * condition: the rerun completes the conversion. Until then, every write
+   * and garbage collection through `newFilesystem` fails, saying that a
+   * conversion to the object store layout is in progress and to rerun it.
+   * To copy a filesystem-layout repository to other storage, convert it to
+   * the object store layout first.
+   * Resolves to true if this call converted the repository, false if it was
+   * in the object store layout already; rejects if there is no repository.
+   */
+  convertToObjectStoreLayout(): Promise<boolean>
   static newS3(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newR2(bucket?: string | undefined | null, prefix?: string | undefined | null, accountId?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null): Storage
   static newTigris(bucket: string, prefix?: string | undefined | null, credentials?: S3Credentials | undefined | null, options?: S3Options | undefined | null, useWeakConsistency?: boolean | undefined | null): Storage

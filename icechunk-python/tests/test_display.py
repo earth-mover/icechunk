@@ -30,6 +30,7 @@ from icechunk import (
     VirtualChunkContainer,
     in_memory_storage,
 )
+from tests.conftest import fs_storage
 
 
 @pytest.fixture
@@ -341,14 +342,18 @@ class TestStorageRepr:
         assert "in-memory" in html
         assert '<div class="icechunk-repr">' in html
 
-    def test_local_filesystem(self, tmp_path: object) -> None:
+    def test_local_filesystem(self, tmp_path: object, fs_backend: str) -> None:
         import tempfile
 
+        storage_type = {
+            "local_filesystem": "local filesystem",
+            "filesystem": "filesystem",
+        }[fs_backend]
         with tempfile.TemporaryDirectory() as td:
-            s = icechunk.local_filesystem_storage(td)
+            s = fs_storage(fs_backend, td)
             repr_str = repr(s)
             assert "<icechunk.Storage>" in repr_str
-            assert "type: local filesystem" in repr_str
+            assert f"type: {storage_type}\n" in repr_str
             assert "path:" in repr_str
             assert td in repr_str
 

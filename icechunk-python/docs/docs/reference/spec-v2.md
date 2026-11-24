@@ -5,7 +5,7 @@ title: Specification
 
 !!! Note
 
-    This is the Icechunk specification (spec version 2), used by Icechunk 2.0.x. For the previous on-disk format, see [spec version 1](./spec-v1.md). See [Changes from spec version 1 to 2](#changes-from-spec-version-1-to-2) for a summary of what changed.
+    This is the Icechunk specification, spec version 2. See [Spec versions](./version-policy.md#spec-versions) for the current version and the releases of the reference implementation that implement each. See [Changes from spec version 1 to 2](#changes-from-spec-version-1-to-2) for a summary of what changed.
 
 !!! Note
 

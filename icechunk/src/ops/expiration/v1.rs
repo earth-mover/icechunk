@@ -13,6 +13,7 @@ use crate::{
     format::SnapshotId,
     ops::{GCError, GCResult},
     refs::{Ref, delete_branch, delete_tag, list_refs},
+    storage::WriteHint,
 };
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -132,7 +133,8 @@ pub(super) async fn expire_ref(
     // TODO: add properties to the snapshot that tell us it was history edited
     #[expect(deprecated)]
     let new_snapshot = Arc::new(root.adopt(&editable_snap)?);
-    asset_manager.write_snapshot(new_snapshot).await?;
+    // Overwrites an existing snapshot id, which may be read concurrently.
+    asset_manager.write_snapshot(new_snapshot, WriteHint::Atomic).await?;
     tracing::info!("Snapshot overwritten");
 
     Ok(ExpireRefResult::Done {
