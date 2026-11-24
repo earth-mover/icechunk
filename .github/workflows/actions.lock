@@ -161,7 +161,7 @@ dependencies:
         repo_id: 265575535
     'earth-mover/pr-review-bot@main':
         ref: 'main'
-        commit: 'sha1-f7cfea1f147c016ef78c34660febd9f041561552'
+        commit: 'sha1-ca412625c81be079dfea0d130031e234e8736640'
         owner_id: 95875797
         repo_id: 1285345106
         uses:
