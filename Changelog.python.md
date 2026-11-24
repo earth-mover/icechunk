@@ -4,7 +4,7 @@
 
 ### Fixes
 
-- The `object_store` backends (`local_filesystem_storage`, `gcs_storage`, `azure_storage` and `s3_object_store_storage`) now return listed keys decoded. In spec 1 repositories, branches and tags named with characters such as `é` or `%` were missing from `list_branches` and `list_tags`, and `expire_snapshots` followed by `garbage_collect` deleted the snapshot of such a tag ([#2521](https://github.com/earth-mover/icechunk/issues/2521)).
+- The `object_store` backends (`local_filesystem_storage`, `gcs_storage`, `azure_storage` and `s3_object_store_storage`) now return listed keys decoded. In spec 1 repositories, branches and tags named with characters such as `é` or `%` were missing from `list_branches` and `list_tags`, and `expire_snapshots` followed by `garbage_collect` deleted the snapshot of such a tag ([#2521](https://github.com/earth-mover/icechunk/issues/2521), [#2582](https://github.com/earth-mover/icechunk/pull/2582)).
 
 ## Python Icechunk Library 2.4.0
 
