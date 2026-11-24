@@ -109,7 +109,7 @@ jobs:
           persist-credentials: false
 
       - name: Install just
-        uses: taiki-e/install-action@v2.90.1
+        uses: taiki-e/install-action@v2.90.5
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
