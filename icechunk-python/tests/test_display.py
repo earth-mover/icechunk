@@ -118,6 +118,12 @@ class TestReprRoundtrip:
             ObjectStoreConfig.S3(S3Options(region="us-east-1", allow_http=True))
         )
         assert_repr_roundtrips(ObjectStoreConfig.LocalFileSystem("/tmp/test"))
+        assert_repr_roundtrips(ObjectStoreConfig.Gcs(None))
+        assert_repr_roundtrips(ObjectStoreConfig.Gcs({"b": "2", "a": "1"}))
+        assert_repr_roundtrips(ObjectStoreConfig.Azure({"account": "acc"}))
+        http = ObjectStoreConfig.Http(None, {"authorization": 'Bearer "t" \\ x'})
+        assert_repr_roundtrips(http)
+        assert "Some(" not in str(http)
 
     def test_virtual_chunk_container(self) -> None:
         assert_repr_roundtrips(

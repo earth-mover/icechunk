@@ -8,13 +8,23 @@ import pytest
 from icechunk import (
     AzureCredentials,
     AzureRefreshableCredential,
+    AzureStaticCredentials,
+    Credentials,
+    GcsCredentials,
+    GcsStaticCredentials,
     IcechunkError,
+    ManifestSplitDimCondition,
+    ObjectStoreConfig,
     Repository,
+    S3Credentials,
     S3Options,
     S3StaticCredentials,
     Storage,
+    VirtualChunkContainer,
     azure_credentials,
     azure_refreshable_credentials,
+    containers_credentials,
+    gcs_credentials,
     s3_refreshable_credentials,
     s3_storage,
 )
@@ -252,3 +262,52 @@ def test_azure_refreshable_credentials_accept_variant_factory(
         AzureCredentials.Refreshable(pickle.dumps(get_azure_bearer), get_azure_bearer()),
         AzureCredentials.Refreshable,
     )
+
+
+def test_credentials_accept_gcs_and_azure_variants() -> None:
+    """mypy rejected a GCS or Azure variant where the base type is expected."""
+    gcs = Credentials.Gcs(gcs_credentials(anonymous=True))
+    azure = Credentials.Azure(azure_credentials(anonymous=True))
+    assert isinstance(gcs, Credentials)
+    assert isinstance(azure, Credentials)
+
+
+def test_parameters_accept_enum_base_types() -> None:
+    """mypy rejected a value typed as the enum base where a variant union is expected."""
+    s3: S3Credentials = S3Credentials.Anonymous()
+    gcs: GcsCredentials = gcs_credentials(anonymous=True)
+    azure: AzureCredentials = azure_credentials(anonymous=True)
+    store: ObjectStoreConfig = ObjectStoreConfig.InMemory()
+
+    assert isinstance(Credentials.S3(s3), Credentials)
+    assert isinstance(Storage.new_gcs("bucket", None, credentials=gcs), Storage)
+    assert isinstance(
+        Storage.new_azure_blob("account", "container", "prefix", credentials=azure),
+        Storage,
+    )
+    res = containers_credentials({"s3://a/": s3, "gs://b/": gcs, "az://c/": azure})
+    assert isinstance(res["s3://a/"], Credentials.S3)
+    assert isinstance(res["gs://b/"], Credentials.Gcs)
+    assert isinstance(res["az://c/"], Credentials.Azure)
+    assert VirtualChunkContainer("memory://", store).url_prefix == "memory://"
+
+
+@pytest.mark.parametrize(
+    "enum",
+    [
+        ObjectStoreConfig,
+        ManifestSplitDimCondition,
+        S3Credentials,
+        GcsStaticCredentials,
+        GcsCredentials,
+        AzureStaticCredentials,
+        AzureRefreshableCredential,
+        AzureCredentials,
+        Credentials,
+    ],
+)
+def test_enum_variants_subclass_their_enum(enum: type) -> None:
+    """The stub declares each variant as a subclass of its enum; pyo3 must agree."""
+    variants = [v for v in vars(enum).values() if isinstance(v, type)]
+    assert variants
+    assert all(issubclass(v, enum) for v in variants)
