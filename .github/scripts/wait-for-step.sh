@@ -1,13 +1,29 @@
 #!/usr/bin/env bash
-# Usage: wait-for-step.sh <job name> <step name>
+# Usage: wait-for-step.sh <job name> <step name> <artifact name>
 # Used instead of 'needs' so runner pickup and setup overlap the job waited on.
 set -euo pipefail
 
 job=$1
 step=$2
+artifact=$3
 # No job waited on reaches its step sooner than this many seconds after it starts
 earliest=90
 jobs_url="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100"
+
+wait_for_artifact() {
+  # The artifact list can lag the step result; download-artifact with github-token reads this list
+  local url="repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?name=$artifact"
+  local artifact_deadline=$((SECONDS + 120))
+  while [ "$SECONDS" -lt "$artifact_deadline" ]; do
+    if [ "$(gh api "$url" --jq .total_count || echo 0)" -gt 0 ]; then
+      echo "artifact '$artifact' is listed"
+      return 0
+    fi
+    sleep 3
+  done
+  echo "::error::artifact '$artifact' is not listed 2 minutes after '$step' succeeded"
+  exit 1
+}
 
 deadline=$((SECONDS + 1200))
 settle_deadline=
@@ -22,6 +38,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
   read -r status conclusion started step_conclusion <<<"${state:-none none 0 none}"
   if [ "$step_conclusion" = success ]; then
     echo "$job: '$step' succeeded"
+    wait_for_artifact
     exit 0
   fi
   if [ "$status" = completed ]; then
