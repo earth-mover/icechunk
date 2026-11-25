@@ -28,6 +28,7 @@
 
 ### Fixes
 
+- S3 storage and `s3_store` virtual chunk containers with a custom `endpoint_url` now use only HTTP/1.1. Reads were 1.5-8x slower over HTTP/2, which endpoints such as GCS, Source Cooperative and OSN offer. AWS S3 itself speaks only HTTP/1.1 and is unchanged. Timeouts, retries, TLS trust roots and the proxy environment variables work as before ([#2571](https://github.com/earth-mover/icechunk/issues/2571)).
 - `icechunk-js` errors include their causes, such as a CORS failure or the message thrown by a virtual chunk callback, instead of only the outer message ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
 - `createHttpVirtualChunkFetcher` accepts a 206 response of exactly the requested length when CORS hides `Content-Range`. It explains when CORS hides an `ETag` that a reference needs ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
 - `just js-build-wasi` works with rustup toolchains, and the contributing guide documents the macOS WASM toolchain ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).

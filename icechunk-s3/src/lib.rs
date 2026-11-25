@@ -3,6 +3,8 @@
 // Re-export AWS SDK types needed by consumers (e.g., icechunk's virtual_chunks)
 pub use aws_sdk_s3;
 
+mod http1;
+
 use std::{
     borrow::Cow, collections::HashMap, fmt, future::ready, ops::Range, pin::Pin,
     sync::Arc, time::Duration,
@@ -40,6 +42,7 @@ use futures::{
     Stream, StreamExt as _, TryStreamExt as _,
     stream::{self, BoxStream, FuturesOrdered},
 };
+use http1::TrustRoots;
 pub use icechunk_storage::s3_config::{
     S3ChecksumAlgorithm, S3Credentials, S3CredentialsFetcher, S3Options,
     S3StaticCredentials,
@@ -332,6 +335,7 @@ pub async fn mk_client(
     let mut aws_config =
         aws_config::defaults(BehaviorVersion::v2026_11_17()).region(region);
 
+    let custom_endpoint = endpoint.is_some();
     if let Some(endpoint) = endpoint {
         aws_config = aws_config.endpoint_url(endpoint);
     }
@@ -347,16 +351,28 @@ pub async fn mk_client(
     };
     aws_config = aws_config.stalled_stream_protection(stalled_stream);
 
-    match icechunk_storage::tls::tls_ca_bundle() {
-        Ok(None) => {}
-        Ok(Some(pem)) => {
-            aws_config = aws_config.http_client(https_client_with_roots(Some(pem)));
-        }
+    let roots = match icechunk_storage::tls::tls_ca_bundle() {
+        Ok(None) => TrustRoots::System,
+        Ok(Some(pem)) => TrustRoots::Pem(pem),
         // S3Storage::new rejects a bad file, so only a deserialized storage gets here.
         // An empty trust store fails every request instead of a silent fallback to system roots.
         Err(err) => {
             tracing::error!("{err}");
-            aws_config = aws_config.http_client(https_client_with_roots(None));
+            TrustRoots::Nothing
+        }
+    };
+    // AWS S3 speaks only HTTP/1.1. Other endpoints can offer HTTP/2, which is much slower.
+    if custom_endpoint {
+        aws_config = aws_config.http_client(http1::https_client(roots));
+    } else {
+        match roots {
+            TrustRoots::System => {}
+            TrustRoots::Pem(pem) => {
+                aws_config = aws_config.http_client(https_client_with_roots(Some(pem)));
+            }
+            TrustRoots::Nothing => {
+                aws_config = aws_config.http_client(https_client_with_roots(None));
+            }
         }
     }
 
@@ -2022,6 +2038,26 @@ mod tests {
         });
         let client = mk_client(&options, credentials, vec![], vec![], settings).await;
         client.config().timeout_config().cloned().expect("timeout config is always set")
+    }
+
+    async fn http_client_name(options: &S3Options) -> String {
+        let client = mk_client(
+            options,
+            S3Credentials::Anonymous,
+            vec![],
+            vec![],
+            &Settings::default(),
+        )
+        .await;
+        format!("{:?}", client.config().http_client())
+    }
+
+    #[tokio_test]
+    async fn only_custom_endpoints_use_the_http1_client() {
+        let aws = S3Options::default().with_region("us-east-1");
+        assert!(!http_client_name(&aws).await.contains("Http1Client"));
+        let custom = aws.with_endpoint_url("https://storage.googleapis.com");
+        assert!(http_client_name(&custom).await.contains("Http1Client"));
     }
 
     #[tokio_test]
