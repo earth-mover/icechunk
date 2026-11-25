@@ -36,6 +36,11 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Title of the issue the report job keeps up to date. Pinned here so the
+  # comment and close steps below can find that issue.
+  NIGHTLY_ISSUE_TITLE: "Nightly wheel build failed"
+
 defaults:
   run:
     working-directory: ./icechunk-python
@@ -483,7 +488,7 @@ jobs:
           issue_body="${issue_body//\{\{RESULTS\}\}/$results}"
 
           # Check for an existing open issue with the same title.
-          issue_title="Nightly wheel build failed"
+          issue_title="$NIGHTLY_ISSUE_TITLE"
           existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
 
           if [ -n "$existing_issue" ]; then
@@ -511,6 +516,23 @@ jobs:
           R_SDIST: ${{ needs.sdist.result }}
           R_NIGHTLY: ${{ needs.nightly.result }}
 
+        # The step above rewrites the issue body. GitHub notifies nobody of that
+        # change. Post a comment so the issue watchers see the new failure.
+      - name: Comment on the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          number=$(gh issue list --state open --limit 200 --json number,title |
+            jq -r --arg t "$NIGHTLY_ISSUE_TITLE" 'map(select(.title == $t)) | .[0].number // empty')
+          if [ -z "$number" ]; then
+            echo "no open issue titled '$NIGHTLY_ISSUE_TITLE'"
+            exit 0
+          fi
+          gh issue comment "$number" --body \
+            "Failed again in tonight's run: $RUN_URL. The issue body has the current failures."
+
   report-success:
     name: nightly-wheel-report-close
     runs-on: ubuntu-latest
@@ -532,7 +554,7 @@ jobs:
       - name: Close the nightly wheel failure issue if open
         shell: bash
         run: |
-          issue_title="Nightly wheel build failed"
+          issue_title="$NIGHTLY_ISSUE_TITLE"
           existing_issue=$(gh issue list --state open --label "CI" --search "\"$issue_title\" in:title" --json number --jq '.[0].number // empty')
           if [ -n "$existing_issue" ]; then
             echo "Build is green; closing issue #$existing_issue"
