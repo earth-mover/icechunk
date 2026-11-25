@@ -1,3 +1,4 @@
+import pickle
 from pathlib import Path
 from typing import Any, cast
 
@@ -124,8 +125,11 @@ def test_rebase_fails_on_user_atts_double_edit(repo: icechunk.Repository) -> Non
     "on_chunk_conflict",
     [icechunk.VersionSelection.UseOurs, icechunk.VersionSelection.UseTheirs],
 )
+@pytest.mark.parametrize("pickled", [False, True])
 def test_rebase_chunks_with_ours(
-    repo: icechunk.Repository, on_chunk_conflict: icechunk.VersionSelection
+    repo: icechunk.Repository,
+    on_chunk_conflict: icechunk.VersionSelection,
+    pickled: bool,
 ) -> None:
     session_a = repo.writable_session("main")
     session_b = repo.writable_session("main")
@@ -181,6 +185,8 @@ def test_rebase_chunks_with_ours(
     solver = icechunk.BasicConflictSolver(
         on_chunk_conflict=on_chunk_conflict,
     )
+    if pickled:
+        solver = pickle.loads(pickle.dumps(solver))
 
     session_b.commit("after conflict", rebase_with=solver)
 
@@ -188,11 +194,8 @@ def test_rebase_chunks_with_ours(
     store_c = session_c.store
     root_c = zarr.open_group(store=store_c, mode="r")
     array_c = cast("zarr.Array[Any]", root_c["foo/bar/some-array"])
-    assert (
-        array_c[0, 0] == 2
-        if on_chunk_conflict == icechunk.VersionSelection.UseOurs
-        else 1
-    )
+    ours = on_chunk_conflict == icechunk.VersionSelection.UseOurs
+    assert array_c[0, 0] == (2 if ours else 1)
     assert array_c[0, 1] == 1
 
 

@@ -74,7 +74,7 @@ pub struct JsonValue(pub serde_json::Value);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PySnapshotProperties(pub HashMap<String, JsonValue>);
 
-#[pyclass(name = "SnapshotInfo", eq)]
+#[pyclass(name = "SnapshotInfo", module = "icechunk", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PySnapshotInfo {
     #[pyo3(get)]
@@ -92,7 +92,7 @@ pub(crate) struct PySnapshotInfo {
 
 impl_pickle!(PySnapshotInfo);
 
-#[pyclass(name = "ManifestFileInfo", eq)]
+#[pyclass(name = "ManifestFileInfo", module = "icechunk", eq)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PyManifestFileInfo {
     #[pyo3(get)]
@@ -291,7 +291,7 @@ impl PySnapshotInfo {
     }
 }
 
-#[pyclass(name = "Diff", eq)]
+#[pyclass(name = "Diff", module = "icechunk", eq)]
 #[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct PyDiff {
     #[pyo3(get)]
@@ -474,7 +474,7 @@ impl PyDiff {
 
 impl_pickle!(PyDiff);
 
-#[pyclass(name = "GCSummary", eq)]
+#[pyclass(name = "GCSummary", module = "icechunk", eq)]
 #[derive(Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct PyGCSummary {
     #[pyo3(get)]

@@ -70,7 +70,7 @@ impl From<ChecksumArgument> for Checksum {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(from_py_object, module = "icechunk")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct VirtualChunkSpec {
     #[pyo3(get)]

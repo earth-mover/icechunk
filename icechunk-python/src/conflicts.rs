@@ -84,26 +84,6 @@ impl PyConflictType {
     fn __str__(&self) -> String {
         format!("{self}")
     }
-
-    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
-        use pyo3::IntoPyObjectExt as _;
-        let cls = py.get_type::<PyConflictType>().into_py_any(py)?;
-        let value: i32 = match self {
-            PyConflictType::NewNodeConflictsWithExistingNode => 1,
-            PyConflictType::NewNodeInInvalidGroup => 2,
-            PyConflictType::ZarrMetadataDoubleUpdate => 3,
-            PyConflictType::ZarrMetadataUpdateOfDeletedArray => 4,
-            PyConflictType::ZarrMetadataUpdateOfDeletedGroup => 5,
-            PyConflictType::ChunkDoubleUpdate => 6,
-            PyConflictType::ChunksUpdatedInDeletedArray => 7,
-            PyConflictType::ChunksUpdatedInUpdatedArray => 8,
-            PyConflictType::DeleteOfUpdatedArray => 9,
-            PyConflictType::DeleteOfUpdatedGroup => 10,
-            PyConflictType::MoveOperationCannotBeRebased => 11,
-        };
-        let args = (value,).into_py_any(py)?;
-        Ok((cls, args))
-    }
 }
 
 impl_pickle!(PyConflictType);
@@ -161,18 +141,6 @@ impl PyConflict {
 
     fn _repr_html_(&self) -> String {
         <Self as PyRepr>::_repr_html_(self)
-    }
-
-    fn __reduce__(&self, py: Python<'_>) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
-        use pyo3::IntoPyObjectExt as _;
-        let cls = py.get_type::<PyConflict>().into_py_any(py)?;
-        let args = (
-            self.conflict_type.clone(),
-            self.path.clone(),
-            self.conflicted_chunks.clone(),
-        )
-            .into_py_any(py)?;
-        Ok((cls, args))
     }
 }
 
@@ -246,7 +214,7 @@ impl From<&Conflict> for PyConflict {
     }
 }
 
-#[pyclass(from_py_object, name = "VersionSelection", eq)]
+#[pyclass(from_py_object, name = "VersionSelection", module = "icechunk", eq)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PyVersionSelection {
     Fail = 0,
@@ -282,9 +250,25 @@ impl<'a> AsRef<dyn ConflictSolver + 'a + Send + Sync> for PyConflictSolver {
     }
 }
 
-#[pyclass(name = "BasicConflictSolver", extends=PyConflictSolver)]
+/// The solver lives in the base class; its settings are kept here too, to pickle.
+#[pyclass(name = "BasicConflictSolver", extends=PyConflictSolver, module = "icechunk")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct PyBasicConflictSolver;
+pub(crate) struct PyBasicConflictSolver {
+    on_chunk_conflict: PyVersionSelection,
+    fail_on_delete_of_updated_array: bool,
+    fail_on_delete_of_updated_group: bool,
+}
+
+impl PyBasicConflictSolver {
+    fn into_initializer(self) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PyConflictSolver(Arc::new(BasicConflictSolver {
+            on_chunk_conflict: self.on_chunk_conflict.clone().into(),
+            fail_on_delete_of_updated_array: self.fail_on_delete_of_updated_array,
+            fail_on_delete_of_updated_group: self.fail_on_delete_of_updated_group,
+        })))
+        .add_subclass(self)
+    }
+}
 
 #[pymethods]
 impl PyBasicConflictSolver {
@@ -295,28 +279,34 @@ impl PyBasicConflictSolver {
         fail_on_delete_of_updated_array: bool,
         fail_on_delete_of_updated_group: bool,
     ) -> PyClassInitializer<Self> {
-        PyClassInitializer::from(PyConflictSolver(Arc::new(BasicConflictSolver {
-            on_chunk_conflict: on_chunk_conflict.into(),
+        Self {
+            on_chunk_conflict,
             fail_on_delete_of_updated_array,
             fail_on_delete_of_updated_group,
-        })))
-        .add_subclass(Self)
+        }
+        .into_initializer()
     }
 }
 
-impl_pickle!(PyBasicConflictSolver);
+impl_pickle!(PyBasicConflictSolver, init = PyBasicConflictSolver::into_initializer);
 
-#[pyclass(name = "ConflictDetector", extends=PyConflictSolver)]
+#[pyclass(name = "ConflictDetector", extends=PyConflictSolver, module = "icechunk")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PyConflictDetector;
+
+impl PyConflictDetector {
+    fn into_initializer(self) -> PyClassInitializer<Self> {
+        PyClassInitializer::from(PyConflictSolver(Arc::new(ConflictDetector)))
+            .add_subclass(self)
+    }
+}
 
 #[pymethods]
 impl PyConflictDetector {
     #[new]
     fn new() -> PyClassInitializer<Self> {
-        PyClassInitializer::from(PyConflictSolver(Arc::new(ConflictDetector)))
-            .add_subclass(Self)
+        Self.into_initializer()
     }
 }
 
-impl_pickle!(PyConflictDetector);
+impl_pickle!(PyConflictDetector, init = PyConflictDetector::into_initializer);

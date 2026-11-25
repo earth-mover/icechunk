@@ -1,12 +1,17 @@
+import datetime
 import pickle
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 import zarr
 from icechunk import (
+    BasicConflictSolver,
     Conflict,
+    ConflictDetector,
     ConflictError,
     ConflictType,
     IcechunkError,
@@ -14,6 +19,10 @@ from icechunk import (
     Repository,
     RepositoryConfig,
     S3StaticCredentials,
+    VersionSelection,
+    VirtualChunkSpec,
+    _icechunk_python,
+    in_memory_storage,
     local_filesystem_storage,
     s3_storage,
 )
@@ -179,3 +188,61 @@ def test_pickle_conflict_types() -> None:
     roundtripped_conflict_error = pickle.loads(pickle.dumps(conflict_error))
     assert roundtripped_conflict_error.expected_parent == conflict_error.expected_parent
     assert roundtripped_conflict_error.actual_parent == conflict_error.actual_parent
+
+
+def pickle_samples() -> dict[str, tuple[Any, Callable[[Any], Any]]]:
+    """One instance of every class pickled through `_from_pickle`, by class name,
+    with what a round trip must keep."""
+    repo = Repository.create(in_memory_storage(), spec_version=2)
+    session = repo.writable_session("main")
+    array = zarr.create_array(
+        session.store, name="a", shape=(2,), chunks=(1,), dtype="i4", fill_value=0
+    )
+    array[:] = 1
+    snapshot = session.commit("write")
+    initial = list(repo.ancestry(snapshot_id=snapshot))[-1].id
+    info = next(iter(repo.ancestry(snapshot_id=snapshot)))
+    gc = repo.garbage_collect(datetime.datetime.now(datetime.UTC))
+    spec = VirtualChunkSpec(
+        index=[0], location="s3://bucket/key", offset=1, length=2, etag_checksum="e"
+    )
+
+    def same(x: Any) -> Any:
+        return x
+
+    return {
+        "ConflictType": (ConflictType.ChunkDoubleUpdate, same),
+        "Conflict": (
+            Conflict(ConflictType.ChunkDoubleUpdate, "/a", [[0], [1]]),
+            lambda c: (c.conflict_type, c.path, c.conflicted_chunks),
+        ),
+        "VersionSelection": (VersionSelection.UseTheirs, same),
+        "BasicConflictSolver": (BasicConflictSolver(), type),
+        "ConflictDetector": (ConflictDetector(), type),
+        "VirtualChunkSpec": (
+            spec,
+            lambda s: (s.index, s.location, s.offset, s.length, s.etag_checksum),
+        ),
+        "SnapshotInfo": (info, same),
+        "ManifestFileInfo": (repo.list_manifest_files(snapshot)[0], same),
+        "Diff": (repo.diff(from_snapshot_id=initial, to_snapshot_id=snapshot), same),
+        "GCSummary": (gc, same),
+    }
+
+
+def test_every_picklable_class_has_a_sample() -> None:
+    generated = {
+        name
+        for name, cls in vars(_icechunk_python).items()
+        if isinstance(cls, type) and "_from_pickle" in vars(cls)
+    }
+    assert generated == set(pickle_samples())
+
+
+@pytest.mark.parametrize("name", sorted(pickle_samples()))
+def test_pickle_round_trip(name: str) -> None:
+    obj, kept = pickle_samples()[name]
+    assert type(obj).__module__ == "icechunk"
+    roundtripped = pickle.loads(pickle.dumps(obj))
+    assert type(roundtripped) is type(obj)
+    assert kept(roundtripped) == kept(obj)
