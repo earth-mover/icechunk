@@ -2,6 +2,7 @@ from collections.abc import Iterable
 from typing import Any, cast
 
 import numpy as np
+import pytest
 
 import icechunk as ic
 import zarr
@@ -111,3 +112,25 @@ def test_reindex_with_missing_chunks() -> None:
     arr = zarr.open_array(session.store, path="data")
     session.reindex_array("/data", forward=fwd, backward=bwd)
     np.testing.assert_equal(arr[:], [-1, 1, -1])
+
+
+@pytest.mark.parametrize("fail_backward", [False, True], ids=["forward", "backward"])
+def test_reindex_callback_error(fail_backward: bool) -> None:
+    """Callback failures leave the array and its writable session intact."""
+    repo = ic.Repository.create(storage=ic.in_memory_storage())
+    session = repo.writable_session("main")
+    data = np.arange(1, 4, dtype="i4")
+    array = zarr.group(session.store).create_array("array", chunks=(1,), data=data)
+
+    def fail(idx: Iterable[int]) -> Iterable[int] | None:
+        raise ValueError("mapping failed")
+
+    with pytest.raises(ic.IcechunkError, match="mapping failed"):
+        if fail_backward:
+            # No destination was produced, so the backward callback must run.
+            session.reindex_array("/array", lambda idx: None, fail)
+        else:
+            session.reindex_array("/array", fail)
+
+    np.testing.assert_array_equal(array[:], data)
+    session.commit("after failed reindex")
