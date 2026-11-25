@@ -83,7 +83,7 @@ tokio = { workspace = true, features = [
 # Browser (wasm32-unknown-unknown): no Tokio runtime, tasks run on the JS
 # event loop. See `src/rt.rs`.
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
-gloo-timers = { version = "0.3.0", features = ["futures"] }
+gloo-timers = { version = "0.4.1", features = ["futures"] }
 wasm-bindgen-futures = "0.4.64"
 # Randomness comes from `crypto.getRandomValues`. Libraries normally leave this
 # choice to the application, but icechunk already requires a JS host here (it
