@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from collections.abc import Iterable
 from typing import Any, cast
 
@@ -134,3 +136,66 @@ def test_reindex_callback_error(fail_backward: bool) -> None:
 
     np.testing.assert_array_equal(array[:], data)
     session.commit("after failed reindex")
+
+
+SHARED_SESSION_SCRIPT = """
+import faulthandler
+import os
+import sys
+import threading
+
+import numpy as np
+
+import icechunk as ic
+import zarr
+
+faulthandler.dump_traceback_later(30, exit=True)
+
+
+def exit_on_thread_error(args):
+    threading.__excepthook__(args)
+    os._exit(1)
+
+
+threading.excepthook = exit_on_thread_error
+repo = ic.Repository.create(storage=ic.in_memory_storage())
+session = repo.writable_session("main")
+store = session.store
+zarr.group(store).create_array("a", chunks=(1,), data=np.arange(256, dtype="i4"))
+# zarr keeps one store and calls str(store) on it.
+call = {
+    "str-store": lambda: str(store),
+    "str-session": lambda: str(session),
+    "chunk-type": lambda: session.chunk_type("/a", [0]),
+}[sys.argv[1]]
+done = threading.Event()
+
+
+def caller():
+    while not done.is_set():
+        call()
+
+
+thread = threading.Thread(target=caller)
+thread.start()
+try:
+    for _ in range(5):
+        session.reindex_array("/a", lambda idx: None)
+finally:
+    done.set()
+    thread.join()
+"""
+
+
+@pytest.mark.parametrize("call", ["str-store", "str-session", "chunk-type"])
+def test_reindex_shared_session_no_deadlock(call: str) -> None:
+    """Another thread can wait for the session lock while a reindex runs."""
+    # A child interpreter, because a deadlocked thread can hold the GIL.
+    result = subprocess.run(
+        [sys.executable, "-c", SHARED_SESSION_SCRIPT, call],
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
