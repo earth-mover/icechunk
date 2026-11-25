@@ -105,16 +105,17 @@ impl PyRepr for PySession {
 /// Most functions in this class block, so they need to `detach` so other
 /// python threads can make progress
 impl PySession {
-    pub(crate) fn __repr__(&self) -> String {
-        <Self as PyRepr>::__repr__(self)
+    // The session lock holder may need the GIL, so wait for it detached.
+    pub(crate) fn __repr__(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::__repr__(self))
     }
 
-    pub(crate) fn __str__(&self) -> String {
-        <Self as PyRepr>::__str__(self)
+    pub(crate) fn __str__(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::__str__(self))
     }
 
-    pub(crate) fn _repr_html_(&self) -> String {
-        <Self as PyRepr>::_repr_html_(self)
+    pub(crate) fn _repr_html_(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::_repr_html_(self))
     }
 
     #[classmethod]
@@ -300,7 +301,7 @@ impl PySession {
 
     #[pyo3(signature = (array_path, forward, backward=None))]
     pub fn reindex_array<'py>(
-        &mut self,
+        &self,
         py: Python<'py>,
         array_path: String,
         forward: Bound<'py, PyFunction>,
@@ -310,49 +311,55 @@ impl PySession {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
-        fn make_py_reindex_closure<'py>(
-            py: Python<'py>,
-            func: Bound<'py, PyFunction>,
-        ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'py> {
+        fn make_py_reindex_closure(
+            func: Py<PyFunction>,
+        ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult> {
             Box::new(move |idx: &ChunkIndices| {
-                let python_index = idx.0.clone().into_pyobject(py).map_err(|e| {
-                    SessionError::capture(SessionErrorKind::Other(Box::new(e)))
-                })?;
-                let new_index = func.call1((python_index,)).map_err(|e| {
-                    SessionError::capture(SessionErrorKind::Other(Box::new(e)))
-                })?;
-                if new_index.is_none() {
-                    Ok(None)
-                } else {
-                    let new_index: Vec<u32> = new_index.extract().map_err(|e| {
+                Python::attach(|py| {
+                    let python_index = idx.0.clone().into_pyobject(py).map_err(|e| {
                         SessionError::capture(SessionErrorKind::Other(Box::new(e)))
                     })?;
-                    Ok(Some(ChunkIndices(new_index)))
-                }
+                    let new_index =
+                        func.bind(py).call1((python_index,)).map_err(|e| {
+                            SessionError::capture(SessionErrorKind::Other(Box::new(e)))
+                        })?;
+                    if new_index.is_none() {
+                        Ok(None)
+                    } else {
+                        let new_index: Vec<u32> = new_index.extract().map_err(|e| {
+                            SessionError::capture(SessionErrorKind::Other(Box::new(e)))
+                        })?;
+                        Ok(Some(ChunkIndices(new_index)))
+                    }
+                })
             })
         }
 
-        let forward = make_py_reindex_closure(py, forward);
-        let mapping = match backward {
-            Some(backward) => ReindexMapping::ForwardBackward {
-                forward,
-                backward: make_py_reindex_closure(py, backward),
-            },
-            None => ReindexMapping::ForwardOnly(forward),
-        };
-        // TODO: detach
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let mut session = self.0.write().await;
-            session
-                .reindex_array(&array_path, mapping)
-                .await
-                .map_err(PyIcechunkStoreError::SessionError)?;
-            Ok(())
+        let forward = forward.unbind();
+        let backward = backward.map(Bound::unbind);
+        py.detach(move || {
+            let forward = make_py_reindex_closure(forward);
+            let mapping = match backward {
+                Some(backward) => ReindexMapping::ForwardBackward {
+                    forward,
+                    backward: make_py_reindex_closure(backward),
+                },
+                None => ReindexMapping::ForwardOnly(forward),
+            };
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let mut session = self.0.write().await;
+                session
+                    .reindex_array(&array_path, mapping)
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(())
+            })
         })
     }
 
     pub fn shift_array(
-        &mut self,
+        &self,
+        py: Python<'_>,
         array_path: String,
         chunk_offset: Vec<i64>,
     ) -> PyResult<()> {
@@ -360,14 +367,15 @@ impl PySession {
             .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
 
-        // TODO: detach
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            let mut session = self.0.write().await;
-            session
-                .shift_array(&array_path, chunk_offset.as_slice())
-                .await
-                .map_err(PyIcechunkStoreError::SessionError)?;
-            Ok(())
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                let mut session = self.0.write().await;
+                session
+                    .shift_array(&array_path, chunk_offset.as_slice())
+                    .await
+                    .map_err(PyIcechunkStoreError::SessionError)?;
+                Ok(())
+            })
         })
     }
 
@@ -482,12 +490,15 @@ impl PySession {
 
     pub fn chunk_type(
         &self,
+        py: Python<'_>,
         array_path: String,
         coords: Vec<u32>,
     ) -> PyResult<ChunkType> {
         let session = Arc::clone(&self.0);
-        pyo3_async_runtimes::tokio::get_runtime()
-            .block_on(Self::chunk_type_inner(session, array_path, coords))
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime()
+                .block_on(Self::chunk_type_inner(session, array_path, coords))
+        })
     }
 
     pub fn chunk_type_async<'py>(

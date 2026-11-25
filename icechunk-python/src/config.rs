@@ -3308,12 +3308,14 @@ impl PyStorage {
         <Self as PyRepr>::_repr_html_(self)
     }
 
-    pub(crate) fn default_settings(&self) -> PyResult<PyStorageSettings> {
-        let res = pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-            self.0
-                .default_settings()
-                .await
-                .map_err(|e| PyValueError::new_err(e.to_string()))
+    pub(crate) fn default_settings(&self, py: Python<'_>) -> PyResult<PyStorageSettings> {
+        let res = py.detach(|| {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
+                self.0
+                    .default_settings()
+                    .await
+                    .map_err(|e| PyValueError::new_err(e.to_string()))
+            })
         })?;
         Ok(res.into())
     }
@@ -3329,33 +3331,36 @@ impl PyStorage {
     #[pyo3(signature = (settings=None, prefix=None))]
     pub(crate) fn list_objects(
         &self,
+        py: Python<'_>,
         settings: Option<&PyStorageSettings>,
         prefix: Option<String>,
     ) -> PyResult<Vec<(String, u64)>> {
         let prefix = prefix.unwrap_or_default();
         let settings: Option<storage::Settings> = settings.map(|s| s.into());
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
-            let defaults = self
-                .0
-                .default_settings()
-                .await
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            let settings = match settings {
-                Some(s) => s.merge(defaults),
-                None => defaults,
-            };
-            let ctx = StorageContext::unattributed(&settings);
-            let stream = self
-                .0
-                .list_objects(&ctx, &prefix)
-                .await
-                .map_err(PyIcechunkStoreError::StorageError)?;
-            let results: Vec<(String, u64)> = stream
-                .map_ok(|info| (info.id, info.size_bytes))
-                .try_collect()
-                .await
-                .map_err(PyIcechunkStoreError::StorageError)?;
-            Ok(results)
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+                let defaults = self
+                    .0
+                    .default_settings()
+                    .await
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                let settings = match settings {
+                    Some(s) => s.merge(defaults),
+                    None => defaults,
+                };
+                let ctx = StorageContext::unattributed(&settings);
+                let stream = self
+                    .0
+                    .list_objects(&ctx, &prefix)
+                    .await
+                    .map_err(PyIcechunkStoreError::StorageError)?;
+                let results: Vec<(String, u64)> = stream
+                    .map_ok(|info| (info.id, info.size_bytes))
+                    .try_collect()
+                    .await
+                    .map_err(PyIcechunkStoreError::StorageError)?;
+                Ok(results)
+            })
         })
     }
 
@@ -3371,37 +3376,40 @@ impl PyStorage {
     #[pyo3(signature = (settings=None, prefix=None))]
     pub(crate) fn list_objects_metadata(
         &self,
+        py: Python<'_>,
         settings: Option<&PyStorageSettings>,
         prefix: Option<String>,
     ) -> PyResult<Vec<PyStorageObjectInfo>> {
         let prefix = prefix.unwrap_or_default();
         let settings: Option<storage::Settings> = settings.map(|s| s.into());
-        pyo3_async_runtimes::tokio::get_runtime().block_on(async {
-            let defaults = self
-                .0
-                .default_settings()
-                .await
-                .map_err(|e| PyValueError::new_err(e.to_string()))?;
-            let settings = match settings {
-                Some(s) => s.merge(defaults),
-                None => defaults,
-            };
-            let ctx = StorageContext::unattributed(&settings);
-            let stream = self
-                .0
-                .list_objects(&ctx, &prefix)
-                .await
-                .map_err(PyIcechunkStoreError::StorageError)?;
-            let results: Vec<PyStorageObjectInfo> = stream
-                .map_ok(|info| PyStorageObjectInfo {
-                    key: info.id,
-                    size_bytes: info.size_bytes,
-                    created_at: info.created_at,
-                })
-                .try_collect()
-                .await
-                .map_err(PyIcechunkStoreError::StorageError)?;
-            Ok(results)
+        py.detach(move || {
+            pyo3_async_runtimes::tokio::get_runtime().block_on(async {
+                let defaults = self
+                    .0
+                    .default_settings()
+                    .await
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                let settings = match settings {
+                    Some(s) => s.merge(defaults),
+                    None => defaults,
+                };
+                let ctx = StorageContext::unattributed(&settings);
+                let stream = self
+                    .0
+                    .list_objects(&ctx, &prefix)
+                    .await
+                    .map_err(PyIcechunkStoreError::StorageError)?;
+                let results: Vec<PyStorageObjectInfo> = stream
+                    .map_ok(|info| PyStorageObjectInfo {
+                        key: info.id,
+                        size_bytes: info.size_bytes,
+                        created_at: info.created_at,
+                    })
+                    .try_collect()
+                    .await
+                    .map_err(PyIcechunkStoreError::StorageError)?;
+                Ok(results)
+            })
         })
     }
 }
