@@ -1,42 +1,41 @@
 # Changelog
 
-## Unreleased
+## Python Icechunk Library 2.4.0
 
 ### Breaking changes
 
-- `icechunk-js`: the browser build is now wasm-bindgen instead of napi WASI, with the same API. It needs no `--cpu=wasm32` install, cross-origin isolation (COOP/COEP) headers or Vite plugins. It runs on the thread that imports it, and session getters return the state from before a running operation instead of blocking. `@earthmover/icechunk-wasm32-wasi` is no longer published.
-- Rust only: the `napi-send-contract` feature of `icechunk` is removed.
+- `icechunk-js`: the browser build uses wasm-bindgen instead of napi WASI, with the same API. It no longer needs cross-origin isolation headers or bundler plugins. `@earthmover/icechunk-wasm32-wasi` is no longer published ([#2584](https://github.com/earth-mover/icechunk/pull/2584)).
+- Rust only: the `napi-send-contract` feature of `icechunk` is removed ([#2584](https://github.com/earth-mover/icechunk/pull/2584)).
+- Rust only: `TransactionLog` no longer implements `Default`, which was unsound ([#2563](https://github.com/earth-mover/icechunk/pull/2563)).
 
 ### Features
 
-- `icechunk-js`: native Node.js binaries for Linux arm64 (glibc) and Intel macOS.
-- `icechunk-js`: `@earthmover/icechunk/web` names the browser build explicitly, and `@earthmover/icechunk/web/init` loads its `.wasm` only when you call `init()` or `initSync()` (for esbuild, service workers and server-side rendering). Both export a `createFetchStorage` for their own `Storage`.
-- Rust only: `icechunk` builds for `wasm32-unknown-unknown` (browsers). `Storage` and the other async traits do not require `Send` futures there (`#[icechunk_storage::maybe_send_async_trait]`), and `icechunk::rt` runs tasks on the JS event loop ([#2574](https://github.com/earth-mover/icechunk/issues/2574)).
-
-- Add feature flags. A disabled flag makes the library refuse that operation on the repository. All flags default to enabled. Call `Repository.set_feature_flag(name, False)` to disable a flag ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
-  - New flags: `commit`, `amend`, `rebase`, `create_new_nodes`, `delete_nodes`, `update_chunks`, `update_array_metadata`, `update_group_metadata`, `create_branch`, `delete_branch`, `reset_branch`, `garbage_collection`, `expiration`, `update_config`, `set_default_commit_metadata`, `update_repository_metadata`, `rewrite_manifests`.
-  - A commit or flush checks the flags for its session content before it uploads data.
-  - With `commit` disabled, `Repository.writable_session` and `Repository.rearrange_session` raise `IcechunkError`.
-  - An expiration that deletes expired branches or tags also needs the `delete_branch` or `delete_tag` flag.
-  - An array resize that removes chunks needs `update_chunks`. Chunk writes to a new array need only `create_new_nodes`.
-  - Each flag guards one operation. To freeze a branch, also disable `reset_branch`, `delete_branch`, `create_branch` and `move_node`. The design doc 013 lists the flag interactions.
-- New environment variable `ICECHUNK_TLS_CA_FILE`: when set to a PEM file of CA certificates, Icechunk trusts only those certificates for all storage types. Use it in processes that cannot use the system trust store, such as a sandboxed macOS process. TLS certificate errors now include a hint that mentions the variable ([#2517](https://github.com/earth-mover/icechunk/pull/2517)).
-- `StorageTimeoutSettings` now applies to the `object_store` backends (`gcs_storage`, `azure_storage`, `http_storage` and `s3_object_store_storage`). They honor `connect_timeout_ms` and `operation_attempt_timeout_ms`, which take precedence over the same options in the backend `config`. `read_timeout_ms` and `operation_timeout_ms` still apply only to the S3 client.
-- A timeout of 0 in `StorageTimeoutSettings` disables that timeout, including the client default.
-- `icechunk-js`: `Repository.setVirtualChunkStorage(urlPrefix, storage)` reads a virtual chunk container's chunks from any `Storage`, such as `Storage.newCustom(...)` or the fetch storage, instead of the container's configured backend. The container must still be authorized. In the browser this reads public `s3://` references over HTTPS ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
-- Rust only: `Repository::set_virtual_chunk_storage` and `VirtualChunkResolver::with_container_storage` do the same. `HttpVirtualChunkFetcher`, `HttpVirtualChunkResponse`, `VirtualChunkResolver::with_http_fetcher` and `Repository::set_http_virtual_chunk_fetcher` are deprecated in favor of them, with unchanged behavior ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
+- Feature flags: `Repository.set_feature_flag(name, False)` disables one operation on a repository, such as `commit` or `garbage_collection`. All flags are enabled by default ([#2432](https://github.com/earth-mover/icechunk/pull/2432)).
+- The environment variable `ICECHUNK_TLS_CA_FILE` sets the CA certificates that Icechunk trusts, for all storage types ([#2517](https://github.com/earth-mover/icechunk/pull/2517)).
+- `StorageTimeoutSettings` also applies to `gcs_storage`, `azure_storage`, `http_storage` and `s3_object_store_storage`. A timeout of 0 disables that timeout ([#2516](https://github.com/earth-mover/icechunk/pull/2516)).
+- `icechunk-js`: native Node.js binaries for Linux arm64 and Intel macOS, and a `@earthmover/icechunk/web/init` entry point that loads the `.wasm` on demand ([#2584](https://github.com/earth-mover/icechunk/pull/2584)).
+- `icechunk-js`: `Repository.setVirtualChunkStorage` reads the chunks of a virtual chunk container through any `Storage` ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
+- Rust only: `icechunk` builds for `wasm32-unknown-unknown` (browsers) ([#2574](https://github.com/earth-mover/icechunk/issues/2574), [#2584](https://github.com/earth-mover/icechunk/pull/2584)).
+- Rust only: `Repository::set_virtual_chunk_storage` reads virtual chunks through any `Storage`. It replaces the HTTP virtual chunk fetcher APIs, which are deprecated ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
 
 ### Fixes
 
-- `icechunk-js` errors include their causes, such as a CORS failure or the message thrown by a virtual chunk callback, instead of only the outer message ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
-- `createHttpVirtualChunkFetcher` accepts a 206 response of exactly the requested length when CORS hides `Content-Range`. It explains when CORS hides an `ETag` that a reference needs ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
-- `just js-build-wasi` works with rustup toolchains, and the contributing guide documents the macOS WASM toolchain ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
-- `icechunk-js`: the `Storage.new*WithRefreshableCredentials` factories now await a credentials callback that returns a `Promise`, as their types declare. Before, an `async` callback failed on first use with `object store error dispatch failure`. A callback that returns the credentials directly still works. A `Storage` with a credentials callback no longer keeps the Node.js process alive after all work is done ([#2568](https://github.com/earth-mover/icechunk/pull/2568)).
+- The S3 clients (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) have a default per-attempt timeout of 10 minutes, so a request to a server that never answers is retried instead of waiting forever ([#2516](https://github.com/earth-mover/icechunk/pull/2516)).
+- Concurrent writers no longer hang or deadlock when one of them runs `Session.reindex_array` or `Session.shift_array` ([#2589](https://github.com/earth-mover/icechunk/issues/2589), [#2590](https://github.com/earth-mover/icechunk/pull/2590)).
+- `pickle` works again for Rust-backed classes such as `SnapshotInfo`, `Diff` and `GCSummary` ([#2591](https://github.com/earth-mover/icechunk/issues/2591), [#2592](https://github.com/earth-mover/icechunk/pull/2592)).
+- `s3_storage` works with S3 Express One Zone directory buckets. Before, `garbage_collect` and other listings failed on them ([#2538](https://github.com/earth-mover/icechunk/issues/2538), [#2544](https://github.com/earth-mover/icechunk/pull/2544)).
+- Spec version 2 repositories open with S3 credentials that cannot list the bucket ([#1680](https://github.com/earth-mover/icechunk/issues/1680), [#2579](https://github.com/earth-mover/icechunk/pull/2579)).
+- The AWS credential clients, such as STS and SSO, get a default read timeout from the AWS SDK behavior version `v2026_11_17` ([#2547](https://github.com/earth-mover/icechunk/pull/2547), [#2561](https://github.com/earth-mover/icechunk/pull/2561)).
+- Malformed repository files give an error instead of a panic or an infinite loop ([#2564](https://github.com/earth-mover/icechunk/pull/2564), [#2565](https://github.com/earth-mover/icechunk/pull/2565)).
+- Rust only: `ArrayShape::get` no longer panics on a 0-d array ([#2566](https://github.com/earth-mover/icechunk/pull/2566)).
+- `icechunk-js`: errors include their causes, such as a CORS failure ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
+- `icechunk-js`: `createHttpVirtualChunkFetcher` works when CORS hides the `Content-Range` header ([#2554](https://github.com/earth-mover/icechunk/pull/2554)).
+- `icechunk-js`: refreshable credential callbacks can be `async`, and they no longer keep the Node.js process alive ([#2568](https://github.com/earth-mover/icechunk/pull/2568)).
 
-- The S3 client (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) has a default per-attempt timeout of 10 minutes. A server that accepted a request and never answered used to make the request wait forever. Now the attempt fails and is retried. Set `operation_attempt_timeout_ms` to change the limit, or to 0 to disable it.
-- `Session.reindex_array` and `Session.shift_array` release the GIL while they wait for storage. Concurrent writers no longer hang when one of them reindexes ([#2589](https://github.com/earth-mover/icechunk/issues/2589), [#2590](https://github.com/earth-mover/icechunk/pull/2590)).
-- `str()`, `repr()` and the HTML repr of `Session` and `IcechunkStore`, and `Session.chunk_type`, release the GIL while they wait for the session. These calls no longer deadlock with a `reindex_array` on the same session in another thread ([#2590](https://github.com/earth-mover/icechunk/pull/2590)).
-- `s3_storage` works with S3 Express One Zone directory buckets, whose names end in `--x-s3`. Listing operations, such as `garbage_collect`, used to fail with `InvalidRequest` because these buckets accept only a list prefix that ends in `/` ([#2538](https://github.com/earth-mover/icechunk/issues/2538)).
+### Security
+
+- Updated `url` to 2.5.9 for RUSTSEC-2026-0592 ([#2580](https://github.com/earth-mover/icechunk/pull/2580)).
+- Updated `lru` to 0.18 for RUSTSEC-2026-0253 ([#2552](https://github.com/earth-mover/icechunk/pull/2552)).
 
 ## Python Icechunk Library 2.3.1
 
