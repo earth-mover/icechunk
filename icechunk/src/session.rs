@@ -243,6 +243,12 @@ pub enum ReindexMapping<'a> {
         forward: Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a>,
         backward: Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a>,
     },
+    /// Maps one batch of chunks per call. Bindings use it to cross into the host language
+    /// once per batch. Without `backward`, it acts as `ForwardOnly`.
+    Batched {
+        forward: ReindexBatchFn<'a>,
+        backward: Option<ReindexBatchFn<'a>>,
+    },
 }
 
 /// Extracts the chunk grid name from zarr array metadata bytes.
@@ -270,9 +276,30 @@ impl std::fmt::Debug for ReindexMapping<'_> {
         match self {
             Self::ForwardOnly(_) => f.debug_tuple("ForwardOnly").finish(),
             Self::ForwardBackward { .. } => f.debug_struct("ForwardBackward").finish(),
+            Self::Batched { .. } => f.debug_struct("Batched").finish(),
         }
     }
 }
+
+impl<'a> ReindexMapping<'a> {
+    fn into_batched(self) -> (ReindexBatchFn<'a>, Option<ReindexBatchFn<'a>>) {
+        fn per_chunk<'a>(
+            f: Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a>,
+        ) -> ReindexBatchFn<'a> {
+            Box::new(move |indices| indices.iter().map(&f).collect())
+        }
+        match self {
+            Self::ForwardOnly(forward) => (per_chunk(forward), None),
+            Self::ForwardBackward { forward, backward } => {
+                (per_chunk(forward), Some(per_chunk(backward)))
+            }
+            Self::Batched { forward, backward } => (forward, backward),
+        }
+    }
+}
+
+/// Number of chunks that `reindex_array` passes to one batch callback call.
+const REINDEX_BATCH_SIZE: usize = 1024;
 
 // Returns the index of split_range that includes ChunkIndices using _linear search_.
 // This is used at read time to choose which manifest to query for chunk payload
@@ -517,6 +544,9 @@ impl<'a> CommitBuilder<'a> {
 }
 
 pub type ReindexOperationResult = Result<Option<ChunkIndices>, SessionError>;
+/// One result for each input index of a batch, in the same order.
+pub type ReindexBatchResult = Result<Vec<Option<ChunkIndices>>, SessionError>;
+pub type ReindexBatchFn<'a> = Box<dyn Fn(&[ChunkIndices]) -> ReindexBatchResult + 'a>;
 
 /// A transaction context for reading and writing Icechunk data.
 ///
@@ -984,11 +1014,38 @@ impl Session {
     /// With `ForwardOnly`, source positions that are not also destinations retain their
     /// existing chunk refs (stale data). With `ForwardBackward`, the backward function
     /// is used to detect and delete stale positions, ensuring empty chunks shift correctly.
+    ///
+    /// The chunks are processed in batches. In each batch, the forward function runs for
+    /// all chunks before the backward function runs. The result is the same as with one
+    /// chunk at a time.
     pub async fn reindex_array<'a>(
         &mut self,
         array_path: &Path,
         calculate_new_index: ReindexMapping<'a>,
     ) -> SessionResult<()> {
+        self.reindex_array_in_batches(array_path, calculate_new_index, REINDEX_BATCH_SIZE)
+            .await
+    }
+
+    async fn reindex_array_in_batches(
+        &mut self,
+        array_path: &Path,
+        calculate_new_index: ReindexMapping<'_>,
+        batch_size: usize,
+    ) -> SessionResult<()> {
+        fn check_batch_len(got: usize, expected: usize) -> SessionResult<()> {
+            if got == expected {
+                Ok(())
+            } else {
+                Err(SessionError::capture(SessionErrorKind::Other(
+                    format!(
+                        "reindex callback returned {got} results for a batch of {expected} chunks"
+                    )
+                    .into(),
+                )))
+            }
+        }
+
         let node = self.get_array(array_path).await?;
         // Only reindex when the metadata positively declares a regular chunk grid.
         // Chunks on other grids have position-dependent sizes, so relabeling their
@@ -1014,48 +1071,98 @@ impl Session {
         let mut change_set = ChangeSet::for_edits();
         let mut destinations = HashSet::new();
 
-        let (forward, backwards) = match calculate_new_index {
-            ReindexMapping::ForwardOnly(forward) => (forward, None),
-            ReindexMapping::ForwardBackward { forward, backward } => {
-                (forward, Some(backward))
-            }
-        };
+        let (forward, backward) = calculate_new_index.into_batched();
+        let batch_size = batch_size.max(1);
+        let mut batch = Vec::with_capacity(batch_size);
         // TODO: concurrency
-        while let Some(old_chunk_index) = original_chunks.try_next().await? {
+        loop {
+            let next = original_chunks.try_next().await?;
+            let done = next.is_none();
             // Skip out-of-bounds indices (e.g. ghost deletes from a prior resize)
-            if !shape.valid_chunk_coord(&old_chunk_index) {
+            if let Some(old_chunk_index) = next
+                && shape.valid_chunk_coord(&old_chunk_index)
+            {
+                batch.push(old_chunk_index);
+            }
+            let flush = batch.len() >= batch_size || (done && !batch.is_empty());
+            if !flush {
+                if done {
+                    break;
+                }
                 continue;
             }
-            if let Some(new_chunk_index) = forward(&old_chunk_index)? {
-                let new_payload =
-                    self.get_chunk_ref(array_path, &old_chunk_index).await?;
-                if shape.valid_chunk_coord(&new_chunk_index) {
+            let batch_indices =
+                std::mem::replace(&mut batch, Vec::with_capacity(batch_size));
+
+            let targets = forward(&batch_indices)?;
+            check_batch_len(targets.len(), batch_indices.len())?;
+
+            // Walk in chunk order, so `destinations` grows as in a one-chunk loop.
+            let mut needs_backward = Vec::new();
+            for (pos, (old_chunk_index, new_chunk_index)) in
+                batch_indices.iter().zip(&targets).enumerate()
+            {
+                if let Some(new_chunk_index) = new_chunk_index {
+                    if !shape.valid_chunk_coord(new_chunk_index) {
+                        return Err(SessionError::capture(
+                            SessionErrorKind::InvalidIndex {
+                                coords: new_chunk_index.clone(),
+                                path: node.path.clone(),
+                            },
+                        ));
+                    }
                     destinations.insert(new_chunk_index.clone());
+                }
+                if backward.is_some() && !destinations.contains(old_chunk_index) {
+                    needs_backward.push(pos);
+                }
+            }
+
+            let sources = match &backward {
+                Some(backward) if !needs_backward.is_empty() => {
+                    let olds: Vec<ChunkIndices> = needs_backward
+                        .iter()
+                        .map(|&pos| batch_indices[pos].clone())
+                        .collect();
+                    let sources = backward(&olds)?;
+                    check_batch_len(sources.len(), olds.len())?;
+                    sources
+                }
+                _ => Vec::new(),
+            };
+
+            // Write the change set in chunk order, as a one-chunk loop does.
+            let mut sources = needs_backward.into_iter().zip(sources).peekable();
+            for (pos, (old_chunk_index, new_chunk_index)) in
+                batch_indices.into_iter().zip(targets).enumerate()
+            {
+                if let Some(new_chunk_index) = new_chunk_index {
+                    let new_payload =
+                        self.get_chunk_ref(array_path, &old_chunk_index).await?;
                     change_set.set_chunk_ref(
                         node.id.clone(),
                         new_chunk_index,
                         new_payload,
                     )?;
-                } else {
-                    return Err(SessionError::capture(SessionErrorKind::InvalidIndex {
-                        coords: new_chunk_index,
-                        path: node.path.clone(),
-                    }));
+                }
+                if let Some((_, source)) = sources.next_if(|(p, _)| *p == pos) {
+                    let should_delete = match source {
+                        None => true, // out of bounds
+                        Some(source) => {
+                            self.get_chunk_ref(array_path, &source).await?.is_none()
+                        } // empty source chunk or not?
+                    };
+                    if should_delete {
+                        change_set.set_chunk_ref(
+                            node.id.clone(),
+                            old_chunk_index,
+                            None,
+                        )?;
+                    }
                 }
             }
-            if let Some(ref backwards) = backwards {
-                if destinations.contains(&old_chunk_index) {
-                    continue;
-                }
-                let should_delete = match backwards(&old_chunk_index)? {
-                    None => true, // out of bounds
-                    Some(source) => {
-                        self.get_chunk_ref(array_path, &source).await?.is_none()
-                    } // empty source chunk or not?
-                };
-                if should_delete {
-                    change_set.set_chunk_ref(node.id.clone(), old_chunk_index, None)?;
-                }
+            if done {
+                break;
             }
         }
         drop(original_chunks);
@@ -6297,6 +6404,186 @@ mod tests {
         }
 
         assert_eq!(session.get_chunk_ref(&apath, &ChunkIndices(vec![9])).await?, None);
+        Ok(())
+    }
+
+    /// A new session on a committed 1-D array of `num_chunks` chunks of size 1. Chunk `i`
+    /// holds "i" if `present[i]`.
+    async fn reindex_test_session(num_chunks: u32, present: &[bool]) -> (Session, Path) {
+        let storage: Arc<dyn Storage + Send + Sync> =
+            new_in_memory_storage().await.unwrap();
+        let repo = Repository::create(storage).execute().await.unwrap();
+        let mut session = repo.writable_session("main").await.unwrap();
+        session.add_group(Path::root(), Bytes::new()).await.unwrap();
+        let apath: Path = "/array".try_into().unwrap();
+        let user_data = Bytes::from(format!(
+            r#"{{"zarr_format":3,"node_type":"array","shape":[{num_chunks}],"data_type":"int32","chunk_grid":{{"name":"regular","configuration":{{"chunk_shape":[1]}}}},"chunk_key_encoding":{{"name":"default","configuration":{{"separator":"/"}}}},"fill_value":0,"codecs":[{{"name":"bytes","configuration":{{"endian":"little"}}}}]}}"#
+        ));
+        let shape = ArrayShape::new(vec![(num_chunks as u64, num_chunks)]).unwrap();
+        session.add_array(apath.clone(), shape, None, user_data).await.unwrap();
+        for i in 0..num_chunks {
+            if present[i as usize] {
+                let payload = Some(ChunkPayload::Inline(i.to_string().into()));
+                session
+                    .set_chunk_ref(apath.clone(), ChunkIndices(vec![i]), payload)
+                    .await
+                    .unwrap();
+            }
+        }
+        session.commit("setup").execute().await.unwrap();
+        (repo.writable_session("main").await.unwrap(), apath)
+    }
+
+    /// Reindexes with lookup tables. Returns the visit order of `chunk_coordinates` and the
+    /// chunk ref at each position after the reindex.
+    async fn reindex_with_tables(
+        num_chunks: u32,
+        present: &[bool],
+        forward: &[Option<u32>],
+        backward: Option<&[Option<u32>]>,
+        batch_size: usize,
+    ) -> (Vec<u32>, SessionResult<Vec<Option<ChunkPayload>>>) {
+        fn table_fn<'a>(
+            table: &'a [Option<u32>],
+        ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult + 'a> {
+            Box::new(move |idx| {
+                Ok(table[idx.0[0] as usize].map(|i| ChunkIndices(vec![i])))
+            })
+        }
+        let (mut session, apath) = reindex_test_session(num_chunks, present).await;
+        let order: Vec<u32> = session
+            .chunk_coordinates(&apath)
+            .await
+            .unwrap()
+            .map_ok(|c| c.0[0])
+            .try_collect()
+            .await
+            .unwrap();
+        let mapping = match backward {
+            Some(backward) => ReindexMapping::ForwardBackward {
+                forward: table_fn(forward),
+                backward: table_fn(backward),
+            },
+            None => ReindexMapping::ForwardOnly(table_fn(forward)),
+        };
+        let result = async {
+            session.reindex_array_in_batches(&apath, mapping, batch_size).await?;
+            let mut refs = Vec::new();
+            for i in 0..num_chunks {
+                refs.push(session.get_chunk_ref(&apath, &ChunkIndices(vec![i])).await?);
+            }
+            Ok(refs)
+        }
+        .await;
+        (order, result)
+    }
+
+    /// The one-chunk reindex loop, over plain maps. `None` means an invalid index error.
+    fn reindex_model(
+        num_chunks: u32,
+        order: &[u32],
+        present: &[bool],
+        forward: &[Option<u32>],
+        backward: Option<&[Option<u32>]>,
+    ) -> Option<Vec<Option<ChunkPayload>>> {
+        let before = |i: u32| {
+            present[i as usize].then(|| ChunkPayload::Inline(i.to_string().into()))
+        };
+        let mut changes = HashMap::new();
+        let mut destinations = HashSet::new();
+        for &old in order {
+            if let Some(new) = forward[old as usize] {
+                if new >= num_chunks {
+                    return None;
+                }
+                destinations.insert(new);
+                changes.insert(new, before(old));
+            }
+            if let Some(backward) = backward {
+                if destinations.contains(&old) {
+                    continue;
+                }
+                let delete = match backward[old as usize] {
+                    None => true,
+                    Some(source) => before(source).is_none(),
+                };
+                if delete {
+                    changes.insert(old, None);
+                }
+            }
+        }
+        Some(
+            (0..num_chunks)
+                .map(|i| changes.get(&i).cloned().unwrap_or_else(|| before(i)))
+                .collect(),
+        )
+    }
+
+    /// Each batch size must give the result of the one-chunk loop.
+    #[proptest(async = "tokio")]
+    async fn test_reindex_batches_match_one_chunk_loop(
+        #[strategy(1u32..24)] num_chunks: u32,
+        #[strategy(proptest::collection::vec(proptest::bool::ANY, 24))] present: Vec<
+            bool,
+        >,
+        #[strategy(proptest::collection::vec(proptest::option::of(0u32..1000), 24))]
+        forward: Vec<Option<u32>>,
+        #[strategy(proptest::option::of(proptest::collection::vec(
+            proptest::option::of(0u32..1000),
+            24
+        )))]
+        backward: Option<Vec<Option<u32>>>,
+        #[strategy(1usize..9)] batch_size: usize,
+    ) {
+        // Forward can hit index `num_chunks`, the only invalid target. Backward stays valid.
+        let forward: Vec<Option<u32>> =
+            forward.iter().map(|v| v.map(|i| i % (num_chunks + 1))).collect();
+        let backward: Option<Vec<Option<u32>>> = backward
+            .map(|table| table.iter().map(|v| v.map(|i| i % num_chunks)).collect());
+
+        let (order, result) = reindex_with_tables(
+            num_chunks,
+            &present,
+            &forward,
+            backward.as_deref(),
+            batch_size,
+        )
+        .await;
+        let expected =
+            reindex_model(num_chunks, &order, &present, &forward, backward.as_deref());
+        match (result, expected) {
+            (Ok(result), Some(expected)) => prop_assert_eq!(result, expected),
+            (
+                Err(SessionError { kind: SessionErrorKind::InvalidIndex { .. }, .. }),
+                None,
+            ) => {}
+            (result, expected) => {
+                prop_assert!(false, "result: {result:?}, model: {expected:?}");
+            }
+        }
+    }
+
+    #[tokio_test]
+    async fn test_reindex_batched_calls_and_result_count() -> Result<(), Box<dyn Error>> {
+        let (mut session, apath) = reindex_test_session(10, &[true; 10]).await;
+        let sizes = std::sync::Mutex::new(Vec::new());
+        let mapping = ReindexMapping::Batched {
+            forward: Box::new(|indices: &[ChunkIndices]| {
+                sizes.lock().unwrap().push(indices.len());
+                Ok(vec![None; indices.len()])
+            }),
+            backward: None,
+        };
+        session.reindex_array_in_batches(&apath, mapping, 4).await?;
+        assert_eq!(*sizes.lock().unwrap(), vec![4, 4, 2]);
+
+        // A callback with the wrong number of results gives an error, not a panic.
+        let mapping = ReindexMapping::Batched {
+            forward: Box::new(|_: &[ChunkIndices]| Ok(vec![None])),
+            backward: None,
+        };
+        let err = session.reindex_array_in_batches(&apath, mapping, 4).await.unwrap_err();
+        assert!(err.to_string().contains("returned 1 results for a batch of 4"), "{err}");
         Ok(())
     }
 

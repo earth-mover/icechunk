@@ -6,8 +6,8 @@ use icechunk::{
     Store,
     format::{ChunkIndices, Path, manifest::ChunkPayload},
     session::{
-        ReindexMapping, ReindexOperationResult, Session, SessionError, SessionErrorKind,
-        SessionMode,
+        ReindexBatchFn, ReindexMapping, ReindexOperationResult, Session, SessionError,
+        SessionErrorKind, SessionMode,
     },
     store::{StoreError, StoreErrorKind},
 };
@@ -311,26 +311,34 @@ impl PySession {
         let array_path = Path::new(array_path.as_str())
             .map_err(|e| StoreError::capture(StoreErrorKind::PathError(e)))
             .map_err(PyIcechunkStoreError::StoreError)?;
-        fn make_py_reindex_closure(
-            func: Py<PyFunction>,
-        ) -> Box<dyn Fn(&ChunkIndices) -> ReindexOperationResult> {
-            Box::new(move |idx: &ChunkIndices| {
+        fn call_py_reindex_fn(
+            py: Python<'_>,
+            func: &Bound<'_, PyFunction>,
+            idx: &ChunkIndices,
+        ) -> ReindexOperationResult {
+            let python_index = idx.0.clone().into_pyobject(py).map_err(|e| {
+                SessionError::capture(SessionErrorKind::Other(Box::new(e)))
+            })?;
+            let new_index = func.call1((python_index,)).map_err(|e| {
+                SessionError::capture(SessionErrorKind::Other(Box::new(e)))
+            })?;
+            if new_index.is_none() {
+                Ok(None)
+            } else {
+                let new_index: Vec<u32> = new_index.extract().map_err(|e| {
+                    SessionError::capture(SessionErrorKind::Other(Box::new(e)))
+                })?;
+                Ok(Some(ChunkIndices(new_index)))
+            }
+        }
+
+        fn make_py_reindex_batch_fn(func: Py<PyFunction>) -> ReindexBatchFn<'static> {
+            // One GIL acquisition per batch, so a busy Python thread delays each batch,
+            // not each chunk.
+            Box::new(move |indices: &[ChunkIndices]| {
                 Python::attach(|py| {
-                    let python_index = idx.0.clone().into_pyobject(py).map_err(|e| {
-                        SessionError::capture(SessionErrorKind::Other(Box::new(e)))
-                    })?;
-                    let new_index =
-                        func.bind(py).call1((python_index,)).map_err(|e| {
-                            SessionError::capture(SessionErrorKind::Other(Box::new(e)))
-                        })?;
-                    if new_index.is_none() {
-                        Ok(None)
-                    } else {
-                        let new_index: Vec<u32> = new_index.extract().map_err(|e| {
-                            SessionError::capture(SessionErrorKind::Other(Box::new(e)))
-                        })?;
-                        Ok(Some(ChunkIndices(new_index)))
-                    }
+                    let func = func.bind(py);
+                    indices.iter().map(|idx| call_py_reindex_fn(py, func, idx)).collect()
                 })
             })
         }
@@ -339,13 +347,9 @@ impl PySession {
         let backward = backward.map(Bound::unbind);
         py.detach(move || {
             pyo3_async_runtimes::tokio::get_runtime().block_on(async move {
-                let forward = make_py_reindex_closure(forward);
-                let mapping = match backward {
-                    Some(backward) => ReindexMapping::ForwardBackward {
-                        forward,
-                        backward: make_py_reindex_closure(backward),
-                    },
-                    None => ReindexMapping::ForwardOnly(forward),
+                let mapping = ReindexMapping::Batched {
+                    forward: make_py_reindex_batch_fn(forward),
+                    backward: backward.map(make_py_reindex_batch_fn),
                 };
                 let mut session = self.0.write().await;
                 session
