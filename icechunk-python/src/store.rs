@@ -70,7 +70,7 @@ impl From<ChecksumArgument> for Checksum {
     }
 }
 
-#[pyclass(from_py_object)]
+#[pyclass(from_py_object, module = "icechunk")]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct VirtualChunkSpec {
     #[pyo3(get)]
@@ -167,16 +167,17 @@ impl PyStore {
         Arc::ptr_eq(&self.0.session(), &other.0.session())
     }
 
-    pub(crate) fn __repr__(&self) -> String {
-        <Self as PyRepr>::__repr__(self)
+    // The session lock holder may need the GIL, so wait for it detached.
+    pub(crate) fn __repr__(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::__repr__(self))
     }
 
-    pub(crate) fn __str__(&self) -> String {
-        <Self as PyRepr>::__str__(self)
+    pub(crate) fn __str__(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::__str__(self))
     }
 
-    pub(crate) fn _repr_html_(&self) -> String {
-        <Self as PyRepr>::_repr_html_(self)
+    pub(crate) fn _repr_html_(&self, py: Python<'_>) -> String {
+        py.detach(|| <Self as PyRepr>::_repr_html_(self))
     }
 
     #[getter]
