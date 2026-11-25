@@ -23,7 +23,7 @@ use pyo3::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{conflicts::PyConflict, impl_pickle};
+use crate::{conflicts::PyConflict, impl_exception_pickle_state};
 
 /// A simple wrapper around the `StoreError` to make it easier to convert to a `PyErr`
 ///
@@ -796,7 +796,7 @@ impl IcechunkError {
     }
 }
 
-impl_pickle!(IcechunkError);
+impl_exception_pickle_state!(IcechunkError);
 
 #[pyclass(extends=IcechunkError, subclass, name = "ConflictError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
@@ -861,7 +861,7 @@ impl PyConflictError {
     }
 }
 
-impl_pickle!(PyConflictError);
+impl_exception_pickle_state!(PyConflictError);
 
 #[pyclass(extends=PyConflictError, name = "RebaseFailedError", module = "icechunk")]
 #[derive(Serialize, Deserialize)]
@@ -918,4 +918,4 @@ impl PyRebaseFailedError {
     }
 }
 
-impl_pickle!(PyRebaseFailedError);
+impl_exception_pickle_state!(PyRebaseFailedError);

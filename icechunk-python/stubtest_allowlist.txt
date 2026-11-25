@@ -208,6 +208,9 @@ icechunk._icechunk_python.UpdateType.TagCreated.__new__
 icechunk._icechunk_python.UpdateType.TagDeleted.__match_args__
 icechunk._icechunk_python.UpdateType.TagDeleted.__new__
 icechunk._icechunk_python.VersionSelection
+icechunk._icechunk_python.VersionSelection.Fail
+icechunk._icechunk_python.VersionSelection.UseOurs
+icechunk._icechunk_python.VersionSelection.UseTheirs
 icechunk._icechunk_python.VirtualChunkContainer
 icechunk._icechunk_python.VirtualChunkSpec
 icechunk._icechunk_python.__all__
