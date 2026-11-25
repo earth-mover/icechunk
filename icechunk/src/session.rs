@@ -9,7 +9,6 @@
 //! - **Rearrange**: Can move/rename nodes (no chunk writes)
 
 use crate::rt::JoinError;
-use async_stream::try_stream;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt as _, TryStreamExt as _, future::Either, stream};
@@ -1548,30 +1547,17 @@ impl Session {
     ) -> SessionResult<impl Stream<Item = SessionResult<ChunkIndices>> + 'a + use<'a>>
     {
         let node = self.get_array(array_path).await?;
-        let updated_chunks = updated_node_chunks_iterator(
+        // Yields the chunks that this session wrote, then the snapshot chunks that it did
+        // not change or delete.
+        let chunks = updated_node_chunks_iterator(
             self.asset_manager.as_ref(),
             self.change_set(),
             &self.snapshot_id,
-            node.clone(),
+            node,
         )
         .await
         .map_ok(|(_path, chunk_info)| chunk_info.coord);
-
-        let res = try_stream! {
-            let new_chunks = stream::iter(
-                self.change_set()
-                    .array_chunks_iterator(&node.id, array_path)
-                    .map(|(coord, _)| Ok::<ChunkIndices, SessionError>(coord.clone())),
-            );
-
-            for await maybe_coords in updated_chunks.chain(new_chunks) {
-                match maybe_coords {
-                    Ok(coords) => {yield coords;}
-                    Err(err) => Err(err)?
-                }
-            }
-        };
-        Ok(res)
+        Ok(chunks)
     }
 
     #[instrument(skip(self))]
@@ -6244,6 +6230,61 @@ mod tests {
         .await?;
         ds.set_chunk_ref(apath.clone(), ChunkIndices(vec![0, 0]), None).await?;
 
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn test_chunk_coordinates_lists_each_existing_chunk_once(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        async fn coords(session: &Session, path: &Path) -> SessionResult<Vec<u32>> {
+            let mut coords: Vec<u32> = session
+                .chunk_coordinates(path)
+                .await?
+                .map_ok(|c| c.0[0])
+                .try_collect()
+                .await?;
+            coords.sort_unstable();
+            Ok(coords)
+        }
+        fn payload(i: u32) -> Option<ChunkPayload> {
+            Some(ChunkPayload::Inline(i.to_string().into()))
+        }
+
+        let storage: Arc<dyn Storage + Send + Sync> = new_in_memory_storage().await?;
+        let repo =
+            Repository::create(storage).spec_version(spec_version).execute().await?;
+        let mut session = repo.writable_session("main").await?;
+        session.add_group(Path::root(), Bytes::new()).await?;
+        let committed: Path = "/committed".try_into()?;
+        let shape = ArrayShape::new(vec![(5, 5)]).unwrap();
+        session.add_array(committed.clone(), shape.clone(), None, Bytes::new()).await?;
+        for i in 0..3 {
+            session
+                .set_chunk_ref(committed.clone(), ChunkIndices(vec![i]), payload(i))
+                .await?;
+        }
+        session.commit("setup").execute().await?;
+
+        let mut session = repo.writable_session("main").await?;
+        // Overwrite 1, delete 2, write 3.
+        session
+            .set_chunk_ref(committed.clone(), ChunkIndices(vec![1]), payload(10))
+            .await?;
+        session.set_chunk_ref(committed.clone(), ChunkIndices(vec![2]), None).await?;
+        session
+            .set_chunk_ref(committed.clone(), ChunkIndices(vec![3]), payload(3))
+            .await?;
+        assert_eq!(coords(&session, &committed).await?, vec![0, 1, 3]);
+
+        // An array that is new in this session.
+        let new: Path = "/new".try_into()?;
+        session.add_array(new.clone(), shape, None, Bytes::new()).await?;
+        session.set_chunk_ref(new.clone(), ChunkIndices(vec![0]), payload(0)).await?;
+        session.set_chunk_ref(new.clone(), ChunkIndices(vec![1]), payload(1)).await?;
+        session.set_chunk_ref(new.clone(), ChunkIndices(vec![1]), None).await?;
+        assert_eq!(coords(&session, &new).await?, vec![0]);
         Ok(())
     }
 

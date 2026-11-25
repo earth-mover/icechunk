@@ -604,3 +604,25 @@ async def test_repo_status_readonly_blocks_writable_session_async() -> None:
     await repo.create_branch_async("not read-only anymore!", snapshot_id=new_snapshot_id)
     await repo.create_tag_async("an online tag", snapshot_id=new_snapshot_id)
     await repo.garbage_collect_async(datetime.now(UTC))
+
+
+async def test_chunk_coordinates_lists_each_existing_chunk_once(
+    any_spec_version: int | None,
+) -> None:
+    repo = Repository.create(storage=in_memory_storage(), spec_version=any_spec_version)
+    session = repo.writable_session("main")
+    array = zarr.create_array(
+        session.store, name="a", shape=(5,), chunks=(1,), dtype="i4", fill_value=-1
+    )
+    array[0:3] = [0, 1, 2]
+    session.commit("setup")
+
+    session = repo.writable_session("main")
+    array = zarr.open_array(session.store, path="a")
+    # Overwrite chunk 1, write chunk 3, delete chunk 2.
+    array[1] = 10
+    array[3] = 3
+    await session.store.delete("a/c/2")
+
+    coords = [c async for c in session.chunk_coordinates("/a")]
+    assert sorted(coords) == [(0,), (1,), (3,)]
