@@ -23,10 +23,7 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-use tokio::{
-    sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc},
-    task::{AbortHandle, JoinSet},
-};
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc};
 use tracing::{info, instrument};
 
 use crate::{
@@ -38,6 +35,7 @@ use crate::{
     },
     ops::AbortOnDrop,
     repository::{RepositoryError, RepositoryErrorKind, RepositoryResult},
+    rt::{AbortHandle, JoinSet},
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
 
@@ -315,7 +313,7 @@ async fn decode_worker<C: ManifestConsumer>(
         let consumer = Arc::clone(&consumer);
         let blocking_progress = Arc::clone(&progress);
         let span = tracing::Span::current();
-        let output = tokio::task::spawn_blocking(move || {
+        let output = crate::rt::spawn_blocking(move || {
             let _entered = span.entered();
             let Fetched { info, bytes, _permit: compressed_permit } = fetched;
             let manifest = decode_manifest(
@@ -521,7 +519,7 @@ pub async fn walk_manifests<C: ManifestConsumer>(
     let progress = Arc::new(WalkProgress::default());
     let started = Instant::now();
     // held in a guard so every return path below, success or error, aborts it
-    let mut reporter = AbortOnDrop(tokio::spawn(report_progress(
+    let mut reporter = AbortOnDrop(crate::rt::spawn(report_progress(
         Arc::clone(&progress),
         Arc::downgrade(&consumer),
         Arc::clone(&decoded_budget),
@@ -557,7 +555,7 @@ pub async fn walk_manifests<C: ManifestConsumer>(
     // exited must close, or an upstream worker blocks on `send` forever
     drop(infos_rx);
     drop(bytes_rx);
-    let folder = tokio::spawn(fold_outputs::<C>(out_rx));
+    let folder = crate::rt::spawn(fold_outputs::<C>(out_rx));
 
     let abort_everything = |aborts: &[AbortHandle]| {
         for handle in aborts {

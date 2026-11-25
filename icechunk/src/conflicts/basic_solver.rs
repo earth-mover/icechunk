@@ -1,7 +1,5 @@
 //! Configurable conflict resolution with policies for common conflict types.
 
-use async_trait::async_trait;
-
 use crate::{
     change_set::ChangeSet,
     format::transaction_log::TransactionLog,
@@ -34,7 +32,7 @@ impl Default for BasicConflictSolver {
     }
 }
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 impl ConflictSolver for BasicConflictSolver {
     async fn solve(
         &self,

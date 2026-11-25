@@ -9,7 +9,7 @@
     "directory": "icechunk-js"
   },
   "license": "Apache-2.0",
-  "browser": "browser.js",
+  "browser": "web.mjs",
   "keywords": [
     "icechunk",
     "zarr",
@@ -21,8 +21,20 @@
   ],
   "exports": {
     ".": {
-      "browser": "./browser.js",
+      "browser": {
+        "types": "./web.d.ts",
+        "default": "./web.mjs"
+      },
+      "types": "./index.d.ts",
       "default": "./index.js"
+    },
+    "./web": {
+      "types": "./web.d.ts",
+      "default": "./web.mjs"
+    },
+    "./web/init": {
+      "types": "./web-init.d.ts",
+      "default": "./web-init.mjs"
     },
     "./fetch-storage": {
       "types": "./fetch-storage.d.ts",
@@ -36,8 +48,15 @@
   "files": [
     "index.d.ts",
     "index.js",
-    "browser.js",
+    "web.mjs",
+    "web.d.ts",
+    "web-init.mjs",
+    "web-init.d.ts",
+    "wasm-bindgen/web/icechunk_js.js",
+    "wasm-bindgen/web/icechunk_js_bg.wasm",
+    "wasm-bindgen/web/package.json",
     "fetch-storage.mjs",
+    "fetch-storage-backend.mjs",
     "fetch-storage.d.ts",
     "http-virtual-chunks.mjs",
     "http-virtual-chunks.d.ts"
@@ -47,8 +66,9 @@
     "targets": [
       "x86_64-pc-windows-msvc",
       "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
       "aarch64-apple-darwin",
-      "wasm32-wasip1-threads"
+      "x86_64-apple-darwin"
     ]
   },
   "engines": {
@@ -63,6 +83,7 @@
     "bench": "node --import @oxc-node/core/register benchmark/bench.ts",
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
+    "check:web-types": "tsc -p tsconfig.web-types.json",
     "format": "run-p format:prettier format:rs format:toml",
     "format:prettier": "prettier . -w",
     "format:toml": "taplo format",
@@ -75,16 +96,11 @@
     "prepare": "husky"
   },
   "devDependencies": {
-    "@emnapi/core": "^1.11.3",
-    "@emnapi/runtime": "^1.11.3",
     "@napi-rs/cli": "^3.2.0",
-    "@napi-rs/wasm-runtime": "^1.2.4",
     "@oxc-node/core": "^0.1.0",
     "@taplo/cli": "^0.7.0",
-    "@tybys/wasm-util": "^0.10.1",
     "ava": "^8.0.0",
     "chalk": "^6.0.0",
-    "emnapi": "^1.11.3",
     "husky": "^9.1.7",
     "lint-staged": "^17.5.1",
     "npm-run-all2": "^9.0.3",

@@ -1,39 +1,52 @@
+#[cfg(not(browser))]
 use std::fmt;
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::BoxStream;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use icechunk::storage::{
-    DeleteObjectsResult, ETag, Generation, GetModifiedResult, ListInfo, Storage,
-    StorageContext, StorageError, StorageInfo, StorageResult, VersionInfo,
-    VersionedUpdateResult,
+    ETag, Generation, GetModifiedResult, Storage, StorageError, StorageResult,
+    VersionInfo, VersionedUpdateResult,
 };
-use napi::bindgen_prelude::{Buffer, Promise};
-use napi::threadsafe_function::ThreadsafeFunction;
+#[cfg(not(browser))]
 use napi_derive::napi;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+#[cfg(not(browser))]
+use {
+    crate::errors::IntoNapiResult,
+    futures::StreamExt,
+    futures::stream::BoxStream,
+    icechunk::storage::{DeleteObjectsResult, ListInfo, StorageContext, StorageInfo},
+    napi::bindgen_prelude::Promise,
+    napi::threadsafe_function::ThreadsafeFunction,
+    serde::{Deserialize, Deserializer, Serialize, Serializer},
+};
 
-use crate::errors::IntoNapiResult;
-
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 use std::collections::HashMap;
 
-#[napi(js_name = "Storage")]
+#[cfg_attr(not(browser), napi(js_name = "Storage"))]
+#[cfg_attr(browser, wasm_bindgen::prelude::wasm_bindgen(js_name = Storage))]
 pub struct JsStorage(pub(crate) Arc<dyn Storage + Send + Sync>);
+
+// Bytes crossing into or out of a JS storage callback: a `Buffer` in node, a
+// `Uint8Array` in the browser. The browser type is imported under the napi name
+// because napi writes `index.d.ts` from the field's type name.
+#[cfg(not(browser))]
+use napi::bindgen_prelude::Buffer;
+#[cfg(browser)]
+use serde_bytes::ByteBuf as Buffer;
 
 // --- Custom JS-provided storage backend ---
 
-fn other_storage_error(s: impl Into<String>) -> StorageError {
+pub(crate) fn other_storage_error(s: impl Into<String>) -> StorageError {
     icechunk_storage::other_error(s)
 }
 
 /// Map a JS callback error to the appropriate StorageError.
 /// If the error message contains "ObjectNotFound", return ObjectNotFound.
-fn js_storage_error(context: &str, e: impl std::fmt::Display) -> StorageError {
+pub(crate) fn js_storage_error(context: &str, e: impl std::fmt::Display) -> StorageError {
     let msg = e.to_string();
     if msg.contains("ObjectNotFound") {
         StorageError::capture(icechunk_storage::StorageErrorKind::ObjectNotFound)
@@ -43,7 +56,12 @@ fn js_storage_error(context: &str, e: impl std::fmt::Display) -> StorageError {
 }
 
 /// Version information returned from JS storage callbacks
-#[napi(object, js_name = "StorageVersionInfo")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageVersionInfo"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub struct JsStorageVersionInfo {
     pub etag: Option<String>,
@@ -66,14 +84,36 @@ impl From<&VersionInfo> for JsStorageVersionInfo {
 }
 
 /// Result of a get_object_range call from JS
-#[napi(object, js_name = "StorageGetObjectResponse")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageGetObjectResponse"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub(crate) struct JsStorageGetObjectResponse {
     pub data: Buffer,
     pub version: JsStorageVersionInfo,
 }
 
+/// The single-chunk stream `Storage::get_object_range` returns.
+pub(crate) type ObjectStream =
+    Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>;
+
+impl JsStorageGetObjectResponse {
+    pub(crate) fn into_rust(self) -> (ObjectStream, VersionInfo) {
+        let bytes = Bytes::from(self.data.to_vec());
+        let stream = futures::stream::once(async move { Ok(bytes) });
+        (Box::pin(stream), self.version.into())
+    }
+}
+
 /// Result of a put_object or copy_object call from JS
-#[napi(object, js_name = "StorageVersionedUpdateResult")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageVersionedUpdateResult"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageVersionedUpdateResult {
     /// "updated" or "not_on_latest_version"
@@ -82,7 +122,7 @@ pub(crate) struct JsStorageVersionedUpdateResult {
 }
 
 impl JsStorageVersionedUpdateResult {
-    fn into_rust(self) -> StorageResult<VersionedUpdateResult> {
+    pub(crate) fn into_rust(self) -> StorageResult<VersionedUpdateResult> {
         match self.kind.as_str() {
             "updated" => {
                 let new_version = self
@@ -104,14 +144,21 @@ impl JsStorageVersionedUpdateResult {
 }
 
 /// Result of a delete_batch call from JS
-#[napi(object, js_name = "StorageDeleteObjectsResult")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageDeleteObjectsResult"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageDeleteObjectsResult {
     pub deleted_objects: f64,
     pub deleted_bytes: f64,
 }
 
+// The browser build reads this by hand: `createdAt` is a JS `Date`.
 /// Entry in a list_objects result from JS
+#[cfg(not(browser))]
 #[napi(object, js_name = "StorageListInfo")]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageListInfo {
@@ -121,7 +168,12 @@ pub(crate) struct JsStorageListInfo {
 }
 
 /// Arguments for get_object_range callback
-#[napi(object, js_name = "StorageGetObjectRangeArgs")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageGetObjectRangeArgs"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageGetObjectRangeArgs {
     pub path: String,
@@ -130,7 +182,12 @@ pub(crate) struct JsStorageGetObjectRangeArgs {
 }
 
 /// A key-value pair for object metadata
-#[napi(object, js_name = "StorageKeyValue")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageKeyValue"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageKeyValue {
     pub key: String,
@@ -138,7 +195,12 @@ pub(crate) struct JsStorageKeyValue {
 }
 
 /// Arguments for put_object callback
-#[napi(object, js_name = "StoragePutObjectArgs")]
+#[cfg_attr(not(browser), napi(object, js_name = "StoragePutObjectArgs"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub(crate) struct JsStoragePutObjectArgs {
     pub path: String,
     pub data: Buffer,
@@ -148,7 +210,12 @@ pub(crate) struct JsStoragePutObjectArgs {
 }
 
 /// Arguments for copy_object callback
-#[napi(object, js_name = "StorageCopyObjectArgs")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageCopyObjectArgs"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageCopyObjectArgs {
     pub from: String,
@@ -158,7 +225,12 @@ pub(crate) struct JsStorageCopyObjectArgs {
 }
 
 /// An item in a delete_batch call
-#[napi(object, js_name = "StorageDeleteItem")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageDeleteItem"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageDeleteItem {
     pub id: String,
@@ -166,7 +238,12 @@ pub(crate) struct JsStorageDeleteItem {
 }
 
 /// Arguments for delete_batch callback
-#[napi(object, js_name = "StorageDeleteBatchArgs")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageDeleteBatchArgs"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageDeleteBatchArgs {
     pub prefix: String,
@@ -174,7 +251,12 @@ pub(crate) struct JsStorageDeleteBatchArgs {
 }
 
 /// Arguments for get_object_conditional callback
-#[napi(object, js_name = "StorageGetObjectConditionalArgs")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageGetObjectConditionalArgs"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 #[derive(Clone, Debug)]
 pub(crate) struct JsStorageGetObjectConditionalArgs {
     pub path: String,
@@ -182,7 +264,12 @@ pub(crate) struct JsStorageGetObjectConditionalArgs {
 }
 
 /// Result of a get_object_conditional call from JS
-#[napi(object, js_name = "StorageGetModifiedResult")]
+#[cfg_attr(not(browser), napi(object, js_name = "StorageGetModifiedResult"))]
+#[cfg_attr(
+    browser,
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "camelCase")
+)]
 pub(crate) struct JsStorageGetModifiedResult {
     /// "modified" or "on_latest_version"
     pub kind: String,
@@ -190,11 +277,109 @@ pub(crate) struct JsStorageGetModifiedResult {
     pub new_version: Option<JsStorageVersionInfo>,
 }
 
+impl JsStorageGetObjectRangeArgs {
+    pub(crate) fn new(path: &str, range: Option<&Range<u64>>) -> Self {
+        Self {
+            path: path.to_string(),
+            range_start: range.map(|r| r.start as f64),
+            range_end: range.map(|r| r.end as f64),
+        }
+    }
+}
+
+impl JsStoragePutObjectArgs {
+    pub(crate) fn new(
+        path: &str,
+        bytes: Bytes,
+        content_type: Option<&str>,
+        metadata: Vec<(String, String)>,
+        previous_version: Option<&VersionInfo>,
+    ) -> Self {
+        Self {
+            path: path.to_string(),
+            data: bytes.to_vec().into(),
+            content_type: content_type.map(|s| s.to_string()),
+            metadata: metadata
+                .into_iter()
+                .map(|(k, v)| JsStorageKeyValue { key: k, value: v })
+                .collect(),
+            previous_version: previous_version.map(|v| v.into()),
+        }
+    }
+}
+
+impl JsStorageCopyObjectArgs {
+    pub(crate) fn new(
+        from: &str,
+        to: &str,
+        content_type: Option<&str>,
+        version: &VersionInfo,
+    ) -> Self {
+        Self {
+            from: from.to_string(),
+            to: to.to_string(),
+            content_type: content_type.map(|s| s.to_string()),
+            version: version.into(),
+        }
+    }
+}
+
+impl JsStorageDeleteBatchArgs {
+    pub(crate) fn new(prefix: &str, batch: Vec<(String, u64)>) -> Self {
+        Self {
+            prefix: prefix.to_string(),
+            batch: batch
+                .into_iter()
+                .map(|(id, size)| JsStorageDeleteItem { id, size: size as f64 })
+                .collect(),
+        }
+    }
+}
+
+impl JsStorageGetObjectConditionalArgs {
+    pub(crate) fn new(path: &str, previous_version: Option<&VersionInfo>) -> Self {
+        Self {
+            path: path.to_string(),
+            previous_version: previous_version.map(|v| v.into()),
+        }
+    }
+}
+
+impl JsStorageGetModifiedResult {
+    pub(crate) fn into_rust(self) -> StorageResult<GetModifiedResult> {
+        match self.kind.as_str() {
+            "modified" => {
+                let data = self.data.ok_or_else(|| {
+                    other_storage_error("GetModifiedResult 'modified' missing data field")
+                })?;
+                let new_version: VersionInfo = self
+                    .new_version
+                    .ok_or_else(|| {
+                        other_storage_error(
+                            "GetModifiedResult 'modified' missing new_version field",
+                        )
+                    })?
+                    .into();
+                let bytes = Bytes::from(data.to_vec());
+                let cursor = std::io::Cursor::new(bytes);
+                Ok(GetModifiedResult::Modified { data: Box::pin(cursor), new_version })
+            }
+            "on_latest_version" => Ok(GetModifiedResult::OnLatestVersion),
+            other => Err(other_storage_error(format!(
+                "Unknown GetModifiedResult kind: {other}"
+            ))),
+        }
+    }
+}
+
 /// Storage backend that delegates all operations to JS callbacks.
 ///
 /// This enables JS users to provide custom storage implementations using
 /// JS libraries (fetch, @aws-sdk/client-s3, etc.), which is especially
 /// useful for WASM builds where native Rust networking is unavailable.
+///
+/// The browser build has its own, in `browser::storage`.
+#[cfg(not(browser))]
 pub(crate) struct JsCallbackStorage {
     can_write_fn: ThreadsafeFunction<(), Promise<bool>>,
     get_object_range_fn: ThreadsafeFunction<
@@ -222,18 +407,21 @@ pub(crate) struct JsCallbackStorage {
     >,
 }
 
+#[cfg(not(browser))]
 impl fmt::Debug for JsCallbackStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("JsCallbackStorage").finish()
     }
 }
 
+#[cfg(not(browser))]
 impl fmt::Display for JsCallbackStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "JsCallbackStorage")
     }
 }
 
+#[cfg(not(browser))]
 impl Serialize for JsCallbackStorage {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
@@ -242,6 +430,7 @@ impl Serialize for JsCallbackStorage {
     }
 }
 
+#[cfg(not(browser))]
 impl<'de> Deserialize<'de> for JsCallbackStorage {
     fn deserialize<D: Deserializer<'de>>(_deserializer: D) -> Result<Self, D::Error> {
         Err(serde::de::Error::custom(
@@ -250,9 +439,11 @@ impl<'de> Deserialize<'de> for JsCallbackStorage {
     }
 }
 
+#[cfg(not(browser))]
 impl icechunk_storage::sealed::Sealed for JsCallbackStorage {}
 
-#[async_trait]
+#[cfg(not(browser))]
+#[icechunk_storage::maybe_send_async_trait]
 #[typetag::serde(name = "js_callback_storage")]
 impl Storage for JsCallbackStorage {
     fn storage_info(&self) -> StorageInfo {
@@ -273,15 +464,8 @@ impl Storage for JsCallbackStorage {
         _ctx: &StorageContext<'_>,
         path: &str,
         range: Option<&Range<u64>>,
-    ) -> StorageResult<(
-        Pin<Box<dyn Stream<Item = Result<Bytes, StorageError>> + Send>>,
-        VersionInfo,
-    )> {
-        let args = JsStorageGetObjectRangeArgs {
-            path: path.to_string(),
-            range_start: range.map(|r| r.start as f64),
-            range_end: range.map(|r| r.end as f64),
-        };
+    ) -> StorageResult<(ObjectStream, VersionInfo)> {
+        let args = JsStorageGetObjectRangeArgs::new(path, range);
         let response = self
             .get_object_range_fn
             .call_async(Ok(args))
@@ -289,11 +473,7 @@ impl Storage for JsCallbackStorage {
             .map_err(|e| js_storage_error("JS getObjectRange call failed", e))?
             .await
             .map_err(|e| js_storage_error("JS getObjectRange failed", e))?;
-
-        let bytes = Bytes::from(response.data.to_vec());
-        let version = response.version.into();
-        let stream = futures::stream::once(async move { Ok(bytes) });
-        Ok((Box::pin(stream), version))
+        Ok(response.into_rust())
     }
 
     async fn put_object(
@@ -305,16 +485,13 @@ impl Storage for JsCallbackStorage {
         metadata: Vec<(String, String)>,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<VersionedUpdateResult> {
-        let args = JsStoragePutObjectArgs {
-            path: path.to_string(),
-            data: bytes.to_vec().into(),
-            content_type: content_type.map(|s| s.to_string()),
-            metadata: metadata
-                .into_iter()
-                .map(|(k, v)| JsStorageKeyValue { key: k, value: v })
-                .collect(),
-            previous_version: previous_version.map(|v| v.into()),
-        };
+        let args = JsStoragePutObjectArgs::new(
+            path,
+            bytes,
+            content_type,
+            metadata,
+            previous_version,
+        );
         let result = self
             .put_object_fn
             .call_async(Ok(args))
@@ -333,12 +510,7 @@ impl Storage for JsCallbackStorage {
         content_type: Option<&str>,
         version: &VersionInfo,
     ) -> StorageResult<VersionedUpdateResult> {
-        let args = JsStorageCopyObjectArgs {
-            from: from.to_string(),
-            to: to.to_string(),
-            content_type: content_type.map(|s| s.to_string()),
-            version: version.into(),
-        };
+        let args = JsStorageCopyObjectArgs::new(from, to, content_type, version);
         let result = self
             .copy_object_fn
             .call_async(Ok(args))
@@ -382,13 +554,7 @@ impl Storage for JsCallbackStorage {
         prefix: &str,
         batch: Vec<(String, u64)>,
     ) -> StorageResult<DeleteObjectsResult> {
-        let args = JsStorageDeleteBatchArgs {
-            prefix: prefix.to_string(),
-            batch: batch
-                .into_iter()
-                .map(|(id, size)| JsStorageDeleteItem { id, size: size as f64 })
-                .collect(),
-        };
+        let args = JsStorageDeleteBatchArgs::new(prefix, batch);
         let result = self
             .delete_batch_fn
             .call_async(Ok(args))
@@ -422,10 +588,7 @@ impl Storage for JsCallbackStorage {
         path: &str,
         previous_version: Option<&VersionInfo>,
     ) -> StorageResult<GetModifiedResult> {
-        let args = JsStorageGetObjectConditionalArgs {
-            path: path.to_string(),
-            previous_version: previous_version.map(|v| v.into()),
-        };
+        let args = JsStorageGetObjectConditionalArgs::new(path, previous_version);
         let result = self
             .get_object_conditional_fn
             .call_async(Ok(args))
@@ -433,33 +596,11 @@ impl Storage for JsCallbackStorage {
             .map_err(|e| js_storage_error("JS getObjectConditional call failed", e))?
             .await
             .map_err(|e| js_storage_error("JS getObjectConditional failed", e))?;
-
-        match result.kind.as_str() {
-            "modified" => {
-                let data = result.data.ok_or_else(|| {
-                    other_storage_error("GetModifiedResult 'modified' missing data field")
-                })?;
-                let new_version: VersionInfo = result
-                    .new_version
-                    .ok_or_else(|| {
-                        other_storage_error(
-                            "GetModifiedResult 'modified' missing new_version field",
-                        )
-                    })?
-                    .into();
-                let bytes = Bytes::from(data.to_vec());
-                let cursor = std::io::Cursor::new(bytes);
-                Ok(GetModifiedResult::Modified { data: Box::pin(cursor), new_version })
-            }
-            "on_latest_version" => Ok(GetModifiedResult::OnLatestVersion),
-            other => Err(other_storage_error(format!(
-                "Unknown GetModifiedResult kind: {other}"
-            ))),
-        }
+        result.into_rust()
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 mod native {
     use super::*;
 
@@ -923,9 +1064,10 @@ mod native {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 pub(crate) use native::*;
 
+#[cfg(not(browser))]
 #[napi]
 impl JsStorage {
     #[napi(factory)]
@@ -971,12 +1113,12 @@ impl JsStorage {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 fn default_s3_options() -> icechunk::config::S3Options {
     icechunk::config::S3Options::default()
 }
 
-#[cfg(not(target_family = "wasm"))]
+#[cfg(not(browser))]
 #[napi]
 impl JsStorage {
     #[napi(factory)]

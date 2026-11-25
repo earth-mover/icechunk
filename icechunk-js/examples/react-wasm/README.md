@@ -11,6 +11,16 @@ An interactive web UI demonstrating [Icechunk](https://github.com/earth-mover/ic
 
 ## Getting Started
 
+The example uses the `icechunk-js` package in this repository, so build its
+browser build first (from the repository root; see the package README for the
+toolchain):
+
+```bash
+just js-build-browser
+```
+
+Then:
+
 ```bash
 npm install
 npm run dev
@@ -19,6 +29,6 @@ npm run dev
 ## Tech Stack
 
 - **React 19** + **TypeScript**
-- **Vite** with WASM and top-level await plugins
+- **Vite** (no plugins or cross-origin isolation headers needed)
 - **Tailwind CSS v4**
-- **@earthmover/icechunk** (WASM build)
+- **@earthmover/icechunk** (its browser build)

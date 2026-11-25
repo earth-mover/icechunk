@@ -24,7 +24,6 @@ use tokio::io::AsyncBufRead;
 use tokio_util::io::StreamReader;
 use tracing::{instrument, warn};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;
 
@@ -575,7 +574,7 @@ pub fn filter_ids_by_id_prefix<'a>(
 }
 
 /// Implementations are free to assume files are never overwritten.
-#[async_trait]
+#[crate::maybe_send_async_trait]
 #[typetag::serde(tag = "type")]
 pub trait Storage: fmt::Debug + Display + sealed::Sealed + Sync + Send {
     /// Return structured metadata about this storage backend for display/repr.

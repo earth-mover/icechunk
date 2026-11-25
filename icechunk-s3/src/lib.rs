@@ -8,7 +8,6 @@ use std::{
     sync::Arc, time::Duration,
 };
 
-use async_trait::async_trait;
 use aws_config::{
     BehaviorVersion,
     meta::region::RegionProviderChain,
@@ -1132,7 +1131,7 @@ pub fn range_to_header(range: &Range<u64>) -> String {
 
 impl sealed::Sealed for S3Storage {}
 
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 #[typetag::serde]
 impl Storage for S3Storage {
     fn storage_info(&self) -> StorageInfo {

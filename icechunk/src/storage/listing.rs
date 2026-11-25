@@ -20,7 +20,9 @@ use futures::{
     Stream, StreamExt as _, TryStreamExt as _, future::ready, stream::BoxStream,
 };
 use icechunk_types::{ICResultExt as _, error::ICResultCtxExt as _};
-use tokio::{sync::mpsc, task::JoinSet};
+use tokio::sync::mpsc;
+
+use crate::rt::{JoinError, JoinSet};
 use tracing::debug;
 
 use crate::{
@@ -170,7 +172,7 @@ where
 /// One step of the listing fan-out loop. `select!` arms cannot `yield`, so
 /// they hand the outcome to the loop body, which does.
 enum ListEvent<T> {
-    Worker(Result<RepositoryResult<()>, tokio::task::JoinError>),
+    Worker(Result<RepositoryResult<()>, JoinError>),
     Page(Option<T>),
 }
 

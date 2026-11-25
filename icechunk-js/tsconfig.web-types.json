@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    // index.d.ts names a few Rust-side types it does not declare
+    "skipLibCheck": true
+  },
+  "files": ["__test__/web-types.ts"]
+}

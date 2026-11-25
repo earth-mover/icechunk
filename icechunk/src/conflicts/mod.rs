@@ -6,8 +6,6 @@
 
 use std::collections::HashSet;
 
-use async_trait::async_trait;
-
 use crate::{
     change_set::ChangeSet,
     format::{ChunkIndices, NodeId, Path, transaction_log::TransactionLog},
@@ -61,7 +59,7 @@ pub enum ConflictResolution {
 }
 
 /// Strategy for resolving conflicts during rebase.
-#[async_trait]
+#[icechunk_storage::maybe_send_async_trait]
 pub trait ConflictSolver {
     async fn solve(
         &self,

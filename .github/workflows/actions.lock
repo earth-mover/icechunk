@@ -30,6 +30,7 @@ workflows:
         - 'actions/upload-artifact@v7.0.2'
         - 'prefix-dev/setup-pixi@v0.11.3'
         - 'swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31'
+        - 'taiki-e/install-action@v2.90.1'
     '.github/workflows/pr-review-bot.yml':
         - 'earth-mover/pr-review-bot@main'
     '.github/workflows/publish-rust-library.yml':
@@ -161,7 +162,7 @@ dependencies:
         repo_id: 265575535
     'earth-mover/pr-review-bot@main':
         ref: 'main'
-        commit: 'sha1-159af5b9dffde3f3ac3c85b005b248ea1b8b50c7'
+        commit: 'sha1-ca412625c81be079dfea0d130031e234e8736640'
         owner_id: 95875797
         repo_id: 1285345106
         uses:

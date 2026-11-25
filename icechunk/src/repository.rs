@@ -16,6 +16,7 @@ use std::{
     sync::Arc,
 };
 
+use crate::{compat::MaybeSend, rt::JoinError};
 use chrono::{DateTime, Utc};
 use futures::{
     Stream, StreamExt as _, TryStreamExt as _,
@@ -25,7 +26,7 @@ use itertools::Itertools as _;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::{join, sync::AcquireError, task::JoinError};
+use tokio::{join, sync::AcquireError};
 use tracing::{Instrument as _, debug, error, instrument, trace, warn};
 
 use crate::{
@@ -777,8 +778,9 @@ impl Repository {
     pub async fn ancestry(
         &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
-    {
+    ) -> RepositoryResult<
+        impl Stream<Item = RepositoryResult<SnapshotInfo>> + MaybeSend + use<>,
+    > {
         self.ancestry_using(version, None).await
     }
 
@@ -845,8 +847,9 @@ impl Repository {
         &self,
         version: &VersionInfo,
         repo_info: Option<Arc<RepoInfo>>,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
-    {
+    ) -> RepositoryResult<
+        impl Stream<Item = RepositoryResult<SnapshotInfo>> + MaybeSend + use<>,
+    > {
         match self.spec_version {
             SpecVersionBin::V1 => Ok(self.ancestry_v1(version).await?.left_stream()),
             SpecVersionBin::V2 => {
@@ -866,8 +869,9 @@ impl Repository {
     async fn ancestry_v1(
         &self,
         version: &VersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
-    {
+    ) -> RepositoryResult<
+        impl Stream<Item = RepositoryResult<SnapshotInfo>> + MaybeSend + use<>,
+    > {
         let snapshot_id = self.resolve_version(version).await?;
         self.snapshot_info_ancestry_v1(&snapshot_id).await
     }
@@ -876,8 +880,9 @@ impl Repository {
     async fn ancestry_ref_v1(
         &self,
         version: &RefVersionInfo,
-    ) -> RepositoryResult<impl Stream<Item = RepositoryResult<SnapshotInfo>> + Send + use<>>
-    {
+    ) -> RepositoryResult<
+        impl Stream<Item = RepositoryResult<SnapshotInfo>> + MaybeSend + use<>,
+    > {
         let snapshot_id = self.resolve_ref_version_v1(version).await?;
         self.snapshot_info_ancestry_v1(&snapshot_id).await
     }
@@ -890,7 +895,7 @@ impl Repository {
         &self,
     ) -> RepositoryResult<(
         impl Stream<Item = RepositoryResult<(DateTime<Utc>, UpdateType, Option<String>)>>
-        + Send
+        + MaybeSend
         + use<>,
         Arc<RepoInfo>,
         storage::VersionInfo,
@@ -1882,7 +1887,7 @@ impl Repository {
         {
             return;
         }
-        tokio::spawn(async move {
+        crate::rt::spawn(async move {
             let mut loaded_manifests: HashSet<ManifestId> = HashSet::new();
             let mut loaded_refs: u32 = 0;
             let futures = FuturesUnordered::new();

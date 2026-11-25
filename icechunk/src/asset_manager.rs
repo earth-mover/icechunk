@@ -1004,7 +1004,7 @@ impl AssetManager {
                         ?delay,
                         "Repo info updated concurrently, retrying..."
                     );
-                    tokio::time::sleep(delay).await;
+                    crate::rt::sleep(delay).await;
                     attempts += 1;
                 }
                 err @ Err(_) => {
@@ -1089,8 +1089,6 @@ impl AssetManager {
                             self.storage_settings.retries().max_backoff_ms().into(),
                         )),
                 );
-                #[cfg(feature = "napi-send-contract")]
-                let retry = retry.sleep(tokio::time::sleep);
                 let chunk = retry
                     .when(|e| RETRYABLE_ERROR.is_match(&format!("{e:?}")))
                     .notify(|err, duration| {
@@ -1540,7 +1538,11 @@ async fn fetch_and_decode<T, F>(
     read: Pin<Box<dyn AsyncBufRead + Send>>,
     compressed_size_hint: u64,
     file_type: FileTypeBin,
-    #[cfg_attr(feature = "shuttle", expect(unused))] decode_semaphore: Arc<Semaphore>,
+    #[cfg_attr(
+        any(feature = "shuttle", all(target_family = "wasm", target_os = "unknown")),
+        expect(unused)
+    )]
+    decode_semaphore: Arc<Semaphore>,
     deserialize: F,
 ) -> RepositoryResult<(T, FileHeader)>
 where
@@ -1556,11 +1558,16 @@ where
 
     // keep error span ancestry on the blocking thread
     let span = tracing::Span::current();
-    tokio::task::spawn_blocking(move || -> RepositoryResult<(T, FileHeader)> {
+    crate::rt::spawn_blocking(move || -> RepositoryResult<(T, FileHeader)> {
         let _entered = span.entered();
         // Acquired here, not on the async task: an unpolled async waiter never takes the permit it is handed.
         // release on decode completion, not on cancelled-future drop
-        #[cfg(not(feature = "shuttle"))]
+        // In the browser the decode runs inline on the only thread, so decodes
+        // never overlap and waiting for a permit would park, which panics there.
+        #[cfg(not(any(
+            feature = "shuttle",
+            all(target_family = "wasm", target_os = "unknown")
+        )))]
         let _decode_permit =
             futures::executor::block_on(decode_semaphore.acquire()).capture()?;
         let value = decode_body(&header, &compressed, None, deserialize)?;

@@ -731,3 +731,49 @@ jobs:
 
       - name: Run no-default-features lib tests (proxy for wasm feature set)
         run: just wasm-proxy-test
+
+  wasm-browser-test:
+    name: WASM Browser Tests (wasm32-unknown-unknown)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Read the wasm-bindgen version from Cargo.lock
+        id: wasm-bindgen
+        run: echo "version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')" >> "$GITHUB_OUTPUT"
+
+      - name: Install just and wasm-bindgen-test-runner
+        uses: taiki-e/install-action@v2.90.1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          # the test runner must match the wasm-bindgen crate exactly
+          tool: just,wasm-bindgen@${{ steps.wasm-bindgen.outputs.version }}
+
+      - name: Install Rust toolchain
+        run: |
+          rustup update --no-self-update ${MSRV}
+          rustup default ${MSRV}
+          rustup target add wasm32-unknown-unknown
+
+      - name: Install LLVM toolchain for wasm C deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@c8037a86dde8214a8310e9f54a8fc61ab362aa31 # v2
+        with:
+          key: wasm-browser-${{ env.MSRV }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Run browser-target tests under node
+        run: just wasm-browser-test
