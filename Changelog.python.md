@@ -36,6 +36,7 @@
 - The S3 client (`s3_storage`, `r2_storage`, `tigris_storage` and `hf_storage`) has a default per-attempt timeout of 10 minutes. A server that accepted a request and never answered used to make the request wait forever. Now the attempt fails and is retried. Set `operation_attempt_timeout_ms` to change the limit, or to 0 to disable it.
 - `Session.reindex_array` and `Session.shift_array` release the GIL while they wait for storage. Concurrent writers no longer hang when one of them reindexes ([#2589](https://github.com/earth-mover/icechunk/issues/2589), [#2590](https://github.com/earth-mover/icechunk/pull/2590)).
 - `str()`, `repr()` and the HTML repr of `Session` and `IcechunkStore`, and `Session.chunk_type`, release the GIL while they wait for the session. These calls no longer deadlock with a `reindex_array` on the same session in another thread ([#2590](https://github.com/earth-mover/icechunk/pull/2590)).
+- `s3_storage` works with S3 Express One Zone directory buckets, whose names end in `--x-s3`. Listing operations, such as `garbage_collect`, used to fail with `InvalidRequest` because these buckets accept only a list prefix that ends in `/` ([#2538](https://github.com/earth-mover/icechunk/issues/2538)).
 
 ## Python Icechunk Library 2.3.1
 
