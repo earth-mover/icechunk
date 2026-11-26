@@ -2,7 +2,12 @@
 // loading its .wasm on import. Call `init()` or `initSync()` once, before
 // using anything else; until then every class throws. For bundlers that do not
 // copy the .wasm next to the module (esbuild), service workers (no top-level
-// await), server-side rendering, and strict CSP setups.
+// await), server-side rendering, and strict CSP setups. The package exports the
+// .wasm as `@earthmover/icechunk/web/icechunk_js_bg.wasm`: pass its URL from a
+// bundler (`import wasmUrl from '...icechunk_js_bg.wasm?url'` in Vite) to
+// `init({ module_or_path: wasmUrl })`, or in Node.js pass
+// `readFileSync(new URL(import.meta.resolve('...icechunk_js_bg.wasm')))` to
+// `initSync({ module })`.
 import init, {
   CompressionAlgorithm,
   initSync,

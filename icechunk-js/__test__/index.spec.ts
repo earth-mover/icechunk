@@ -122,6 +122,29 @@ test('commit, branches, and tags', async (t) => {
   t.pass()
 })
 
+test('back-to-back commits and ref updates', async (t) => {
+  // the browser build's clock (Date.now()) has millisecond resolution, so these
+  // often share a timestamp with the snapshot or repo update before them
+  const repo = await Repository.create(await Storage.newInMemory())
+  let snapshotId = ''
+  for (let i = 0; i < 10; i++) {
+    const session = await repo.writableSession('main')
+    await session.store.set('zarr.json', Buffer.from(`{"zarr_format":3,"node_type":"group","attributes":{"i":${i}}}`))
+    snapshotId = await session.commit(`commit ${i}`)
+  }
+  for (let i = 0; i < 5; i++) {
+    await repo.createBranch(`branch-${i}`, snapshotId)
+    await repo.createTag(`tag-${i}`, snapshotId)
+  }
+
+  const ancestry = await repo.ancestry({ branch: 'main' })
+  t.deepEqual(
+    ancestry.map((s) => s.message),
+    [...Array.from({ length: 10 }, (_, i) => `commit ${9 - i}`), 'Repository initialized'],
+  )
+  t.is((await repo.listTags()).length, 5)
+})
+
 test('create with repository config', async (t) => {
   const storage = await Storage.newInMemory()
   const config: RepositoryConfig = {

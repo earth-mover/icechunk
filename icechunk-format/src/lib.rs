@@ -18,7 +18,7 @@ use std::{
 
 use ::flatbuffers::InvalidFlatbuffer;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound as _, TimeDelta, Utc};
 use flatbuffers::generated;
 use format_constants::FileTypeBin;
 use manifest::VirtualReferenceErrorKind;
@@ -656,6 +656,21 @@ pub mod format_constants {
     }
 }
 
+/// A timestamp for a new snapshot or repo update: `now`, but strictly after
+/// `previous`, the timestamp it must follow (the parent snapshot, or the latest
+/// update in the ops log).
+///
+/// Icechunk stores these timestamps in microseconds and requires each to be
+/// strictly after the one before. The clock may not have moved past `previous`:
+/// in the browser `Utc::now()` is `Date.now()`, which has millisecond
+/// resolution, and `previous` may come from another machine whose clock is a
+/// little ahead. Then the result is `previous` plus one microsecond.
+pub fn timestamp_after(now: DateTime<Utc>, previous: DateTime<Utc>) -> DateTime<Utc> {
+    // truncate first: if `now` and `previous` fall in the same microsecond, `now`
+    // would be stored as `previous`
+    now.trunc_subsecs(6).max(previous.trunc_subsecs(6) + TimeDelta::microseconds(1))
+}
+
 #[inline(always)]
 #[expect(clippy::needless_pass_by_value)]
 pub fn lookup_index_by_key<'a, T: ::flatbuffers::Follow<'a> + 'a, K: Ord>(
@@ -726,6 +741,27 @@ mod tests {
         serialize_and_deserialize_attribute_ids - attributes_id,
         serialize_and_deserialize_spec_version_bin - spec_version
     );
+
+    #[icechunk_macros::test]
+    fn test_timestamp_after() {
+        let previous = DateTime::from_timestamp_micros(1_700_000_000_000_000).unwrap();
+        let us = TimeDelta::microseconds;
+        // the clock moved on: keep it, at stored (microsecond) precision
+        assert_eq!(
+            timestamp_after(previous + TimeDelta::nanoseconds(2_500), previous),
+            previous + us(2)
+        );
+        // the same tick, the same microsecond, or behind: one microsecond after
+        assert_eq!(timestamp_after(previous, previous), previous + us(1));
+        assert_eq!(
+            timestamp_after(previous + TimeDelta::nanoseconds(500), previous),
+            previous + us(1)
+        );
+        assert_eq!(
+            timestamp_after(previous - TimeDelta::seconds(1), previous),
+            previous + us(1)
+        );
+    }
 
     #[icechunk_macros::test]
     fn test_object_id_serialization() {
