@@ -36,6 +36,7 @@
       "types": "./web-init.d.ts",
       "default": "./web-init.mjs"
     },
+    "./web/icechunk_js_bg.wasm": "./wasm-bindgen/web/icechunk_js_bg.wasm",
     "./fetch-storage": {
       "types": "./fetch-storage.d.ts",
       "default": "./fetch-storage.mjs"
@@ -43,7 +44,8 @@
     "./http-virtual-chunks": {
       "types": "./http-virtual-chunks.d.ts",
       "default": "./http-virtual-chunks.mjs"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "index.d.ts",

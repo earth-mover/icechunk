@@ -519,26 +519,24 @@ impl RepoInfo {
             "A backup path must not be provided without previous updates"
         );
 
-        // Reject updates whose timestamp is not strictly newer than the top of the ops log
-        if let Some(Ok((_, latest_time, _))) = &last_update
-            && update.update_time <= *latest_time
-        {
-            return Err(IcechunkFormatErrorKind::InvalidUpdateTimestamp {
-                latest_time: *latest_time,
-                new_time: update.update_time,
-            })
-            .capture();
-        }
+        // The ops log must be strictly ordered by time: an update not newer than the
+        // top of the log goes right after it
+        let update_time = match &last_update {
+            Some(Ok((_, latest_time, _))) => {
+                crate::timestamp_after(update.update_time, *latest_time)
+            }
+            _ => update.update_time,
+        };
 
-        let new_updates: Box<dyn Iterator<Item = _>> =
-            if let Some(last_update) = last_update {
-                Box::new(
-                    [Ok((update.update_type, update.update_time, None)), last_update]
-                        .into_iter(),
-                )
-            } else {
-                Box::new([Ok((update.update_type, update.update_time, None))].into_iter())
-            };
+        let new_updates: Box<dyn Iterator<Item = _>> = if let Some(last_update) =
+            last_update
+        {
+            Box::new(
+                [Ok((update.update_type, update_time, None)), last_update].into_iter(),
+            )
+        } else {
+            Box::new([Ok((update.update_type, update_time, None))].into_iter())
+        };
 
         let all_updates = new_updates.into_iter().chain(previous_updates);
         // If we didn't overflow (all previous updates fit in the new file),
@@ -1950,6 +1948,7 @@ mod tests {
 
     use super::*;
     use crate::roundtrip_serialization_tests;
+    use chrono::TimeDelta;
     use proptest::prelude::*;
     use std::collections::HashSet;
 
@@ -2589,113 +2588,62 @@ mod tests {
     }
 
     #[test]
-    fn test_update_timestamp_ordering_rejected() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let flushed_at = DateTime::from_timestamp_micros(1_000_000).unwrap();
+    fn test_update_timestamp_ordering() -> Result<(), Box<dyn std::error::Error>> {
+        fn latest_update_time(repo: &RepoInfo) -> DateTime<Utc> {
+            repo.latest_updates().unwrap().next().unwrap().unwrap().1
+        }
+
+        let t0 = DateTime::from_timestamp_micros(1_000_000).unwrap();
         let id1 = SnapshotId::random();
         let snap1 = SnapshotInfo {
             id: id1.clone(),
             parent_id: None,
-            flushed_at,
+            flushed_at: t0,
             message: "snap 1".to_string(),
             metadata: Default::default(),
             pruned_ancestor_tx_logs: vec![],
         };
-        let repo = RepoInfo::initial(
+        let mut repo = RepoInfo::initial(
             SpecVersionBin::current(),
             snap1,
             100,
             None::<&()>,
-            Some(flushed_at),
+            Some(t0),
         );
 
-        // Attempting add_snapshot with a timestamp equal to the top of the ops log
-        // should fail
-        let id2 = SnapshotId::random();
-        let snap2 = SnapshotInfo {
-            id: id2.clone(),
-            parent_id: Some(id1.clone()),
-            flushed_at: DateTime::from_timestamp_micros(1_000_000).unwrap(),
-            message: "snap 2".to_string(),
-            metadata: Default::default(),
-            pruned_ancestor_tx_logs: vec![],
-        };
-        let result = repo.add_snapshot(
-            SpecVersionBin::current(),
-            snap2,
-            Some("main"),
-            UpdateType::NewCommitUpdate {
-                branch: "main".to_string(),
-                new_snap_id: id2.clone(),
-            },
-            Some(flushed_at),
-            "backup",
-            100,
-        );
-        assert!(matches!(
-            result,
-            Err(IcechunkFormatError {
-                kind: IcechunkFormatErrorKind::InvalidUpdateTimestamp { .. },
-                ..
-            })
-        ));
-
-        // Attempting add_snapshot with a timestamp older than the top of the ops log
-        // should also fail
-        let flushed_at = DateTime::from_timestamp_micros(500_000).unwrap();
-        let id3 = SnapshotId::random();
-        let snap3 = SnapshotInfo {
-            id: id3.clone(),
-            parent_id: Some(id1.clone()),
-            flushed_at,
-            message: "snap 3".to_string(),
-            metadata: Default::default(),
-            pruned_ancestor_tx_logs: vec![],
-        };
-        let result = repo.add_snapshot(
-            SpecVersionBin::current(),
-            snap3,
-            Some("main"),
-            UpdateType::NewCommitUpdate {
-                branch: "main".to_string(),
-                new_snap_id: id3.clone(),
-            },
-            Some(flushed_at),
-            "backup",
-            100,
-        );
-        assert!(matches!(
-            result,
-            Err(IcechunkFormatError {
-                kind: IcechunkFormatErrorKind::InvalidUpdateTimestamp { .. },
-                ..
-            })
-        ));
-
-        // Attempting add_snapshot with a strictly newer timestamp should succeed
-        let flushed_at = DateTime::from_timestamp_micros(2_000_000).unwrap();
-        let id4 = SnapshotId::random();
-        let snap4 = SnapshotInfo {
-            id: id4.clone(),
-            parent_id: Some(id1.clone()),
-            flushed_at,
-            message: "snap 4".to_string(),
-            metadata: Default::default(),
-            pruned_ancestor_tx_logs: vec![],
-        };
-        let result = repo.add_snapshot(
-            SpecVersionBin::current(),
-            snap4,
-            Some("main"),
-            UpdateType::NewCommitUpdate {
-                branch: "main".to_string(),
-                new_snap_id: id4.clone(),
-            },
-            Some(flushed_at),
-            "backup",
-            100,
-        );
-        assert!(result.is_ok());
+        // An update not after the top of the ops log goes one microsecond after
+        // it: a clock that did not advance (equal), one inside the same
+        // microsecond, or one slightly behind. A strictly newer one is kept.
+        let one_us = TimeDelta::microseconds(1);
+        for (update_time, expected) in [
+            (t0, t0 + one_us),
+            (t0 + one_us + TimeDelta::nanoseconds(500), t0 + one_us * 2),
+            (t0 - TimeDelta::milliseconds(500), t0 + one_us * 3),
+            (t0 + TimeDelta::seconds(1), t0 + TimeDelta::seconds(1)),
+        ] {
+            let id = SnapshotId::random();
+            let snap = SnapshotInfo {
+                id: id.clone(),
+                parent_id: Some(id1.clone()),
+                flushed_at: update_time,
+                message: "snap".to_string(),
+                metadata: Default::default(),
+                pruned_ancestor_tx_logs: vec![],
+            };
+            repo = repo.add_snapshot(
+                SpecVersionBin::current(),
+                snap,
+                Some("main"),
+                UpdateType::NewCommitUpdate {
+                    branch: "main".to_string(),
+                    new_snap_id: id,
+                },
+                Some(update_time),
+                "backup",
+                100,
+            )?;
+            assert_eq!(latest_update_time(&repo), expected);
+        }
 
         Ok(())
     }

@@ -194,13 +194,25 @@ Things to know:
   the server must send `.wasm` files as `application/wasm`.
 - **To load the `.wasm` yourself** (esbuild, service workers, server-side
   rendering), import `@earthmover/icechunk/web/init` and call `init()` or
-  `initSync()` once before anything else. The file is
-  `wasm-bindgen/web/icechunk_js_bg.wasm` in the package.
+  `initSync()` once before anything else. The package exports the file as
+  `@earthmover/icechunk/web/icechunk_js_bg.wasm`. In a bundler, import its URL
+  (with esbuild, use `--loader:.wasm=file` and drop `?url`):
 
   ```typescript
   import { init, Repository, Storage } from '@earthmover/icechunk/web/init'
+  import wasmUrl from '@earthmover/icechunk/web/icechunk_js_bg.wasm?url'
 
-  await init({ module_or_path: '/assets/icechunk_js_bg.wasm' })
+  await init({ module_or_path: wasmUrl })
+  ```
+
+  In Node.js (server-side rendering, tests), read it from disk:
+
+  ```typescript
+  import { readFileSync } from 'node:fs'
+  import { initSync, Repository, Storage } from '@earthmover/icechunk/web/init'
+
+  const wasm = new URL(import.meta.resolve('@earthmover/icechunk/web/icechunk_js_bg.wasm'))
+  initSync({ module: readFileSync(wasm) })
   ```
 
 - **Session getters never block.** While an operation such as a commit is using a

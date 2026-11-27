@@ -62,6 +62,7 @@ use crate::{
             NodeType, Snapshot, SnapshotInfo, SnapshotProperties,
             inject_icechunk_metadata,
         },
+        timestamp_after,
         transaction_log::TransactionLog,
     },
     refs::{RefError, RefErrorKind, fetch_branch_tip_v1, update_branch},
@@ -3271,6 +3272,7 @@ async fn do_flush(
         None
     };
 
+    let old_ts = old_snapshot.flushed_at().inject()?;
     let new_snapshot = Snapshot::from_iter(
         None,
         parent_id,
@@ -3278,13 +3280,13 @@ async fn do_flush(
         message,
         Some(properties),
         flush_data.manifest_files.into_iter().collect(),
-        None,
+        // must be after the parent; see timestamp_after
+        Some(timestamp_after(Utc::now(), old_ts)),
         all_nodes.into_iter().map(Ok::<_, IcechunkFormatError>),
     )
     .inject()?;
 
     let new_ts = new_snapshot.flushed_at().inject()?;
-    let old_ts = old_snapshot.flushed_at().inject()?;
     if new_ts <= old_ts {
         tracing::error!(
             new_timestamp = %new_ts,
@@ -7466,6 +7468,52 @@ mod tests {
             }) if snapshot == 1 && nodes == 0
         ));
 
+        Ok(())
+    }
+
+    #[tokio_test]
+    #[apply(spec_version_cases)]
+    async fn commit_after_parent_from_the_same_clock_tick(
+        #[case] spec_version: SpecVersionBin,
+    ) -> Result<(), Box<dyn Error>> {
+        // A coarse clock, such as `Date.now()` in the browser, can return the same
+        // time for a snapshot and its parent. Simulate that with a parent written a
+        // little in the future, so `Utc::now()` is not after it.
+        let repo = create_memory_store_repository(spec_version).await;
+        let session = repo.writable_session("main").await?;
+        let parent = Arc::new(Snapshot::from_iter(
+            None,
+            None,
+            spec_version,
+            "parent",
+            None,
+            vec![],
+            Some(Utc::now() + chrono::TimeDelta::seconds(5)),
+            Vec::<Result<NodeSnapshot, IcechunkFormatError>>::new(),
+        )?);
+        session.asset_manager.write_snapshot(Arc::clone(&parent)).await?;
+        let parent_id = parent.id();
+        let parent_ts = parent.flushed_at()?;
+
+        let manifest_config = ManifestConfig::default();
+        let flush_data = FlushProcess::new(
+            Arc::clone(&session.asset_manager),
+            &session.change_set,
+            &parent_id,
+            &manifest_config,
+        );
+        let child = do_flush(
+            flush_data,
+            "child",
+            1,
+            Default::default(),
+            false,
+            CommitMethod::NewCommit,
+            manifest_config.splitting(),
+        )
+        .await?;
+
+        assert_eq!(child.flushed_at()?, parent_ts + chrono::TimeDelta::microseconds(1));
         Ok(())
     }
 
