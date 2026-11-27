@@ -1,20 +1,14 @@
 # Observability
 
-Icechunk is instrumented with the Rust [`tracing`](https://docs.rs/tracing) framework. The same instrumentation drives two independent outputs:
+You can see what Icechunk is doing from two places:
 
-- **Console logs** — human-readable logs printed to stderr, controlled by `ICECHUNK_LOG`. Enabled by default at the `warn` level.
-- **OpenTelemetry trace export** *(experimental)* — structured spans and traces are exported over OTLP/gRPC to a collector or service. Off by default, opt-in.
-  Telemetry can be configured with an endpoint to use any OpenTelemetry compatible collector or service. If no endpoint is set
-  by the user, there is zero exporter overhead and no spans are exported.
+- **Inside your process**, from Icechunk's instrumentation with the Rust [`tracing`](https://docs.rs/tracing) framework. Its two outputs are configured separately and don't affect each other.
+    - [Icechunk logs](#logging): human-readable logs printed to stderr, controlled by `ICECHUNK_LOG`, or sent to Python `logging`. Enabled by default at the `warn` level.
+    - [OpenTelemetry traces](#opentelemetry-tracing) *(experimental)*: structured spans and traces exported over OTLP/gRPC to any OpenTelemetry-compatible collector or service. Off by default, opt-in.
+- **At the object store**, in its access logs.
+    - [User-Agent header](#attributing-requests-in-bucket-logs): every request Icechunk makes to object storage names the array and chunk it is for, so the access logs can attribute traffic with no setup on the reader's side. Always on.
 
-The two are configured separately and don't affect each other.
-
-A third view comes from the object store itself: every request Icechunk makes
-identifies the array and chunk it is for in its `User-Agent` header, so the
-bucket's own logs can attribute traffic. See [Attributing requests in bucket
-logs](#attributing-requests-in-bucket-logs).
-
-## Logging
+## Icechunk logs {#logging}
 
 Icechunk prints logs to stderr, so they don't interfere with your program's own output on stdout. Set the verbosity with the `ICECHUNK_LOG` environment variable before importing `icechunk`:
 
@@ -128,7 +122,7 @@ python your_script.py
 
 Open <http://localhost:16686>, select the `icechunk` service, and browse the traces.
 
-## Attributing requests in bucket logs
+## User-Agent header: attributing requests in object store access logs {#attributing-requests-in-bucket-logs}
 
 Object stores record the `User-Agent` of every request in their access logs: S3
 server access logs and CloudTrail data events, GCS usage logs, and Azure
@@ -136,9 +130,12 @@ diagnostic logs. Icechunk uses that header to say what each request is for, so
 the bucket owner can break traffic down by array, chunk, application, workload
 and user without any cooperation from the reader.
 
-Every request carries an `icechunk/<version>` product token. Chunk reads and
-writes add the array path and the chunk coordinates, and manifest reads and
-writes add the array path:
+Every request carries an `icechunk/<version>` product token, so you can find
+Icechunk's traffic by filtering the access logs on `icechunk/`. The exception
+is listings on `s3_storage`; see [Limitations](#limitations). Icechunk 2.0 to 2.2
+sent `icechunk-rust-<version>` instead. Chunk reads and writes add the array
+path and the chunk coordinates, and manifest reads and writes add the array
+path:
 
 ```
 aws-sdk-rust/1.3.14 os/linux lang/rust/1.98.0 weatherlib/0.9 icechunk/2.3.0 (workload=nightly-ingest; principal=u_123; array=g/temperature; chunk=0/1/2)
@@ -172,9 +169,11 @@ repo = icechunk.Repository.open(
 
 ### Limitations
 
-- Listings carry no attribution, and deletes carry none on the `object_store`
-  backends (`gcs_storage`, `azure_storage`, `s3_object_store_storage`). Both are
-  used mostly by garbage collection.
+- Listings on `s3_storage` (and `tigris_storage` and `r2_storage`) carry no
+  `icechunk/` token at all, only the AWS SDK's tokens. On the `object_store`
+  backends (`gcs_storage`, `azure_storage`, `s3_object_store_storage`), listings
+  and deletes carry the `icechunk/<version>` token but no labels. Listings and
+  deletes are used mostly by garbage collection.
 - Virtual chunk reads are attributed like any other chunk read, but reads made
   in a browser through `icechunk-js` are not, since browsers do not let a page
   set `User-Agent`.

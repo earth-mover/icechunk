@@ -1,6 +1,6 @@
 ---
 template: home.html
-title: Icechunk - Open-source, high-performance array format and library for scientific data
+title: Icechunk - Open-source, high-performance storage format and library for Zarr data
 ---
 
 <div class="benefit-row" markdown>

@@ -447,7 +447,7 @@ Three keyword arguments are available on `s3_storage`, `s3_object_store_storage`
 
 The `User-Agent` header is managed by Icechunk: it names the array and chunk
 each request is for, plus optional labels set when opening the repository. See
-[Attributing requests in bucket logs][attribution].
+[User-Agent header: attributing requests in object store access logs][attribution].
 
 [attribution]: observability.md#attributing-requests-in-bucket-logs
 

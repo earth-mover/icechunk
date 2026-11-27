@@ -1,6 +1,6 @@
 site_name: Icechunk
 site_description: >-
-  Open-source, high-performance array format and library for scientific data
+  Open-source, high-performance storage format and library for Zarr data
 site_author: Earthmover PBC
 site_url: !ENV [READTHEDOCS_CANONICAL_URL, 'https://icechunk.io']
 repo_url: https://github.com/earth-mover/icechunk
