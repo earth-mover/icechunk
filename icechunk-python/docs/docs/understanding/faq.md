@@ -107,31 +107,31 @@ However, because it sits _below_ Zarr in the stack, it's not immediately clear h
 
 ## Should I implement Icechunk on my own based on the spec?
 
-No, we do not recommend implementing Icechunk independently of the existing Rust library.
-There are two reasons for this:
-
-1. The 1.0 version of the spec is stable. We are continuing to make improvements and will publish new versions of the spec as needed, accompanied with working reference implementation.
-1. It's probably much easier to bind to the Rust library from your language of choice,
-   rather than re-implement from scratch.
+Usually not. Binding to the Rust library is less work than reimplementing the format, and a binding supports new spec versions as soon as the Rust library does.
+See [Languages](../languages.md) for the existing bindings.
 
 We welcome contributions from folks interested in developing Icechunk bindings for other languages!
 
 ## Are there any independent implementations based on the Icechunk spec?
 
-At least one independent (read-only) implementation does exist: Google's [Neuroglancer](https://github.com/google/neuroglancer) application - [Icechunk docs here](https://neuroglancer-docs.web.app/datasource/icechunk/index.html)).
-This demonstrates that the Icechunk (1.0) specification is well-defined enough to be interoperable between implementations.
+Yes. Implementations in Go, C++ (GDAL), TypeScript and Neuroglancer read Icechunk repositories directly from the [spec](../reference/spec-v2-1.md), and the Go one also writes them.
+They are listed under [Community](../languages.md#community) on the Languages page.
+Independent implementations can lag behind new spec versions, so check with each project which versions it supports.
 
 If you are aware of any other implementations then please let us know!
 
 ## Is Icechunk stable?
 
-Yes! Icechunk 1.0, released in July 2025, is a stable release suitable for production use.
-Data written by Icechunk 1.0 and greater will forever be readable by future Icechunk versions.
+Yes! Icechunk has been suitable for production use since version 1.0, released in July 2025.
+Icechunk 2.0, released in April 2026, introduced the current on-disk format.
 
 ## What is the backwards compatibility policy for the Icechunk format?
 
-Any data written by Icechunk v1.0 or greater will be readable forever by future Icechunk releases (backwards compatible).
-Any data written in a _greater major version_ are not guaranteed to be compatible with a _lesser major version_ (e.g. data written by v2.2 are not guaranteed to be readable with v1.1 libraries).
+An Icechunk library of major version N can read and write repositories in spec major versions N and N-1, and makes a best effort to read older ones.
+Libraries cannot read a newer major version: Icechunk 1.x cannot open a spec 2 repository.
+Upgrading a repository to a new major version is a metadata-only migration that does not copy chunk data.
+
+See the [version policy](../reference/version-policy.md) for the full rules and [Migrate to 2.0](../reference/migration-2.md) for upgrading a 1.x repository.
 
 ## Is Icechunk fast?
 
@@ -375,17 +375,8 @@ Icechunk is different from normal Zarr stores because it is stateful. In a distr
 
 ## How can I identify Icechunk requests in my server logs?
 
-In icechunk 2.0 and up, HTTP requests made by Icechunk include a `User-Agent` header of the form `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0`). You can filter your object storage access logs for this user agent to isolate Icechunk traffic.
-
-To check the exact user agent string for your installed version:
-
-```python
-import icechunk
-icechunk.user_agent()
-# 'icechunk-rust-2.0.0'
-```
-
-This is set automatically and cannot be overridden.
+Requests include an `icechunk/<version>` token in their `User-Agent` header. Chunk and manifest requests also name the array, and chunk requests the chunk coordinates. Filter your access logs on `icechunk/` to find them.
+See [User-Agent header: attributing requests in object store access logs](../guides/observability.md#attributing-requests-in-bucket-logs).
 
 ## Does `icechunk-python` include logging?
 
