@@ -76,7 +76,7 @@ impl RedirectStorage {
         };
 
         let mut builder = rw::Client::builder()
-            .user_agent(crate::user_agent())
+            .user_agent(crate::user_agent_product())
             .redirect(rw::redirect::Policy::custom(redirect));
         if let Some(pem) = crate::storage::tls::tls_ca_bundle()? {
             let certs = rw::Certificate::from_pem_bundle(&pem)

@@ -3794,10 +3794,13 @@ def spec_version() -> SpecVersion:
 
 def user_agent() -> str:
     """
-    The user-agent string sent with icechunk storage requests.
+    The product token Icechunk puts in the `User-Agent` header of its storage requests.
+
+    The header can also hold the labels from `Attribution` and the array and
+    chunk each request is for.
 
     Returns:
-        str: The user-agent string (e.g., "icechunk-rust-2.0.0-alpha.3")
+        str: The product token (e.g., "icechunk/2.4.0")
     """
 
 def _all_error_kinds() -> list[str]:

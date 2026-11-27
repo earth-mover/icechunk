@@ -120,11 +120,12 @@ impl TryFrom<String> for Path {
     }
 }
 
-/// Returns the user-agent string for icechunk HTTP requests.
+/// The product token icechunk puts in the `User-Agent` header of its HTTP
+/// requests. Same value as [`user_agent_product`].
 ///
-/// Format: `icechunk-rust-<version>` (e.g., `icechunk-rust-2.0.0-alpha.4`).
-pub fn user_agent() -> &'static str {
-    concat!("icechunk-rust-", env!("CARGO_PKG_VERSION"))
+/// Format: `icechunk/<version>` (e.g., `icechunk/2.3.0-alpha.1`).
+pub const fn user_agent() -> &'static str {
+    user_agent_product()
 }
 
 /// The product token used in `User-Agent` header.

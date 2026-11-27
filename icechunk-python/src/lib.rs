@@ -174,9 +174,9 @@ fn spec_version() -> PySpecVersion {
 }
 
 #[pyfunction]
-/// The user-agent string sent with icechunk storage requests
+/// The `icechunk/<version>` product token in the `User-Agent` header of storage requests
 fn user_agent() -> &'static str {
-    icechunk::user_agent()
+    icechunk::user_agent_product()
 }
 
 #[pyfunction]
