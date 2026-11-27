@@ -703,4 +703,40 @@ mod tests {
         res2?;
         Ok(())
     }
+
+    #[tokio_test]
+    async fn test_ref_names_that_object_store_encodes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ((_, res1), (_, res2, _)) = with_test_storages::<
+            Result<(), Box<dyn std::error::Error>>,
+            _,
+            _,
+        >(|storage| async move {
+            let storage_settings = storage.default_settings().await?;
+            let ctx = StorageContext::unattributed(&storage_settings);
+            create_tag(storage.as_ref(), &ctx, "é", SnapshotId::random()).await?;
+            create_tag(storage.as_ref(), &ctx, "100%", SnapshotId::random()).await?;
+            update_branch(storage.as_ref(), &ctx, "branché", SnapshotId::random(), None)
+                .await?;
+            assert_eq!(
+                list_tags(storage.as_ref(), &ctx).await?,
+                ["é".to_string(), "100%".to_string()].into(),
+            );
+            assert_eq!(
+                list_branches(storage.as_ref(), &ctx).await?,
+                ["branché".to_string()].into(),
+            );
+
+            delete_tag(storage.as_ref(), &ctx, "é").await?;
+            assert_eq!(
+                list_tags(storage.as_ref(), &ctx).await?,
+                ["100%".to_string()].into(),
+            );
+            Ok(())
+        })
+        .await;
+        res1?;
+        res2?;
+        Ok(())
+    }
 }

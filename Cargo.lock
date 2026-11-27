@@ -2447,6 +2447,7 @@ dependencies = [
  "icechunk-storage",
  "icechunk-types",
  "object_store",
+ "percent-encoding",
  "rand 0.10.3",
  "rmp-serde",
  "serde",
